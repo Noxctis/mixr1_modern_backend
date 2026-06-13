@@ -1,0 +1,11 @@
+# Ignore compiled binary executables
+encoder_client
+
+# Ignore object and library artifacts
+*.o
+*.so
+*.a
+
+# Ignore system crash dumps or logs
+*.log
+vgcore.*
