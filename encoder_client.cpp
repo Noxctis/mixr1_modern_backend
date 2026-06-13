@@ -17,7 +17,7 @@ void signal_handler(int signum) {
 class PololuEncoder {
 private:
     int pi_handle;
-    int pin_a, pin_b;
+    unsigned int pin_a, pin_b; // FIX: Changed from int to unsigned int
     int cb_a, cb_b;
     volatile long long count = 0;
     volatile uint8_t state = 0;
@@ -38,7 +38,8 @@ private:
     }
 
 public:
-    PololuEncoder(int pi, int a, int b) : pi_handle(pi), pin_a(a), pin_b(b) {
+    // FIX: Changed constructor parameters 'a' and 'b' to unsigned int
+    PololuEncoder(int pi, unsigned int a, unsigned int b) : pi_handle(pi), pin_a(a), pin_b(b) {
         set_mode(pi_handle, pin_a, PI_INPUT);
         set_mode(pi_handle, pin_b, PI_INPUT);
         set_pull_up_down(pi_handle, pin_a, PI_PUD_UP);
