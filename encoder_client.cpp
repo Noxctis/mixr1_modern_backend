@@ -19,7 +19,7 @@ void signal_handler(int signum) {
 class PololuEncoder {
 private:
     int pi_handle;
-    unsigned int pin_a, pin_b; // unsigned int prevents -Wsign-compare warnings
+    unsigned int pin_a, pin_b; 
     int cb_a, cb_b;
     volatile long long count = 0;
     volatile uint8_t state = 0;
@@ -85,7 +85,7 @@ public:
     }
 
     bool wait_for_client() {
-        std::cout << "[MIXR-1] Pololu Validation Active. Waiting for Dashboard (Port 5000)..." << std::endl;
+        std::cout << "[MIXR-1] Pololu Validation Active. Waiting for GUI (Port 5000)..." << std::endl;
         client_socket = accept(server_fd, nullptr, nullptr);
         return (client_socket >= 0);
     }
@@ -116,24 +116,23 @@ int main() {
     PololuEncoder pololu_motor(pi, 23, 24);
     TelemetryServer network(5000);
 
-    // EDIT THIS: Set to your exact Pololu gearmotor total CPR
-    const double POLOLU_CPR = 979.2; 
+    // EXACT Calibration for 50:1 Micro Metal Gearmotor with 12 CPR Encoder
+    const double POLOLU_CPR = 617.35; 
     long long last_count = 0;
 
     while (run_loop) {
         if (network.wait_for_client()) {
-            std::cout << "[MIXR-1] Dashboard Connected. Streaming Pololu Data..." << std::endl;
+            std::cout << "[MIXR-1] Dashboard Connected. Streaming Telemetry..." << std::endl;
             
             while (run_loop) {
-                // Read physical hardware
                 long long current_count = pololu_motor.get_count();
                 
-                // Mathematical transformations
                 long long delta = current_count - last_count;
                 last_count = current_count;
+                
+                // Convert raw 100ms pulse delta into true RPM
                 double rpm = (delta * 600.0) / POLOLU_CPR;
 
-                // Transmit both RPM and Raw Delta to validate the dual-variable pipeline
                 if (!network.send_packet(rpm, static_cast<double>(delta))) {
                     std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
                     network.disconnect_client();
