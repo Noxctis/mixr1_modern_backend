@@ -87,6 +87,7 @@ int main() {
     callback_cancel(callback_B);
     pigpio_stop(pi);
 
-    std::cout << "System offline. Valgrind profile is 100% clear." << std::endl;
+    // PROPER LOGGING: Only state what the C++ runtime can actually verify
+    std::cout << "[MIXR-1] Hardware lines detached. Core backend safely offline." << std::endl;
     return 0;
 }
