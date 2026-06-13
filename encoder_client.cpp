@@ -13,11 +13,13 @@ void signal_handler(int signum) {
     run_loop = false;
 }
 
-// --- HARDWARE CLASS: Encapsulates all encoder logic ---
+// ==========================================
+// HARDWARE MODULE: POLOLU QUADRATURE ENCODER
+// ==========================================
 class PololuEncoder {
 private:
     int pi_handle;
-    unsigned int pin_a, pin_b; // FIX: Changed from int to unsigned int
+    unsigned int pin_a, pin_b; // unsigned int prevents -Wsign-compare warnings
     int cb_a, cb_b;
     volatile long long count = 0;
     volatile uint8_t state = 0;
@@ -38,13 +40,11 @@ private:
     }
 
 public:
-    // FIX: Changed constructor parameters 'a' and 'b' to unsigned int
     PololuEncoder(int pi, unsigned int a, unsigned int b) : pi_handle(pi), pin_a(a), pin_b(b) {
         set_mode(pi_handle, pin_a, PI_INPUT);
         set_mode(pi_handle, pin_b, PI_INPUT);
         set_pull_up_down(pi_handle, pin_a, PI_PUD_UP);
         set_pull_up_down(pi_handle, pin_b, PI_PUD_UP);
-
         cb_a = callback_ex(pi_handle, pin_a, EITHER_EDGE, isr_router, this);
         cb_b = callback_ex(pi_handle, pin_b, EITHER_EDGE, isr_router, this);
     }
@@ -57,62 +57,94 @@ public:
     long long get_count() const { return count; }
 };
 
-// --- MAIN EXECUTION THREAD ---
+// ==========================================
+// NETWORK MODULE: TCP TELEMETRY SERVER
+// ==========================================
+class TelemetryServer {
+private:
+    int server_fd;
+    int client_socket = -1;
+public:
+    TelemetryServer(int port) {
+        server_fd = socket(AF_INET, SOCK_STREAM, 0);
+        int opt = 1;
+        setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+        sockaddr_in address;
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = INADDR_ANY;
+        address.sin_port = htons(port);
+
+        bind(server_fd, (struct sockaddr*)&address, sizeof(address));
+        listen(server_fd, 1);
+    }
+
+    ~TelemetryServer() {
+        if (client_socket >= 0) close(client_socket);
+        close(server_fd);
+    }
+
+    bool wait_for_client() {
+        std::cout << "[MIXR-1] Pololu Validation Active. Waiting for Dashboard (Port 5000)..." << std::endl;
+        client_socket = accept(server_fd, nullptr, nullptr);
+        return (client_socket >= 0);
+    }
+
+    bool send_packet(double rpm, double raw_delta) {
+        if (client_socket < 0) return false;
+        std::string packet = std::to_string(rpm) + "," + std::to_string(raw_delta) + "\n";
+        ssize_t sent = send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL);
+        return (sent > 0);
+    }
+
+    void disconnect_client() {
+        if (client_socket >= 0) close(client_socket);
+        client_socket = -1;
+    }
+};
+
+// ==========================================
+// MAIN EXECUTION LOOP
+// ==========================================
 int main() {
-    // 1. Prevent network disconnections from crashing the Linux process
     std::signal(SIGINT, signal_handler);
     std::signal(SIGPIPE, SIG_IGN); 
 
     int pi = pigpio_start(NULL, NULL); 
     if (pi < 0) return 1;
 
-    PololuEncoder mixer_encoder(pi, 23, 24);
+    PololuEncoder pololu_motor(pi, 23, 24);
+    TelemetryServer network(5000);
 
-    // 2. Configure TCP Server
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    int opt = 1;
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    sockaddr_in address;
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(5000);
-
-    bind(server_fd, (struct sockaddr*)&address, sizeof(address));
-    listen(server_fd, 1);
-
+    // EDIT THIS: Set to your exact Pololu gearmotor total CPR
+    const double POLOLU_CPR = 979.2; 
     long long last_count = 0;
 
-    // 3. Resilient Server Loop
     while (run_loop) {
-        std::cout << "[MIXR-1] Backend active. Waiting for GUI connection..." << std::endl;
-        int client_socket = accept(server_fd, nullptr, nullptr);
-        
-        if (client_socket >= 0) {
-            std::cout << "[MIXR-1] UI Connected. Streaming telemetry..." << std::endl;
+        if (network.wait_for_client()) {
+            std::cout << "[MIXR-1] Dashboard Connected. Streaming Pololu Data..." << std::endl;
             
             while (run_loop) {
-                long long current = mixer_encoder.get_count();
-                long long delta = current - last_count;
-                last_count = current;
+                // Read physical hardware
+                long long current_count = pololu_motor.get_count();
+                
+                // Mathematical transformations
+                long long delta = current_count - last_count;
+                last_count = current_count;
+                double rpm = (delta * 600.0) / POLOLU_CPR;
 
-                std::string packet = std::to_string(current) + "," + std::to_string(delta) + "\n";
-                
-                // MSG_NOSIGNAL prevents crash if Python socket drops abruptly
-                ssize_t bytes_sent = send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL);
-                
-                if (bytes_sent < 0) {
-                    std::cout << "\n[MIXR-1] UI Disconnected. Halting stream." << std::endl;
-                    break; // Break inner loop to go back to 'accept()' waiting
+                // Transmit both RPM and Raw Delta to validate the dual-variable pipeline
+                if (!network.send_packet(rpm, static_cast<double>(delta))) {
+                    std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
+                    network.disconnect_client();
+                    break; 
                 }
 
                 usleep(100000); // 100ms hardware sync window
             }
-            close(client_socket);
         }
     }
 
-    close(server_fd);
     pigpio_stop(pi);
     std::cout << "[MIXR-1] Hardware lines detached. Core backend safely offline." << std::endl;
     return 0;
