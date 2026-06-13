@@ -4,8 +4,15 @@
 #include <csignal>
 #include <atomic>
 #include <cstring>
+#include <memory>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/select.h>
+
+// --- Global Configuration ---
+constexpr double POLOLU_CPR = 617.35;
+constexpr int TCP_PORT = 5000;
+constexpr int LOOP_DELAY_US = 100000; // 100ms hardware sync
 
 std::atomic<bool> run_loop(true);
 
@@ -14,17 +21,18 @@ void signal_handler(int signum) {
 }
 
 // ==========================================
-// SYSTEM CHECK: MATLAB PROCESS DETECTOR
+// SYSTEM MODULE: PROCESS MONITOR
 // ==========================================
-bool is_simulink_running() {
-    // Replace "water_level_model" with your exact Simulink deployment name
-    const char* cmd = "pgrep -x \"water_level_model\" > /dev/null 2>&1";
-    int result = system(cmd);
-    return (result == 0);
-}
+class ProcessMonitor {
+public:
+    static bool is_simulink_running() {
+        const char* cmd = "pgrep -x \"water_level_model\" > /dev/null 2>&1";
+        return (system(cmd) == 0);
+    }
+};
 
 // ==========================================
-// HARDWARE MODULE: POLOLU ENCODER
+// HARDWARE MODULE: QUADRATURE ENCODER
 // ==========================================
 class PololuEncoder {
 private:
@@ -36,8 +44,7 @@ private:
     const int QUAD_STATES[16] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
 
     static void isr_router(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
-        PololuEncoder* enc = static_cast<PololuEncoder*>(user);
-        enc->decode_state(gpio, level);
+        static_cast<PololuEncoder*>(user)->decode_state(gpio, level);
     }
 
     void decode_state(unsigned gpio, unsigned level) {
@@ -74,13 +81,20 @@ class TelemetryServer {
 private:
     int server_fd = -1;
     int client_socket = -1;
+
 public:
+    ~TelemetryServer() {
+        stop_server();
+    }
+
     bool start_server(int port) {
         server_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (server_fd < 0) return false;
+
         int opt = 1;
         setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-        sockaddr_in address;
+        sockaddr_in address{};
         address.sin_family = AF_INET;
         address.sin_addr.s_addr = INADDR_ANY;
         address.sin_port = htons(port);
@@ -91,31 +105,22 @@ public:
     }
 
     bool wait_for_client() {
-        std::cout << "[MIXR-1] Mode 2 Active. Waiting for Dashboard (Port 5000)..." << std::endl;
+        std::cout << "[MIXR-1] Mode 2 Active. Waiting for Dashboard (Port " << TCP_PORT << ")..." << std::endl;
         
         while (run_loop) {
             fd_set readfds;
             FD_ZERO(&readfds);
             FD_SET(server_fd, &readfds);
             
-            struct timeval tv;
-            tv.tv_sec = 1;  // Wake up every 1 second
-            tv.tv_usec = 0;
+            struct timeval tv{1, 0}; // 1 second timeout to allow Ctrl+C checks
 
-            // Check if there is an incoming connection on the port
-            int activity = select(server_fd + 1, &readfds, NULL, NULL, &tv);
+            int activity = select(server_fd + 1, &readfds, nullptr, nullptr, &tv);
 
             if (activity > 0 && FD_ISSET(server_fd, &readfds)) {
-                // Client found, accept the connection
                 client_socket = accept(server_fd, nullptr, nullptr);
                 return (client_socket >= 0);
             }
-            
-            // If activity == 0, the 1-second timer expired. 
-            // The while loop restarts, checking if Ctrl+C (run_loop) was pressed.
         }
-        
-        // If run_loop becomes false (Ctrl+C pressed), safely break out
         return false; 
     }
 
@@ -139,40 +144,33 @@ public:
 };
 
 // ==========================================
-// MAIN AUTO-RECOVERY LOOP
+// MAIN DAEMON LOOP
 // ==========================================
 int main() {
     std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
     std::signal(SIGPIPE, SIG_IGN); 
 
-    // Calibration for 50:1 Micro Metal Gearmotor with 12 CPR Encoder
-    const double POLOLU_CPR = 617.35; 
-
     while (run_loop) {
-        
-        // --- STATE 1: CHECK FOR MATLAB (MODE 3) ---
-        if (is_simulink_running()) {
-            std::cout << "[MIXR-1] MATLAB Simulink Active (Mode 3). Backend sleeping..." << std::endl;
+        if (ProcessMonitor::is_simulink_running()) {
+            std::cout << "[MIXR-1] MATLAB Simulink Active (Mode 3). Backend yielding hardware..." << std::endl;
             usleep(2000000); 
             continue; 
         }
 
-        // --- STATE 2: INITIALIZE MODE 2 HARDWARE ---
-        std::cout << "\n[MIXR-1] MATLAB offline. Claiming hardware for Mode 2..." << std::endl;
-        int pi = pigpio_start(NULL, NULL);
+        std::cout << "\n[MIXR-1] Claiming hardware for Mode 2..." << std::endl;
+        int pi = pigpio_start(nullptr, nullptr);
         if (pi < 0) {
-            std::cerr << "CRITICAL: pigpio daemon not found. Retrying..." << std::endl;
+            std::cerr << "CRITICAL: pigpiod daemon not found. Retrying..." << std::endl;
             usleep(2000000);
             continue;
         }
 
-        PololuEncoder* motor = new PololuEncoder(pi, 23, 24);
-        TelemetryServer* network = new TelemetryServer();
+        auto motor = std::make_unique<PololuEncoder>(pi, 23, 24);
+        auto network = std::make_unique<TelemetryServer>();
         
-        if (!network->start_server(5000)) {
-            std::cerr << "CRITICAL: Port 5000 locked. Retrying..." << std::endl;
-            delete motor; 
-            delete network; 
+        if (!network->start_server(TCP_PORT)) {
+            std::cerr << "CRITICAL: Port " << TCP_PORT << " locked. Retrying..." << std::endl;
             pigpio_stop(pi);
             usleep(2000000);
             continue;
@@ -181,50 +179,40 @@ int main() {
         long long last_count = motor->get_count();
         int simulink_check_counter = 0;
 
-        // --- STATE 3: ACTIVE STREAMING ---
         if (network->wait_for_client()) {
-            std::cout << "[MIXR-1] Dashboard Connected. Streaming..." << std::endl;
+            std::cout << "[MIXR-1] Dashboard Connected. Streaming Telemetry..." << std::endl;
             
             while (run_loop) {
-                // Check if MATLAB just started mid-run (Every 2 seconds)
-                simulink_check_counter++;
-                if (simulink_check_counter >= 20) { 
+                if (++simulink_check_counter >= 20) { 
                     simulink_check_counter = 0;
-                    if (is_simulink_running()) {
-                        std::cout << "\n[MIXR-1] ALERT: MATLAB detected mid-run! Yielding control." << std::endl;
-                        network->send_packet(-1.0, -1.0); // Send Kill Code to Dashboard
+                    if (ProcessMonitor::is_simulink_running()) {
+                        std::cout << "\n[MIXR-1] MATLAB detected mid-run. Initiating handover." << std::endl;
+                        network->send_packet(-1.0, -1.0); 
                         break; 
                     }
                 }
 
-                // Execute Math
                 long long current_count = motor->get_count();
                 long long delta = current_count - last_count;
                 last_count = current_count;
                 
                 double rpm = (delta * 600.0) / POLOLU_CPR;
-                double dummy_torque = 0.0;
                 
-                // Transmit dual-variable string
-                if (!network->send_packet(rpm, dummy_torque)) {
+                if (!network->send_packet(rpm, 0.0)) {
                     std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
                     break; 
                 }
 
-                usleep(100000); // 100ms hardware sync window
+                usleep(LOOP_DELAY_US);
             }
         }
 
-        // --- STATE 4: CLEAN DISMANTLE (Preparing for Mode 3) ---
-        network->stop_server();
-        delete motor;
-        delete network;
+        network.reset();
+        motor.reset();
         pigpio_stop(pi);
-        std::cout << "[MIXR-1] Hardware released." << std::endl;
-        
-        // Loop returns to State 1
+        std::cout << "[MIXR-1] Hardware layer released." << std::endl;
     }
 
-    std::cout << "\n[MIXR-1] Intercepted stop signal. Backend safely offline." << std::endl;
+    std::cout << "\n[MIXR-1] Intercepted stop signal. Daemon safely offline." << std::endl;
     return 0;
 }
