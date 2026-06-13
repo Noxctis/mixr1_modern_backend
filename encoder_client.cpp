@@ -132,8 +132,11 @@ int main() {
                 
                 // Convert raw 100ms pulse delta into true RPM
                 double rpm = (delta * 600.0) / POLOLU_CPR;
+                
+                // Transmit True RPM and a placeholder Torque (0.0) for the thesis graphs
+                double dummy_torque = 0.0; 
 
-                if (!network.send_packet(rpm, static_cast<double>(delta))) {
+                if (!network.send_packet(rpm, dummy_torque)) {
                     std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
                     network.disconnect_client();
                     break; 
