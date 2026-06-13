@@ -1,93 +1,118 @@
 #include <iostream>
 #include <pigpiod_if2.h>
 #include <unistd.h>
-#include <csignal>   // Required for Ctrl+C handler
-#include <atomic>    // Required for thread-safe flag
+#include <csignal>
+#include <atomic>
+#include <cstring>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
-const int PIN_A = 23; 
-const int PIN_B = 24; 
-
-// Keep these volatile so the compiler updates them across loops
-volatile long long encoder_count = 0;
-volatile uint8_t encoder_state = 0;
-
-const int QUAD_STATES[] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
-
-// Atomic loop control flag
 std::atomic<bool> run_loop(true);
 
-// Intercept Ctrl+C so Valgrind cleans up perfectly
 void signal_handler(int signum) {
     run_loop = false;
 }
 
-// FIX: The daemon sends the exact pin states inside 'gpio' and 'level' variables!
-void encoder_isr_callback(int pi, unsigned gpio, unsigned level, uint32_t tick) {
-    uint8_t pin_val_A = 0;
-    uint8_t pin_val_B = 0;
+// --- HARDWARE CLASS: Encapsulates all encoder logic ---
+class PololuEncoder {
+private:
+    int pi_handle;
+    int pin_a, pin_b;
+    int cb_a, cb_b;
+    volatile long long count = 0;
+    volatile uint8_t state = 0;
+    const int QUAD_STATES[16] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
 
-    // Decode current state without querying the network socket
-    if (gpio == PIN_A) {
-        pin_val_A = level;                // Use the level the daemon just sent us
-        pin_val_B = gpio_read(pi, PIN_B); // Only read the opposite stable line
-    } else {
-        pin_val_A = gpio_read(pi, PIN_A); // Only read the opposite stable line
-        pin_val_B = level;                // Use the level the daemon just sent us
+    static void isr_router(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
+        PololuEncoder* enc = static_cast<PololuEncoder*>(user);
+        enc->decode_state(gpio, level);
     }
 
-    encoder_state = (encoder_state << 2) & 0x0F;
-    encoder_state |= (pin_val_A << 1) | pin_val_B;
+    void decode_state(unsigned gpio, unsigned level) {
+        uint8_t val_a = (gpio == pin_a) ? level : gpio_read(pi_handle, pin_a);
+        uint8_t val_b = (gpio == pin_b) ? level : gpio_read(pi_handle, pin_b);
 
-    encoder_count += QUAD_STATES[encoder_state];
-}
+        state = (state << 2) & 0x0F;
+        state |= (val_a << 1) | val_b;
+        count += QUAD_STATES[state];
+    }
 
+public:
+    PololuEncoder(int pi, int a, int b) : pi_handle(pi), pin_a(a), pin_b(b) {
+        set_mode(pi_handle, pin_a, PI_INPUT);
+        set_mode(pi_handle, pin_b, PI_INPUT);
+        set_pull_up_down(pi_handle, pin_a, PI_PUD_UP);
+        set_pull_up_down(pi_handle, pin_b, PI_PUD_UP);
+
+        cb_a = callback_ex(pi_handle, pin_a, EITHER_EDGE, isr_router, this);
+        cb_b = callback_ex(pi_handle, pin_b, EITHER_EDGE, isr_router, this);
+    }
+
+    ~PololuEncoder() {
+        callback_cancel(cb_a);
+        callback_cancel(cb_b);
+    }
+
+    long long get_count() const { return count; }
+};
+
+// --- MAIN EXECUTION THREAD ---
 int main() {
-    // Register the termination signal handler
+    // 1. Prevent network disconnections from crashing the Linux process
     std::signal(SIGINT, signal_handler);
+    std::signal(SIGPIPE, SIG_IGN); 
 
-    // Connect to the background systemd daemon process on localhost
     int pi = pigpio_start(NULL, NULL); 
-    if (pi < 0) {
-        std::cerr << "CRITICAL: Could not connect to the background pigpiod service." << std::endl;
-        return 1;
-    }
+    if (pi < 0) return 1;
 
-    set_mode(pi, PIN_A, PI_INPUT);
-    set_mode(pi, PIN_B, PI_INPUT);
-    set_pull_up_down(pi, PIN_A, PI_PUD_UP);
-    set_pull_up_down(pi, PIN_B, PI_PUD_UP);
+    PololuEncoder mixer_encoder(pi, 23, 24);
 
-    // Bind alerts through the daemon hook interface
-    int callback_A = callback(pi, PIN_A, EITHER_EDGE, encoder_isr_callback);
-    int callback_B = callback(pi, PIN_B, EITHER_EDGE, encoder_isr_callback);
+    // 2. Configure TCP Server
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    std::cout << "Connected to background pigpiod service successfully." << std::endl;
-    std::cout << "==========================================================" << std::endl;
+    sockaddr_in address;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(5000);
+
+    bind(server_fd, (struct sockaddr*)&address, sizeof(address));
+    listen(server_fd, 1);
 
     long long last_count = 0;
 
-    // FIX: Using run_loop instead of while(true) so code can finish gracefully
+    // 3. Resilient Server Loop
     while (run_loop) {
-        long long current_count = encoder_count;
-        long long delta = current_count - last_count;
-        last_count = current_count;
+        std::cout << "[MIXR-1] Backend active. Waiting for GUI connection..." << std::endl;
+        int client_socket = accept(server_fd, nullptr, nullptr);
+        
+        if (client_socket >= 0) {
+            std::cout << "[MIXR-1] UI Connected. Streaming telemetry..." << std::endl;
+            
+            while (run_loop) {
+                long long current = mixer_encoder.get_count();
+                long long delta = current - last_count;
+                last_count = current;
 
-        std::cout << "\r[Daemon Client SSH] Total Pulses: " << current_count 
-                  << " | Delta/100ms: " << delta 
-                  << "        " << std::flush;
+                std::string packet = std::to_string(current) + "," + std::to_string(delta) + "\n";
+                
+                // MSG_NOSIGNAL prevents crash if Python socket drops abruptly
+                ssize_t bytes_sent = send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL);
+                
+                if (bytes_sent < 0) {
+                    std::cout << "\n[MIXR-1] UI Disconnected. Halting stream." << std::endl;
+                    break; // Break inner loop to go back to 'accept()' waiting
+                }
 
-        usleep(100000); // 100ms sampling window
+                usleep(100000); // 100ms hardware sync window
+            }
+            close(client_socket);
+        }
     }
 
-    // This section finally runs when you press Ctrl+C!
-    std::cout << "\n\n[MIXR-1] Intercepted stop signal. Cleaning up resources..." << std::endl;
-
-    // Clean up client registrations cleanly on exit
-    callback_cancel(callback_A);
-    callback_cancel(callback_B);
+    close(server_fd);
     pigpio_stop(pi);
-
-    // PROPER LOGGING: Only state what the C++ runtime can actually verify
     std::cout << "[MIXR-1] Hardware lines detached. Core backend safely offline." << std::endl;
     return 0;
 }
