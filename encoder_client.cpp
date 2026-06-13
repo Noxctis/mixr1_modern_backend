@@ -14,12 +14,22 @@ void signal_handler(int signum) {
 }
 
 // ==========================================
-// HARDWARE MODULE: POLOLU QUADRATURE ENCODER
+// SYSTEM CHECK: MATLAB PROCESS DETECTOR
+// ==========================================
+bool is_simulink_running() {
+    // Replace "water_level_model" with your exact Simulink deployment name
+    const char* cmd = "pgrep -x \"water_level_model\" > /dev/null 2>&1";
+    int result = system(cmd);
+    return (result == 0);
+}
+
+// ==========================================
+// HARDWARE MODULE: POLOLU ENCODER
 // ==========================================
 class PololuEncoder {
 private:
     int pi_handle;
-    unsigned int pin_a, pin_b; 
+    unsigned int pin_a, pin_b;
     int cb_a, cb_b;
     volatile long long count = 0;
     volatile uint8_t state = 0;
@@ -62,10 +72,10 @@ public:
 // ==========================================
 class TelemetryServer {
 private:
-    int server_fd;
+    int server_fd = -1;
     int client_socket = -1;
 public:
-    TelemetryServer(int port) {
+    bool start_server(int port) {
         server_fd = socket(AF_INET, SOCK_STREAM, 0);
         int opt = 1;
         setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -75,24 +85,20 @@ public:
         address.sin_addr.s_addr = INADDR_ANY;
         address.sin_port = htons(port);
 
-        bind(server_fd, (struct sockaddr*)&address, sizeof(address));
-        listen(server_fd, 1);
-    }
-
-    ~TelemetryServer() {
-        if (client_socket >= 0) close(client_socket);
-        close(server_fd);
+        if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) return false;
+        if (listen(server_fd, 1) < 0) return false;
+        return true;
     }
 
     bool wait_for_client() {
-        std::cout << "[MIXR-1] Pololu Validation Active. Waiting for GUI (Port 5000)..." << std::endl;
+        std::cout << "[MIXR-1] Mode 2 Active. Waiting for Dashboard (Port 5000)..." << std::endl;
         client_socket = accept(server_fd, nullptr, nullptr);
         return (client_socket >= 0);
     }
 
-    bool send_packet(double rpm, double raw_delta) {
+    bool send_packet(double rpm, double torque) {
         if (client_socket < 0) return false;
-        std::string packet = std::to_string(rpm) + "," + std::to_string(raw_delta) + "\n";
+        std::string packet = std::to_string(rpm) + "," + std::to_string(torque) + "\n";
         ssize_t sent = send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL);
         return (sent > 0);
     }
@@ -101,53 +107,101 @@ public:
         if (client_socket >= 0) close(client_socket);
         client_socket = -1;
     }
+
+    void stop_server() {
+        disconnect_client();
+        if (server_fd >= 0) close(server_fd);
+        server_fd = -1;
+    }
 };
 
 // ==========================================
-// MAIN EXECUTION LOOP
+// MAIN AUTO-RECOVERY LOOP
 // ==========================================
 int main() {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGPIPE, SIG_IGN); 
 
-    int pi = pigpio_start(NULL, NULL); 
-    if (pi < 0) return 1;
-
-    PololuEncoder pololu_motor(pi, 23, 24);
-    TelemetryServer network(5000);
-
-    // EXACT Calibration for 50:1 Micro Metal Gearmotor with 12 CPR Encoder
+    // Calibration for 50:1 Micro Metal Gearmotor with 12 CPR Encoder
     const double POLOLU_CPR = 617.35; 
-    long long last_count = 0;
 
     while (run_loop) {
-        if (network.wait_for_client()) {
-            std::cout << "[MIXR-1] Dashboard Connected. Streaming Telemetry..." << std::endl;
+        
+        // --- STATE 1: CHECK FOR MATLAB (MODE 3) ---
+        if (is_simulink_running()) {
+            std::cout << "[MIXR-1] MATLAB Simulink Active (Mode 3). Backend sleeping..." << std::endl;
+            usleep(2000000); 
+            continue; 
+        }
+
+        // --- STATE 2: INITIALIZE MODE 2 HARDWARE ---
+        std::cout << "\n[MIXR-1] MATLAB offline. Claiming hardware for Mode 2..." << std::endl;
+        int pi = pigpio_start(NULL, NULL);
+        if (pi < 0) {
+            std::cerr << "CRITICAL: pigpio daemon not found. Retrying..." << std::endl;
+            usleep(2000000);
+            continue;
+        }
+
+        PololuEncoder* motor = new PololuEncoder(pi, 23, 24);
+        TelemetryServer* network = new TelemetryServer();
+        
+        if (!network->start_server(5000)) {
+            std::cerr << "CRITICAL: Port 5000 locked. Retrying..." << std::endl;
+            delete motor; 
+            delete network; 
+            pigpio_stop(pi);
+            usleep(2000000);
+            continue;
+        }
+
+        long long last_count = motor->get_count();
+        int simulink_check_counter = 0;
+
+        // --- STATE 3: ACTIVE STREAMING ---
+        if (network->wait_for_client()) {
+            std::cout << "[MIXR-1] Dashboard Connected. Streaming..." << std::endl;
             
             while (run_loop) {
-                long long current_count = pololu_motor.get_count();
-                
+                // Check if MATLAB just started mid-run (Every 2 seconds)
+                simulink_check_counter++;
+                if (simulink_check_counter >= 20) { 
+                    simulink_check_counter = 0;
+                    if (is_simulink_running()) {
+                        std::cout << "\n[MIXR-1] ALERT: MATLAB detected mid-run! Yielding control." << std::endl;
+                        network->send_packet(-1.0, -1.0); // Send Kill Code to Dashboard
+                        break; 
+                    }
+                }
+
+                // Execute Math
+                long long current_count = motor->get_count();
                 long long delta = current_count - last_count;
                 last_count = current_count;
                 
-                // Convert raw 100ms pulse delta into true RPM
                 double rpm = (delta * 600.0) / POLOLU_CPR;
+                double dummy_torque = 0.0;
                 
-                // Transmit True RPM and a placeholder Torque (0.0) for the thesis graphs
-                double dummy_torque = 0.0; 
-
-                if (!network.send_packet(rpm, dummy_torque)) {
+                // Transmit dual-variable string
+                if (!network->send_packet(rpm, dummy_torque)) {
                     std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
-                    network.disconnect_client();
                     break; 
                 }
 
                 usleep(100000); // 100ms hardware sync window
             }
         }
+
+        // --- STATE 4: CLEAN DISMANTLE (Preparing for Mode 3) ---
+        network->stop_server();
+        delete motor;
+        delete network;
+        pigpio_stop(pi);
+        std::cout << "[MIXR-1] Hardware released." << std::endl;
+        
+        // Loop returns to State 1
     }
 
-    pigpio_stop(pi);
-    std::cout << "[MIXR-1] Hardware lines detached. Core backend safely offline." << std::endl;
+    std::cout << "\n[MIXR-1] Intercepted stop signal. Backend safely offline." << std::endl;
     return 0;
 }
