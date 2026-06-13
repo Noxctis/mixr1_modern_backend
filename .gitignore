@@ -1,4 +1,43 @@
-# Ignore compiled binary executables
+# ====================================================================
+# MIXR-1 AUTOMATED LABORATORY PLATFORM - MASTER GITIGNORE
+# ====================================================================
+
+# --- Compiled Binary Executables & Target Deliverables ---
+encoder_reader
+encoder_client
+encoder_gpiod
+mixr1_backend
+*.elf
+*.exe
+*.out
+
+# --- Object Files, Shared Libraries, and Linker Artifacts ---
+*.o
+*.obj
+*.so
+*.a
+*.la
+*.lai
+*.dylib
+
+# --- Compiler Generated Directories ---
+.build/
+build/
+bin/
+out/
+
+# --- IDE, Editor, and System Configuration Profiles ---
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# --- Runtime Log Outputs & System Dumps ---
+*.log
+vgcore.*
+*.pid# Ignore compiled binary executables
 encoder_client
 
 # Ignore object and library artifacts
