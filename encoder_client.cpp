@@ -92,8 +92,31 @@ public:
 
     bool wait_for_client() {
         std::cout << "[MIXR-1] Mode 2 Active. Waiting for Dashboard (Port 5000)..." << std::endl;
-        client_socket = accept(server_fd, nullptr, nullptr);
-        return (client_socket >= 0);
+        
+        while (run_loop) {
+            fd_set readfds;
+            FD_ZERO(&readfds);
+            FD_SET(server_fd, &readfds);
+            
+            struct timeval tv;
+            tv.tv_sec = 1;  // Wake up every 1 second
+            tv.tv_usec = 0;
+
+            // Check if there is an incoming connection on the port
+            int activity = select(server_fd + 1, &readfds, NULL, NULL, &tv);
+
+            if (activity > 0 && FD_ISSET(server_fd, &readfds)) {
+                // Client found, accept the connection
+                client_socket = accept(server_fd, nullptr, nullptr);
+                return (client_socket >= 0);
+            }
+            
+            // If activity == 0, the 1-second timer expired. 
+            // The while loop restarts, checking if Ctrl+C (run_loop) was pressed.
+        }
+        
+        // If run_loop becomes false (Ctrl+C pressed), safely break out
+        return false; 
     }
 
     bool send_packet(double rpm, double torque) {
