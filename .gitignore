@@ -1,30 +1,45 @@
 # ====================================================================
-# MIXR-1 AUTOMATED LABORATORY PLATFORM - MASTER GITIGNORE
+# MIXR-1 AUTOMATED LABORATORY PLATFORM - EMBEDDED C++ GITIGNORE
 # ====================================================================
 
-# --- Compiled Binary Executables & Target Deliverables ---
-encoder_reader
+# --- Specific Target Compiled Executables (No Extensions) ---
 encoder_client
+encoder_reader
 encoder_gpiod
 mixr1_backend
-*.elf
+stage_and_deploy.sh
+
+# --- Generic Executables & Debugger Artifacts ---
 *.exe
 *.out
+*.app
+*.elf
+*.pdb
+*.dwo
 
-# --- Object Files, Shared Libraries, and Linker Artifacts ---
+# --- Compiled Object Files & Linker Artifacts ---
 *.o
 *.obj
+*.slo
+*.lo
+*.ilk
+
+# --- Compiled Dynamic & Static Libraries ---
 *.so
-*.a
+*.so.*
+*.dylib
+*.dll
 *.la
 *.lai
-*.dylib
+*.a
+*.lib
 
-# --- Compiler Generated Directories ---
-.build/
+# --- Build & Cache Directories ---
 build/
-bin/
-out/
+Build/
+build-*/
+.cache/
+Testing/
 
 # --- IDE, Editor, and System Configuration Profiles ---
 .vscode/
@@ -34,17 +49,9 @@ out/
 .DS_Store
 Thumbs.db
 
-# --- Runtime Log Outputs & System Dumps ---
+# --- Runtime Log Outputs & System Temporary Files ---
 *.log
-vgcore.*
-*.pid# Ignore compiled binary executables
-encoder_client
-
-# Ignore object and library artifacts
-*.o
-*.so
-*.a
-
-# Ignore system crash dumps or logs
-*.log
+*.tmp
+*.bak
+*.pid
 vgcore.*
