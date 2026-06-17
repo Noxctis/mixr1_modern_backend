@@ -180,7 +180,7 @@ public:
         if (bytes > 0) {
             buffer[bytes] = '\0';
             std::string msg(buffer);
-            size_t pos = msg.find("CMD:PWM,");
+            size_t pos = msg.find("CMD:PWMCMD:PWM,");
             if (pos != std::string::npos) {
                 try {
                     new_pwm = std::stoi(msg.substr(pos + 8));
