@@ -11,7 +11,8 @@
 // --- Global Configuration ---
 constexpr double POLOLU_CPR = 617.35;
 constexpr int TCP_PORT = 5000;
-constexpr int LOOP_DELAY_US = 100000; // 10Hz telemetry rate
+// 10,000 microseconds = 10ms = 100Hz Hardware Control Loop
+constexpr int LOOP_DELAY_US = 10000; 
 
 std::atomic<bool> run_loop(true);
 
@@ -25,8 +26,6 @@ void signal_handler(int signum) {
 class ProcessMonitor {
 public:
     static bool is_simulink_running() {
-        // [r] bypasses the shell mirror bug.
-        // raspberrypi_get matches the 15-character strict kernel truncation limit.
         const char* cmd = "pgrep -x \"[r]aspberrypi_get\" > /dev/null 2>&1";
         return (system(cmd) == 0);
     }
@@ -83,7 +82,7 @@ private:
     int pi_handle;
     const unsigned int M1EN = 15;
     const unsigned int M1INA = 17;
-    const unsigned int M1PWM = 18; // Hardware PWM
+    const unsigned int M1PWM = 18;
     const unsigned int M1INB = 27;
 
 public:
@@ -93,11 +92,9 @@ public:
         set_mode(pi_handle, M1PWM, PI_OUTPUT);
         set_mode(pi_handle, M1INB, PI_OUTPUT);
 
-        // 20kHz to eliminate motor coil whine
         set_PWM_frequency(pi_handle, M1PWM, 20000); 
         set_PWM_range(pi_handle, M1PWM, 255); 
 
-        // Default Forward
         gpio_write(pi_handle, M1EN, 1);
         gpio_write(pi_handle, M1INA, 1);
         gpio_write(pi_handle, M1INB, 0);
@@ -116,7 +113,7 @@ public:
 
     void stop_motor() {
         set_PWM_dutycycle(pi_handle, M1PWM, 0);
-        gpio_write(pi_handle, M1EN, 0); // Drop standby line to cut power
+        gpio_write(pi_handle, M1EN, 0); 
     }
 };
 
@@ -127,6 +124,7 @@ class TelemetryServer {
 private:
     int server_fd = -1;
     int client_socket = -1;
+    std::string rx_buffer = ""; // Persistent stream buffer
 
 public:
     ~TelemetryServer() { stop_server(); }
@@ -158,6 +156,7 @@ public:
 
             if (activity > 0 && FD_ISSET(server_fd, &readfds)) {
                 client_socket = accept(server_fd, nullptr, nullptr);
+                rx_buffer.clear(); // Reset stream on new connection
                 return (client_socket >= 0);
             }
         }
@@ -171,24 +170,40 @@ public:
         return (sent > 0);
     }
 
-    // NON-BLOCKING READ: Grabs inbound UI commands without slowing down telemetry
+    // INDUSTRY STANDARD STREAM PARSER: Drains kernel socket fully, parses cleanly by newline delimiter
     bool receive_command(int& new_pwm) {
         if (client_socket < 0) return false;
-        char buffer[128];
-        ssize_t bytes = recv(client_socket, buffer, sizeof(buffer) - 1, MSG_DONTWAIT);
-        
-        if (bytes > 0) {
-            buffer[bytes] = '\0';
-            std::string msg(buffer);
-            size_t pos = msg.find("CMD:PWM,");
-            if (pos != std::string::npos) {
+        bool command_updated = false;
+        char chunk[1024];
+
+        // 1. Drain incoming data into the persistent buffer
+        while (true) {
+            ssize_t bytes = recv(client_socket, chunk, sizeof(chunk) - 1, MSG_DONTWAIT);
+            if (bytes > 0) {
+                chunk[bytes] = '\0';
+                rx_buffer += chunk;
+            } else {
+                break; // Socket is fully drained
+            }
+        }
+
+        // 2. Extract and parse all complete \n terminated lines. 
+        // Any incomplete packets safely wait in rx_buffer for the next loop.
+        size_t pos;
+        while ((pos = rx_buffer.find('\n')) != std::string::npos) {
+            std::string line = rx_buffer.substr(0, pos);
+            rx_buffer.erase(0, pos + 1);
+
+            size_t cmd_pos = line.find("CMD:PWM,");
+            if (cmd_pos != std::string::npos) {
                 try {
-                    new_pwm = std::stoi(msg.substr(pos + 8));
-                    return true;
+                    new_pwm = std::stoi(line.substr(cmd_pos + 8));
+                    command_updated = true;
                 } catch (...) {}
             }
         }
-        return false;
+        
+        return command_updated;
     }
 
     void disconnect_client() {
@@ -228,13 +243,21 @@ int main() {
             std::unique_ptr<MotorController> motor = nullptr;
             
             bool mode3_notified = false;
-            int simulink_check_counter = 10;
-            bool simulink_is_active = false;
             long long last_count = 0;
             int current_pwm = 0;
 
+            // 100Hz Timing Variables
+            int simulink_check_counter = 100; 
+            int telemetry_prescaler = 0;
+            bool simulink_is_active = false;
+
+            // Digital Filter Variables
+            double filtered_rpm = 0.0;
+            const double RPM_ALPHA = 0.15; // Tuning coefficient for EMA filter
+
             while (run_loop) {
-                if (++simulink_check_counter >= 10) {
+                // Check for Simulink once per second (100 loops * 10ms)
+                if (++simulink_check_counter >= 100) {
                     simulink_check_counter = 0;
                     simulink_is_active = ProcessMonitor::is_simulink_running();
                 }
@@ -242,7 +265,6 @@ int main() {
                 if (simulink_is_active) {
                     if (!mode3_notified) {
                         std::cout << "\n[MIXR-1] MATLAB detected. Releasing hardware pins..." << std::endl;
-                        // Destructors safely shutdown PWM and GPIO before releasing the kernel
                         motor.reset();
                         encoder.reset();
                         if (pi >= 0) { pigpio_stop(pi); pi = -1; }
@@ -256,7 +278,6 @@ int main() {
                     continue;
                 }
 
-                // --- Mode 2 Hardware Logic ---
                 if (mode3_notified) {
                     std::cout << "\n[MIXR-1] MATLAB teardown complete. Safely resuming backend." << std::endl;
                     mode3_notified = false;
@@ -269,6 +290,7 @@ int main() {
                         encoder = std::make_unique<PololuEncoder>(pi, 23, 24);
                         motor = std::make_unique<MotorController>(pi);
                         last_count = encoder->get_count(); 
+                        filtered_rpm = 0.0; // Reset filter state
                     } else {
                         std::cerr << "CRITICAL: pigpiod not ready. Retrying..." << std::endl;
                         usleep(2000000);
@@ -276,24 +298,34 @@ int main() {
                     }
                 }
 
-                // 1. Process incoming UI Commands
+                // 1. Process Real-Time Commands
                 if (network->receive_command(current_pwm)) {
                     if (motor != nullptr) motor->set_pwm(current_pwm);
-                    std::cout << "[MIXR-1] UI Command Received -> Setting PWM to: " << current_pwm << std::endl;
+                    std::cout << "[MIXR-1] CMD Received -> Hardware PWM set to: " << current_pwm << std::endl;
                 }
 
-                // 2. Read Physical State
+                // 2. 100Hz Physical State Math
                 long long current_count = encoder->get_count();
                 long long delta = current_count - last_count;
                 last_count = current_count;
-                double rpm = (delta * 600.0) / POLOLU_CPR;
                 
-                // 3. Transmit
-                if (!network->send_packet(rpm, 0.0)) {
-                    std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
-                    break; 
+                // RPM conversion for a 10ms loop time: 
+                // RPM = (Delta / CPR) * 60 * 100 = (Delta * 6000) / CPR
+                double raw_rpm = (delta * 6000.0) / POLOLU_CPR;
+                
+                // Exponential Moving Average (EMA) to filter high-frequency 100Hz quantization noise
+                filtered_rpm = (RPM_ALPHA * raw_rpm) + ((1.0 - RPM_ALPHA) * filtered_rpm);
+                
+                // 3. Decoupled 10Hz Telemetry Transmission
+                if (++telemetry_prescaler >= 10) {
+                    telemetry_prescaler = 0;
+                    if (!network->send_packet(filtered_rpm, 0.0)) {
+                        std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
+                        break; 
+                    }
                 }
                 
+                // Paces the hardware control loop to exactly 100Hz
                 usleep(LOOP_DELAY_US); 
             }
 
