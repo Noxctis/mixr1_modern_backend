@@ -26,8 +26,8 @@ void signal_handler(int signum) {
 class ProcessMonitor {
 public:
     static bool is_simulink_running() {
-        // Using a wildcard lookahead pattern ensures it catches .elf or raw names
-        const char* cmd = "pgrep -f \"raspberrypi_gettingstarted\" > /dev/null 2>&1";
+        // The bracket [r] prevents the system shell from detecting its own search command
+        const char* cmd = "pgrep -f \"[r]aspberrypi_gettingstarted\" > /dev/null 2>&1";
         return (system(cmd) == 0);
     }
 };
