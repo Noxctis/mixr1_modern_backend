@@ -180,7 +180,7 @@ public:
         if (bytes > 0) {
             buffer[bytes] = '\0';
             std::string msg(buffer);
-            size_t pos = msg.find("CMD:PWMCMD:PWM,");
+            size_t pos = msg.find("CMD:PWM,");
             if (pos != std::string::npos) {
                 try {
                     new_pwm = std::stoi(msg.substr(pos + 8));
@@ -279,6 +279,7 @@ int main() {
                 // 1. Process incoming UI Commands
                 if (network->receive_command(current_pwm)) {
                     if (motor != nullptr) motor->set_pwm(current_pwm);
+                    std::cout << "[MIXR-1] UI Command Received -> Setting PWM to: " << current_pwm << std::endl;
                 }
 
                 // 2. Read Physical State
