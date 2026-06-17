@@ -7,12 +7,11 @@
 #include <memory>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <sys/select.h>
 
 // --- Global Configuration ---
 constexpr double POLOLU_CPR = 617.35;
 constexpr int TCP_PORT = 5000;
-constexpr int LOOP_DELAY_US = 100000; // 100ms hardware sync
+constexpr int LOOP_DELAY_US = 100000; // 10Hz telemetry rate
 
 std::atomic<bool> run_loop(true);
 
@@ -26,8 +25,9 @@ void signal_handler(int signum) {
 class ProcessMonitor {
 public:
     static bool is_simulink_running() {
-        // The bracket [r] prevents the system shell from detecting its own search command
-        const char* cmd = "pgrep -f \"[r]aspberrypi_gettingstarted\" > /dev/null 2>&1";
+        // [r] bypasses the shell mirror bug.
+        // raspberrypi_get matches the 15-character strict kernel truncation limit.
+        const char* cmd = "pgrep -x \"[r]aspberrypi_get\" > /dev/null 2>&1";
         return (system(cmd) == 0);
     }
 };
@@ -76,7 +76,52 @@ public:
 };
 
 // ==========================================
-// NETWORK MODULE: TCP TELEMETRY SERVER
+// HARDWARE MODULE: MOTOR CONTROLLER
+// ==========================================
+class MotorController {
+private:
+    int pi_handle;
+    const unsigned int M1EN = 15;
+    const unsigned int M1INA = 17;
+    const unsigned int M1PWM = 18; // Hardware PWM
+    const unsigned int M1INB = 27;
+
+public:
+    MotorController(int pi) : pi_handle(pi) {
+        set_mode(pi_handle, M1EN, PI_OUTPUT);
+        set_mode(pi_handle, M1INA, PI_OUTPUT);
+        set_mode(pi_handle, M1PWM, PI_OUTPUT);
+        set_mode(pi_handle, M1INB, PI_OUTPUT);
+
+        // 20kHz to eliminate motor coil whine
+        set_PWM_frequency(pi_handle, M1PWM, 20000); 
+        set_PWM_range(pi_handle, M1PWM, 255); 
+
+        // Default Forward
+        gpio_write(pi_handle, M1EN, 1);
+        gpio_write(pi_handle, M1INA, 1);
+        gpio_write(pi_handle, M1INB, 0);
+        set_PWM_dutycycle(pi_handle, M1PWM, 0); 
+    }
+
+    ~MotorController() {
+        stop_motor();
+    }
+
+    void set_pwm(int duty_cycle) {
+        if (duty_cycle < 0) duty_cycle = 0;
+        if (duty_cycle > 255) duty_cycle = 255;
+        set_PWM_dutycycle(pi_handle, M1PWM, duty_cycle);
+    }
+
+    void stop_motor() {
+        set_PWM_dutycycle(pi_handle, M1PWM, 0);
+        gpio_write(pi_handle, M1EN, 0); // Drop standby line to cut power
+    }
+};
+
+// ==========================================
+// NETWORK MODULE: TCP SERVER
 // ==========================================
 class TelemetryServer {
 private:
@@ -84,14 +129,11 @@ private:
     int client_socket = -1;
 
 public:
-    ~TelemetryServer() {
-        stop_server();
-    }
+    ~TelemetryServer() { stop_server(); }
 
     bool start_server(int port) {
         server_fd = socket(AF_INET, SOCK_STREAM, 0);
         if (server_fd < 0) return false;
-
         int opt = 1;
         setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -107,14 +149,11 @@ public:
 
     bool wait_for_client() {
         std::cout << "[MIXR-1] Mode 2 Active. Waiting for Dashboard (Port " << TCP_PORT << ")..." << std::endl;
-        
         while (run_loop) {
             fd_set readfds;
             FD_ZERO(&readfds);
             FD_SET(server_fd, &readfds);
-            
-            struct timeval tv{1, 0}; // 1 second timeout to allow Ctrl+C checks
-
+            struct timeval tv{1, 0}; 
             int activity = select(server_fd + 1, &readfds, nullptr, nullptr, &tv);
 
             if (activity > 0 && FD_ISSET(server_fd, &readfds)) {
@@ -130,6 +169,26 @@ public:
         std::string packet = std::to_string(rpm) + "," + std::to_string(torque) + "\n";
         ssize_t sent = send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL);
         return (sent > 0);
+    }
+
+    // NON-BLOCKING READ: Grabs inbound UI commands without slowing down telemetry
+    bool receive_command(int& new_pwm) {
+        if (client_socket < 0) return false;
+        char buffer[128];
+        ssize_t bytes = recv(client_socket, buffer, sizeof(buffer) - 1, MSG_DONTWAIT);
+        
+        if (bytes > 0) {
+            buffer[bytes] = '\0';
+            std::string msg(buffer);
+            size_t pos = msg.find("CMD:PWM,");
+            if (pos != std::string::npos) {
+                try {
+                    new_pwm = std::stoi(msg.substr(pos + 8));
+                    return true;
+                } catch (...) {}
+            }
+        }
+        return false;
     }
 
     void disconnect_client() {
@@ -152,52 +211,64 @@ int main() {
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGPIPE, SIG_IGN); 
 
-    // 1. Initialize the network object outside the hardware loop
     auto network = std::make_unique<TelemetryServer>();
 
     while (run_loop) {
-        // 2. ALWAYS open the port first so the dashboard can connect
         if (!network->start_server(TCP_PORT)) {
             std::cerr << "CRITICAL: Port " << TCP_PORT << " locked. Retrying..." << std::endl;
             usleep(2000000);
             continue;
         }
 
-        // 3. Wait for the Python UI to connect
         if (network->wait_for_client()) {
             std::cout << "[MIXR-1] Dashboard Connected. Managing state engine..." << std::endl;
             
             int pi = -1;
-            std::unique_ptr<PololuEncoder> motor = nullptr;
+            std::unique_ptr<PololuEncoder> encoder = nullptr;
+            std::unique_ptr<MotorController> motor = nullptr;
+            
+            bool mode3_notified = false;
+            int simulink_check_counter = 10;
+            bool simulink_is_active = false;
+            long long last_count = 0;
+            int current_pwm = 0;
 
-            // 4. The active data loop
             while (run_loop) {
-                // Check Simulink status dynamically while connected
-                if (ProcessMonitor::is_simulink_running()) {
-                    
-                    // If we had the hardware, let it go so MATLAB can use it
-                    if (motor != nullptr) {
+                if (++simulink_check_counter >= 10) {
+                    simulink_check_counter = 0;
+                    simulink_is_active = ProcessMonitor::is_simulink_running();
+                }
+
+                if (simulink_is_active) {
+                    if (!mode3_notified) {
                         std::cout << "\n[MIXR-1] MATLAB detected. Releasing hardware pins..." << std::endl;
+                        // Destructors safely shutdown PWM and GPIO before releasing the kernel
                         motor.reset();
+                        encoder.reset();
                         if (pi >= 0) { pigpio_stop(pi); pi = -1; }
+                        
+                        std::cout << "[MIXR-1] System locked in Mode 3. Waiting for MATLAB to finish..." << std::endl;
+                        mode3_notified = true;
                     }
                     
-                    std::cout << "[MIXR-1] MATLAB Simulink Active (Mode 3). Streaming state lock..." << std::endl;
-                    
-                    // Send the special Mode 3 packet to the dashboard
-                    if (!network->send_packet(-2.0, -2.0)) {
-                        break; // Break if dashboard closes
-                    }
-                    usleep(1000000); // Wait 1 second before checking again
+                    if (!network->send_packet(-2.0, -2.0)) break; 
+                    usleep(1000000); 
                     continue;
                 }
 
                 // --- Mode 2 Hardware Logic ---
-                if (motor == nullptr) {
-                    std::cout << "\n[MIXR-1] Claiming hardware for Mode 2..." << std::endl;
+                if (mode3_notified) {
+                    std::cout << "\n[MIXR-1] MATLAB teardown complete. Safely resuming backend." << std::endl;
+                    mode3_notified = false;
+                }
+
+                if (pi < 0) {
+                    std::cout << "[MIXR-1] Claiming hardware for Mode 2..." << std::endl;
                     pi = pigpio_start(nullptr, nullptr);
                     if (pi >= 0) {
-                        motor = std::make_unique<PololuEncoder>(pi, 23, 24);
+                        encoder = std::make_unique<PololuEncoder>(pi, 23, 24);
+                        motor = std::make_unique<MotorController>(pi);
+                        last_count = encoder->get_count(); 
                     } else {
                         std::cerr << "CRITICAL: pigpiod not ready. Retrying..." << std::endl;
                         usleep(2000000);
@@ -205,24 +276,30 @@ int main() {
                     }
                 }
 
-                long long last_count = motor->get_count();
-                usleep(LOOP_DELAY_US);
-                long long current_count = motor->get_count();
+                // 1. Process incoming UI Commands
+                if (network->receive_command(current_pwm)) {
+                    if (motor != nullptr) motor->set_pwm(current_pwm);
+                }
+
+                // 2. Read Physical State
+                long long current_count = encoder->get_count();
+                long long delta = current_count - last_count;
+                last_count = current_count;
+                double rpm = (delta * 600.0) / POLOLU_CPR;
                 
-                double rpm = ((current_count - last_count) * 600.0) / POLOLU_CPR;
-                
+                // 3. Transmit
                 if (!network->send_packet(rpm, 0.0)) {
                     std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
                     break; 
                 }
+                
+                usleep(LOOP_DELAY_US); 
             }
 
-            // Cleanup hardware when dashboard disconnects
-            if (motor != nullptr) motor.reset();
+            motor.reset();
+            encoder.reset();
             if (pi >= 0) pigpio_stop(pi);
         }
-        
-        // Shut down the server socket before the next connection attempt
         network->stop_server();
     }
 
