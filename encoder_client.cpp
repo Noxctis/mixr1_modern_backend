@@ -26,7 +26,8 @@ void signal_handler(int signum) {
 class ProcessMonitor {
 public:
     static bool is_simulink_running() {
-        const char* cmd = "pgrep -x \"water_level_model\" > /dev/null 2>&1";
+        // Using a wildcard lookahead pattern ensures it catches .elf or raw names
+        const char* cmd = "pgrep -f \"raspberrypi_gettingstarted\" > /dev/null 2>&1";
         return (system(cmd) == 0);
     }
 };
@@ -151,66 +152,78 @@ int main() {
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGPIPE, SIG_IGN); 
 
+    // 1. Initialize the network object outside the hardware loop
+    auto network = std::make_unique<TelemetryServer>();
+
     while (run_loop) {
-        if (ProcessMonitor::is_simulink_running()) {
-            std::cout << "[MIXR-1] MATLAB Simulink Active (Mode 3). Backend yielding hardware..." << std::endl;
-            usleep(2000000); 
-            continue; 
-        }
-
-        std::cout << "\n[MIXR-1] Claiming hardware for Mode 2..." << std::endl;
-        int pi = pigpio_start(nullptr, nullptr);
-        if (pi < 0) {
-            std::cerr << "CRITICAL: pigpiod daemon not found. Retrying..." << std::endl;
-            usleep(2000000);
-            continue;
-        }
-
-        auto motor = std::make_unique<PololuEncoder>(pi, 23, 24);
-        auto network = std::make_unique<TelemetryServer>();
-        
+        // 2. ALWAYS open the port first so the dashboard can connect
         if (!network->start_server(TCP_PORT)) {
             std::cerr << "CRITICAL: Port " << TCP_PORT << " locked. Retrying..." << std::endl;
-            pigpio_stop(pi);
             usleep(2000000);
             continue;
         }
 
-        long long last_count = motor->get_count();
-        int simulink_check_counter = 0;
-
+        // 3. Wait for the Python UI to connect
         if (network->wait_for_client()) {
-            std::cout << "[MIXR-1] Dashboard Connected. Streaming Telemetry..." << std::endl;
+            std::cout << "[MIXR-1] Dashboard Connected. Managing state engine..." << std::endl;
             
+            int pi = -1;
+            std::unique_ptr<PololuEncoder> motor = nullptr;
+
+            // 4. The active data loop
             while (run_loop) {
-                if (++simulink_check_counter >= 20) { 
-                    simulink_check_counter = 0;
-                    if (ProcessMonitor::is_simulink_running()) {
-                        std::cout << "\n[MIXR-1] MATLAB detected mid-run. Initiating handover." << std::endl;
-                        network->send_packet(-1.0, -1.0); 
-                        break; 
+                // Check Simulink status dynamically while connected
+                if (ProcessMonitor::is_simulink_running()) {
+                    
+                    // If we had the hardware, let it go so MATLAB can use it
+                    if (motor != nullptr) {
+                        std::cout << "\n[MIXR-1] MATLAB detected. Releasing hardware pins..." << std::endl;
+                        motor.reset();
+                        if (pi >= 0) { pigpio_stop(pi); pi = -1; }
+                    }
+                    
+                    std::cout << "[MIXR-1] MATLAB Simulink Active (Mode 3). Streaming state lock..." << std::endl;
+                    
+                    // Send the special Mode 3 packet to the dashboard
+                    if (!network->send_packet(-2.0, -2.0)) {
+                        break; // Break if dashboard closes
+                    }
+                    usleep(1000000); // Wait 1 second before checking again
+                    continue;
+                }
+
+                // --- Mode 2 Hardware Logic ---
+                if (motor == nullptr) {
+                    std::cout << "\n[MIXR-1] Claiming hardware for Mode 2..." << std::endl;
+                    pi = pigpio_start(nullptr, nullptr);
+                    if (pi >= 0) {
+                        motor = std::make_unique<PololuEncoder>(pi, 23, 24);
+                    } else {
+                        std::cerr << "CRITICAL: pigpiod not ready. Retrying..." << std::endl;
+                        usleep(2000000);
+                        continue;
                     }
                 }
 
+                long long last_count = motor->get_count();
+                usleep(LOOP_DELAY_US);
                 long long current_count = motor->get_count();
-                long long delta = current_count - last_count;
-                last_count = current_count;
                 
-                double rpm = (delta * 600.0) / POLOLU_CPR;
+                double rpm = ((current_count - last_count) * 600.0) / POLOLU_CPR;
                 
                 if (!network->send_packet(rpm, 0.0)) {
                     std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
                     break; 
                 }
-
-                usleep(LOOP_DELAY_US);
             }
-        }
 
-        network.reset();
-        motor.reset();
-        pigpio_stop(pi);
-        std::cout << "[MIXR-1] Hardware layer released." << std::endl;
+            // Cleanup hardware when dashboard disconnects
+            if (motor != nullptr) motor.reset();
+            if (pi >= 0) pigpio_stop(pi);
+        }
+        
+        // Shut down the server socket before the next connection attempt
+        network->stop_server();
     }
 
     std::cout << "\n[MIXR-1] Intercepted stop signal. Daemon safely offline." << std::endl;
