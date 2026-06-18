@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstring>
 #include <memory>
+#include <chrono> // Added for high-resolution industry-standard timing
 #include <sys/socket.h>
 #include <netinet/in.h>
 
@@ -124,7 +125,7 @@ class TelemetryServer {
 private:
     int server_fd = -1;
     int client_socket = -1;
-    std::string rx_buffer = ""; // Persistent stream buffer
+    std::string rx_buffer = ""; 
 
 public:
     ~TelemetryServer() { stop_server(); }
@@ -156,7 +157,7 @@ public:
 
             if (activity > 0 && FD_ISSET(server_fd, &readfds)) {
                 client_socket = accept(server_fd, nullptr, nullptr);
-                rx_buffer.clear(); // Reset stream on new connection
+                rx_buffer.clear(); 
                 return (client_socket >= 0);
             }
         }
@@ -170,25 +171,21 @@ public:
         return (sent > 0);
     }
 
-    // INDUSTRY STANDARD STREAM PARSER: Drains kernel socket fully, parses cleanly by newline delimiter
     bool receive_command(int& new_pwm) {
         if (client_socket < 0) return false;
         bool command_updated = false;
         char chunk[1024];
 
-        // 1. Drain incoming data into the persistent buffer
         while (true) {
             ssize_t bytes = recv(client_socket, chunk, sizeof(chunk) - 1, MSG_DONTWAIT);
             if (bytes > 0) {
                 chunk[bytes] = '\0';
                 rx_buffer += chunk;
             } else {
-                break; // Socket is fully drained
+                break; 
             }
         }
 
-        // 2. Extract and parse all complete \n terminated lines. 
-        // Any incomplete packets safely wait in rx_buffer for the next loop.
         size_t pos;
         while ((pos = rx_buffer.find('\n')) != std::string::npos) {
             std::string line = rx_buffer.substr(0, pos);
@@ -246,17 +243,18 @@ int main() {
             long long last_count = 0;
             int current_pwm = 0;
 
-            // 100Hz Timing Variables
             int simulink_check_counter = 100; 
             int telemetry_prescaler = 0;
             bool simulink_is_active = false;
 
-            // Digital Filter Variables
-            double filtered_rpm = 0.0;
-            const double RPM_ALPHA = 0.15; // Tuning coefficient for EMA filter
+            // --- FILTER VARIABLES DISABLED ---
+            // double filtered_rpm = 0.0;
+            // const double RPM_ALPHA = 0.15; 
+
+            // High-resolution clock tracker for exact RPM math
+            auto last_time = std::chrono::high_resolution_clock::now();
 
             while (run_loop) {
-                // Check for Simulink once per second (100 loops * 10ms)
                 if (++simulink_check_counter >= 100) {
                     simulink_check_counter = 0;
                     simulink_is_active = ProcessMonitor::is_simulink_running();
@@ -290,7 +288,9 @@ int main() {
                         encoder = std::make_unique<PololuEncoder>(pi, 23, 24);
                         motor = std::make_unique<MotorController>(pi);
                         last_count = encoder->get_count(); 
-                        filtered_rpm = 0.0; // Reset filter state
+                        
+                        // Reset the clock tracker on hardware claim
+                        last_time = std::chrono::high_resolution_clock::now();
                     } else {
                         std::cerr << "CRITICAL: pigpiod not ready. Retrying..." << std::endl;
                         usleep(2000000);
@@ -304,28 +304,43 @@ int main() {
                     std::cout << "[MIXR-1] CMD Received -> Hardware PWM set to: " << current_pwm << std::endl;
                 }
 
-                // 2. 100Hz Physical State Math
+                // 2. 100Hz Physical State Math (INDUSTRY STANDARD EXACT-TIME METHOD)
+                // We capture the exact nanosecond we read the count. By dividing the 
+                // raw delta count by the exact delta time in seconds, we completely eliminate 
+                // RPM spikes caused by Linux OS scheduling jitter.
+                
+                auto current_time = std::chrono::high_resolution_clock::now();
+                std::chrono::duration<double> exact_delta_sec = current_time - last_time;
+                last_time = current_time;
+
                 long long current_count = encoder->get_count();
-                long long delta = current_count - last_count;
+                long long delta_ticks = current_count - last_count;
                 last_count = current_count;
                 
-                // RPM conversion for a 10ms loop time: 
-                // RPM = (Delta / CPR) * 60 * 100 = (Delta * 6000) / CPR
-                double raw_rpm = (delta * 6000.0) / POLOLU_CPR;
+                double dt = exact_delta_sec.count();
+                double exact_rpm = 0.0;
                 
-                // Exponential Moving Average (EMA) to filter high-frequency 100Hz quantization noise
-                filtered_rpm = (RPM_ALPHA * raw_rpm) + ((1.0 - RPM_ALPHA) * filtered_rpm);
+                if (dt > 0.0) {
+                    // exact_rpm = (Revolutions) / (Minutes)
+                    // exact_rpm = (delta_ticks / POLOLU_CPR) / (dt_seconds / 60.0)
+                    exact_rpm = (static_cast<double>(delta_ticks) / POLOLU_CPR) * (60.0 / dt);
+                }
+
+                // --- FILTER DISABLED ---
+                // filtered_rpm = (RPM_ALPHA * exact_rpm) + ((1.0 - RPM_ALPHA) * filtered_rpm);
                 
                 // 3. Decoupled 10Hz Telemetry Transmission
                 if (++telemetry_prescaler >= 10) {
                     telemetry_prescaler = 0;
-                    if (!network->send_packet(filtered_rpm, 0.0)) {
+                    // Transmitting exact_rpm directly instead of filtered_rpm
+                    if (!network->send_packet(exact_rpm, 0.0)) {
                         std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
                         break; 
                     }
                 }
                 
-                // Paces the hardware control loop to exactly 100Hz
+                // Paces the hardware control loop to ~100Hz. The Exact-Time math above
+                // guarantees accurate RPM regardless of microsecond drift in this usleep.
                 usleep(LOOP_DELAY_US); 
             }
 
