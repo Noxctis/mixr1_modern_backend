@@ -95,17 +95,14 @@ public:
 };
 
 // ==========================================
-// HARDWARE MODULE: MOTOR CONTROLLER
-// ==========================================
-// ==========================================
-// HARDWARE MODULE: MOTOR CONTROLLER
+// HARDWARE MODULE: MOTOR CONTROLLER (VNH5019)
 // ==========================================
 class MotorController {
 private:
     int pi_handle;
     const unsigned int M1EN = 15;
     const unsigned int M1INA = 17;
-    const unsigned int M1PWM = 13; // Confirmed: Hardware PWM Channel 1
+    const unsigned int M1PWM = 13; // Hardware PWM Channel 1
     const unsigned int M1INB = 27;
 
 public:
@@ -114,16 +111,19 @@ public:
         set_mode(pi_handle, M1INA, PI_OUTPUT);
         set_mode(pi_handle, M1INB, PI_OUTPUT);
         
-        // GPIO 13 MUST be set to PI_ALT0 to connect the pin to the hardware PWM silicon
+        // Explicitly map GPIO 13 to the silicon PWM generator
         set_mode(pi_handle, M1PWM, PI_ALT0);
 
+        // VNH5019 Forward Logic
         gpio_write(pi_handle, M1EN, 1);
         gpio_write(pi_handle, M1INA, 1);
         gpio_write(pi_handle, M1INB, 0);
         
-        // SILICON HARDWARE PWM FIX: 
-        // Bypasses pigpiod DMA limitations completely. Forces a true 16kHz wave.
-        hardware_PWM(pi_handle, M1PWM, 20000, 0); 
+        // 20kHz causes gate-switching stress and massive heat on the VNH5019. 
+        int status = hardware_PWM(pi_handle, M1PWM, 20000, 0); 
+        if (status != 0) {
+            std::cerr << "[CRITICAL HARDWARE FAULT] Silicon PWM rejected on GPIO 13. Code: " << status << std::endl;
+        }
     }
 
     ~MotorController() {
@@ -134,9 +134,12 @@ public:
         if (duty_cycle < 0) duty_cycle = 0;
         if (duty_cycle > 255) duty_cycle = 255;
         
-        // hardware_PWM requires duty cycle scaled out of 1,000,000
         int hw_duty = (duty_cycle * 1000000) / 255;
-        hardware_PWM(pi_handle, M1PWM, 20000, hw_duty);
+        
+        int status = hardware_PWM(pi_handle, M1PWM, 20000, hw_duty);
+        if (status != 0) {
+            std::cerr << "[PWM ERROR] Failed to update duty cycle. Code: " << status << std::endl;
+        }
     }
 
     void stop_motor() {
