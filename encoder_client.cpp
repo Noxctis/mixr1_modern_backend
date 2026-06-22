@@ -61,9 +61,8 @@ private:
 
     void decode_state() {
         // INDUSTRY STANDARD FIX: Direct Register Access
-        // Reads the entire 32-bit GPIO block simultaneously in one CPU cycle.
-        // Completely eliminates phase-shift data corruption at high velocities.
-        uint32_t bank = gpio_read_bank_1(pi_handle);
+        // Reads the entire 32-bit GPIO block simultaneously via the daemon.
+        uint32_t bank = read_bank_1(pi_handle);
         
         uint8_t val_a = (bank >> pin_a) & 1;
         uint8_t val_b = (bank >> pin_b) & 1;
