@@ -1,11 +1,17 @@
 /**
  * @file mixr1_daemon.cpp
- * @brief High-speed hardware telemetry and control daemon for the MIXR-1 platform.
+ * @brief High-speed hardware telemetry and control daemon for the MIXR-1 chemical engineering platform.
+ * @author Chrys Sean T. Sevilla, Cyril John Christian Calo, Sid Andre Bordario
+ * @institution University of San Carlos - Computer Engineering Department
  * * @architecture
- * Operates in User Space via the pigpiod_if2 client library to allow safe hardware
- * handovers to external processes (MATLAB/Simulink) without kernel-level GPIO locks.
- * Implements exact-time differential math, Exponential Moving Average (EMA) filtering,
- * and silicon-level Hardware PWM to bypass Linux OS scheduler jitter.
+ * Operates in User Space via the pigpiod_if2 client library. This architecture allows
+ * safe hardware handovers to external processes (MATLAB/Simulink) without triggering 
+ * kernel-level GPIO locks.
+ * * @features
+ * 1. Exact-time differential math using high-resolution chrono clocks.
+ * 2. Exponential Moving Average (EMA) filtering for quantization noise attenuation.
+ * 3. Zero-network-trip encoder state tracking via DMA interrupt payloads.
+ * 4. Silicon-level Hardware PWM locked at 20kHz for the VNH5019 driver.
  */
 
 #include <iostream>
@@ -26,23 +32,23 @@
 // GLOBAL CONFIGURATION & CONSTANTS
 // ==========================================
 
-/** * TEST BENCH CONFIG: Pololu Micro Metal Gearmotor
- * 12 base pulses * 51.446 gear ratio = 617.35 counts per revolution.
+/** * @brief TEST BENCH CONFIG: Pololu Micro Metal Gearmotor
+ * Calculation: 12 base magnetic pulses * 51.446 gearbox ratio = 617.35 counts per revolution.
  */
 constexpr double ENCODER_CPR = 617.35; 
 
 constexpr int TCP_PORT = 5000;
 
 /**
+ * @brief Establishes the baseline ~100Hz execution frequency of the main control loop.
  * 10,000 microseconds = 10ms. 
- * Establishes the baseline ~100Hz execution frequency of the main control loop.
  */
 constexpr int LOOP_DELAY_US = 10000; 
 
 std::atomic<bool> run_loop(true);
 
 /**
- * @brief Safely interrupts the daemon loop to release hardware and network bindings.
+ * @brief Safely interrupts the daemon loop to release hardware and network bindings on SIGINT/SIGTERM.
  */
 void signal_handler(int signum) {
     run_loop = false;
@@ -75,27 +81,27 @@ private:
     int cb_a, cb_b;
     volatile long long count = 0;
     
-    // Internal cache isolates state tracking from the network stack
+    // Internal cache isolates state tracking from the network stack to prevent latency
     volatile uint8_t val_a = 0;
     volatile uint8_t val_b = 0;
     volatile uint8_t state = 0;
     
-    // Standard quadrature transition matrix mapping 4-edge states (+1, -1, or 0 invalid)
+    // Standard quadrature transition matrix mapping 4-edge states (+1, -1, or 0 for invalid/noise)
     const int QUAD_STATES[16] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
 
     /**
-     * @brief Static C-style callback router for pigpio DMA interrupts.
+     * @brief Static C-style callback router required for pigpio DMA interrupts.
      */
     static void isr_router(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
-        if (level > 1) return; // 2 indicates a DMA watchdog timeout. Discard to prevent corruption.
+        if (level > 1) return; // Level 2 indicates a DMA watchdog timeout. Discard to prevent math corruption.
         static_cast<PololuEncoder*>(user)->update_state(gpio, level);
     }
 
     /**
      * @brief Processes physical encoder ticks.
-     * ZERO-NETWORK-TRIP ARCHITECTURE: Utilizes the level parameter pushed directly by the 
-     * daemon's DMA interrupt, eliminating the need to poll the daemon over the localhost 
-     * socket. Prevents tick-dropping at high velocities (e.g., >500 RPM).
+     * ZERO-NETWORK-TRIP ARCHITECTURE: Utilizes the exact level parameter pushed directly by the 
+     * daemon's DMA interrupt, eliminating the need to poll the daemon over the localhost socket. 
+     * This physically prevents data-dropping and phase-shifting at high velocities.
      */
     void update_state(unsigned gpio, unsigned level) {
         if (gpio == pin_a) val_a = level;
@@ -113,7 +119,7 @@ public:
         set_pull_up_down(pi_handle, pin_a, PI_PUD_UP);
         set_pull_up_down(pi_handle, pin_b, PI_PUD_UP);
         
-        // Fetch baseline states on instantiation to initialize the phase tracker
+        // Fetch baseline states on instantiation to initialize the phase tracker alignment
         val_a = gpio_read(pi_handle, pin_a);
         val_b = gpio_read(pi_handle, pin_b);
         
@@ -157,8 +163,8 @@ public:
         /**
          * SILICON HARDWARE PWM 
          * Bypasses OS software DMA scheduling limits. 
-         * Frequency locked to 20,000 Hz: Maximizes smoothness without exceeding the 
-         * VNH5019's 20kHz physical MOSFET gate-switching ceiling.
+         * Frequency locked to 20,000 Hz: Pushes the acoustic carrier frequency up to the 
+         * theoretical ceiling of the STMicroelectronics VNH5019 chip.
          */
         int status = hardware_PWM(pi_handle, M1PWM, 20000, 0); 
         if (status != 0) {
@@ -178,7 +184,7 @@ public:
         if (duty_cycle < 0) duty_cycle = 0;
         if (duty_cycle > 255) duty_cycle = 255;
         
-        // hardware_PWM function requires duty cycle mapped to a 1,000,000 base
+        // hardware_PWM function requires duty cycle mapped to a 1,000,000 base integer
         int hw_duty = (duty_cycle * 1000000) / 255;
         
         int status = hardware_PWM(pi_handle, M1PWM, 20000, hw_duty);
@@ -256,7 +262,7 @@ public:
     /**
      * @brief Drains the incoming kernel socket instantly.
      * Employs MSG_DONTWAIT to exhaust the buffer, extracting only the most recent complete command 
-     * packet. Prevents UI slider backlog processing.
+     * packet. Prevents UI slider backlog accumulation and resulting hardware desynchronization.
      * @param new_pwm Passed by reference. Updated only if a valid command is parsed.
      */
     bool receive_command(int& new_pwm) {
@@ -338,9 +344,10 @@ int main() {
             // DIGITAL FILTER VARIABLES
             double filtered_rpm = 0.0;
             
-            /** * Exponential Moving Average (EMA) Tuning Coefficient.
+            /** * @brief Exponential Moving Average (EMA) Tuning Coefficient.
              * 0.15 establishes a low-pass filter cutoff frequency of ~2.4 Hz at a 100Hz loop rate.
-             * Blocks digital quantization noise while preserving the true physical fluid mechanics/inertia.
+             * Blocks digital quantization noise generated by integer tick limits while preserving 
+             * the true physical momentum of the fluid mechanics.
              */
             const double RPM_ALPHA = 0.15; 
 
@@ -367,6 +374,7 @@ int main() {
                         mode3_notified = true;
                     }
                     
+                    // Transmit the UI lock heartbeat
                     if (!network->send_packet(-2.0, -2.0)) break; 
                     usleep(1000000); 
                     continue;
@@ -403,15 +411,26 @@ int main() {
                 }
 
                 // ==========================================
-                // 5. INDUSTRY STANDARD EXACT-TIME METRICS
+                // 5. INDUSTRY STANDARD EXACT-TIME METRICS & DSP
                 // ==========================================
-                // Records the exact nanosecond the count is read. Bypasses Linux OS
-                // scheduler micro-stutters to provide perfect mathematical resolution.
-                
+
+                /*
+                 * ASYNCHRONOUS TIME-DELTA CAPTURE
+                 * Linux is a General Purpose OS (GPOS), not an RTOS. The kernel scheduler 
+                 * introduces unpredictable micro-stutters (jitter), causing loop times to vary.
+                 * Capturing the exact nanosecond via hardware chronometry rather than assuming 
+                 * a rigid 10ms loop time ensures the velocity division scales perfectly, 
+                 * neutralizing OS-induced mathematical artifacts.
+                 */
                 auto current_time = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<double> exact_delta_sec = current_time - last_time;
                 last_time = current_time;
 
+                /*
+                 * DISCRETE POSITION DIFFERENTIAL (Hybrid Method)
+                 * Calculates the exact integer step change in quadrature states since the last loop.
+                 * This cleanly decouples the high-speed hardware interrupts from the math loop.
+                 */
                 long long current_count = encoder->get_count();
                 long long delta_ticks = current_count - last_count;
                 last_count = current_count;
@@ -420,18 +439,37 @@ int main() {
                 double exact_rpm = 0.0;
                 
                 if (dt > 0.0) {
-                    // DEADBAND PROTECTION: Forces true zero if motor is commanded off 
-                    // and ambient vibrations cause microscopic 1-2 tick encoder jumps.
+                    /*
+                     * MECHANICAL DEADBAND (NOISE GATE)
+                     * When PWM is 0, the impeller is at rest. However, ambient workbench vibrations 
+                     * or internal mechanical settling can cause the encoder disc to dither rapidly 
+                     * between two magnetic poles (+1, -1). At a 100Hz sample rate, this 1-tick 
+                     * dither amplifies into a persistent +/- 9.6 RPM false reading. This condition 
+                     * clamps the output to true zero, preventing integral windup in subsequent controllers.
+                     */
                     if (current_pwm == 0 && std::abs(delta_ticks) <= 2) {
                         exact_rpm = 0.0;
                     } else {
-                        // Derivation: (Distance / Resolution) / (Time in Minutes)
+                        /*
+                         * DIMENSIONAL DERIVATION
+                         * 1. (delta_ticks / ENCODER_CPR) = Fractional shaft revolutions.
+                         * 2. (60.0 / dt) = Conversion from 'revolutions per dt' to 'revolutions per minute'.
+                         */
                         exact_rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * (60.0 / dt);
                     }
                 }
                 
-                // EMA DIGITAL FILTER EXECUTION
-                // Absorbs high-frequency integer truncation noise while preserving kinetic acceleration.
+                /*
+                 * INFINITE IMPULSE RESPONSE (IIR) LOW-PASS FILTER
+                 * Quadrature encoders are discrete and truncate fractional movement, producing 
+                 * 'Quantization Noise' (e.g., alternating between reading 10 and 11 ticks). 
+                 * Passing raw noise to a PID Derivative term causes violent control instability.
+                 * * Equation: y[n] = (alpha * x[n]) + ((1 - alpha) * y[n-1])
+                 * * This Exponential Moving Average (EMA) applies a smoothing coefficient (RPM_ALPHA = 0.15).
+                 * At 100Hz, this establishes a cutoff frequency (fc) of ~2.4 Hz. It aggressively 
+                 * attenuates 100Hz high-frequency sensor error while preserving the true low-frequency 
+                 * fluid mechanics and kinetic momentum of the physical motor.
+                 */
                 filtered_rpm = (RPM_ALPHA * exact_rpm) + ((1.0 - RPM_ALPHA) * filtered_rpm);
                 
                 // 6. Decoupled 10Hz Telemetry Transmission
