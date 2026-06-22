@@ -4,21 +4,20 @@
 #include <unistd.h>
 #include <csignal>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <chrono> 
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <netinet/tcp.h> // Required for TCP_NODELAY (Real-time packet streaming)
+#include <netinet/tcp.h> 
 
 // ==========================================
 // GLOBAL CONFIGURATION & CONSTANTS
 // ==========================================
 // MIXR-1 Primary Encoder: Same Sky AMT113S-V
-// Factory Default PPR = 2048.
-// Quadrature hardware decoding reads all 4 edges: 2048 * 4 = 8192.0 CPR.
-// Note: If mounted pre-gearbox, multiply this by the DOGA motor gear ratio.
-constexpr double ENCODER_CPR = 617.35; 
+// Factory Default PPR = 2048. Quadrature reads 4 edges = 8192.0 CPR.
+constexpr double ENCODER_CPR = 8192.0; 
 
 constexpr int TCP_PORT = 5000;
 constexpr int LOOP_DELAY_US = 10000; // 10ms target = ~100Hz Hardware Control Loop
@@ -34,8 +33,6 @@ void signal_handler(int signum) {
 // ==========================================
 class ProcessMonitor {
 public:
-    // Scans the Linux kernel process table for the exact 15-character truncated 
-    // MATLAB Simulink binary name. Regex brackets prevent matching the search shell itself.
     static bool is_simulink_running() {
         const char* cmd = "pgrep -x \"[r]aspberrypi_get\" > /dev/null 2>&1";
         return (system(cmd) == 0);
@@ -56,14 +53,20 @@ private:
     // Standard quadrature transition array mapping 4-edge states
     const int QUAD_STATES[16] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
 
-    // Static router required to bridge C-style hardware callbacks into the C++ class instance
     static void isr_router(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
-        static_cast<PololuEncoder*>(user)->decode_state(gpio, level);
+        // level 2 indicates a pigpio watchdog timeout. Ignore it to prevent math corruption.
+        if (level > 1) return; 
+        static_cast<PololuEncoder*>(user)->decode_state();
     }
 
-    void decode_state(unsigned gpio, unsigned level) {
-        uint8_t val_a = (gpio == pin_a) ? level : gpio_read(pi_handle, pin_a);
-        uint8_t val_b = (gpio == pin_b) ? level : gpio_read(pi_handle, pin_b);
+    void decode_state() {
+        // INDUSTRY STANDARD FIX: Direct Register Access
+        // Reads the entire 32-bit GPIO block simultaneously in one CPU cycle.
+        // Completely eliminates phase-shift data corruption at high velocities.
+        uint32_t bank = gpio_read_bank_1(pi_handle);
+        
+        uint8_t val_a = (bank >> pin_a) & 1;
+        uint8_t val_b = (bank >> pin_b) & 1;
 
         state = (state << 2) & 0x0F;
         state |= (val_a << 1) | val_b;
@@ -77,7 +80,6 @@ public:
         set_pull_up_down(pi_handle, pin_a, PI_PUD_UP);
         set_pull_up_down(pi_handle, pin_b, PI_PUD_UP);
         
-        // Binds the asynchronous Direct Memory Access (DMA) interrupts to the BCM pins
         cb_a = callback_ex(pi_handle, pin_a, EITHER_EDGE, isr_router, this);
         cb_b = callback_ex(pi_handle, pin_b, EITHER_EDGE, isr_router, this);
     }
@@ -96,27 +98,24 @@ public:
 class MotorController {
 private:
     int pi_handle;
-    // BCM Pin Layout for the Cytron MD20A
     const unsigned int M1EN = 15;
     const unsigned int M1INA = 17;
-    const unsigned int M1PWM = 18;
+    const unsigned int M1PWM = 18; 
     const unsigned int M1INB = 27;
 
 public:
     MotorController(int pi) : pi_handle(pi) {
         set_mode(pi_handle, M1EN, PI_OUTPUT);
         set_mode(pi_handle, M1INA, PI_OUTPUT);
-        set_mode(pi_handle, M1PWM, PI_OUTPUT);
         set_mode(pi_handle, M1INB, PI_OUTPUT);
-
-        // Enforces a 20kHz carrier frequency to completely eliminate acoustic coil whine
-        set_PWM_frequency(pi_handle, M1PWM, 20000); 
-        set_PWM_range(pi_handle, M1PWM, 255); 
 
         gpio_write(pi_handle, M1EN, 1);
         gpio_write(pi_handle, M1INA, 1);
         gpio_write(pi_handle, M1INB, 0);
-        set_PWM_dutycycle(pi_handle, M1PWM, 0); 
+        
+        // INDUSTRY STANDARD FIX: Silicon-level Hardware PWM
+        // Locks exactly to 20,000 Hz. The duty cycle expects a scale of 0 to 1,000,000.
+        hardware_PWM(pi_handle, M1PWM, 20000, 0); 
     }
 
     ~MotorController() {
@@ -126,11 +125,14 @@ public:
     void set_pwm(int duty_cycle) {
         if (duty_cycle < 0) duty_cycle = 0;
         if (duty_cycle > 255) duty_cycle = 255;
-        set_PWM_dutycycle(pi_handle, M1PWM, duty_cycle);
+        
+        // Maps the UI's 0-255 slider to the silicon's 0-1,000,000 resolution range
+        int hw_duty = (duty_cycle * 1000000) / 255;
+        hardware_PWM(pi_handle, M1PWM, 20000, hw_duty);
     }
 
     void stop_motor() {
-        set_PWM_dutycycle(pi_handle, M1PWM, 0);
+        hardware_PWM(pi_handle, M1PWM, 20000, 0);
         gpio_write(pi_handle, M1EN, 0); 
     }
 };
@@ -272,6 +274,10 @@ int main() {
             int telemetry_prescaler = 0;
             bool simulink_is_active = false;
 
+            // DIGITAL FILTER VARIABLES
+            double filtered_rpm = 0.0;
+            const double RPM_ALPHA = 0.15; // Tuning coefficient for the EMA filter
+
             // High-resolution clock tracker initialized for Exact-Time math
             auto last_time = std::chrono::high_resolution_clock::now();
 
@@ -313,6 +319,7 @@ int main() {
                         encoder = std::make_unique<PololuEncoder>(pi, 23, 24);
                         motor = std::make_unique<MotorController>(pi);
                         last_count = encoder->get_count(); 
+                        filtered_rpm = 0.0; 
                         
                         // Reset the clock tracker exactly when hardware is claimed
                         last_time = std::chrono::high_resolution_clock::now();
@@ -332,9 +339,6 @@ int main() {
                 // ==========================================
                 // 5. INDUSTRY STANDARD EXACT-TIME METRICS
                 // ==========================================
-                // Records the exact nanosecond the count is read. Bypasses all Linux OS
-                // scheduler micro-stutters to provide perfect mathematical resolution.
-                
                 auto current_time = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<double> exact_delta_sec = current_time - last_time;
                 last_time = current_time;
@@ -347,15 +351,24 @@ int main() {
                 double exact_rpm = 0.0;
                 
                 if (dt > 0.0) {
-                    // Formula: (Distance / Resolution) / (Time in Minutes)
-                    // exact_rpm = (delta_ticks / ENCODER_CPR) / (dt_seconds / 60.0)
-                    exact_rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * (60.0 / dt);
+                    // DEADBAND: Forces true zero if motor is commanded off and ambient
+                    // vibrations cause microscopic 1-2 tick encoder jumps.
+                    if (current_pwm == 0 && std::abs(delta_ticks) <= 2) {
+                        exact_rpm = 0.0;
+                    } else {
+                        // Formula: (Distance / Resolution) / (Time in Minutes)
+                        exact_rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * (60.0 / dt);
+                    }
                 }
+                
+                // EMA DIGITAL FILTER: Absorbs high-frequency quantization noise while 
+                // preserving the true acceleration curve of the hardware.
+                filtered_rpm = (RPM_ALPHA * exact_rpm) + ((1.0 - RPM_ALPHA) * filtered_rpm);
                 
                 // 6. Decoupled 10Hz Telemetry Transmission
                 if (++telemetry_prescaler >= 10) {
                     telemetry_prescaler = 0;
-                    if (!network->send_packet(exact_rpm, 0.0)) {
+                    if (!network->send_packet(filtered_rpm, 0.0)) {
                         std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
                         break; 
                     }
