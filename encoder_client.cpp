@@ -97,12 +97,15 @@ public:
 // ==========================================
 // HARDWARE MODULE: MOTOR CONTROLLER
 // ==========================================
+// ==========================================
+// HARDWARE MODULE: MOTOR CONTROLLER
+// ==========================================
 class MotorController {
 private:
     int pi_handle;
     const unsigned int M1EN = 15;
     const unsigned int M1INA = 17;
-    const unsigned int M1PWM = 13; 
+    const unsigned int M1PWM = 13; // Confirmed: Hardware PWM Channel 1
     const unsigned int M1INB = 27;
 
 public:
@@ -110,17 +113,17 @@ public:
         set_mode(pi_handle, M1EN, PI_OUTPUT);
         set_mode(pi_handle, M1INA, PI_OUTPUT);
         set_mode(pi_handle, M1INB, PI_OUTPUT);
-        set_mode(pi_handle, M1PWM, PI_OUTPUT);
+        
+        // GPIO 13 MUST be set to PI_ALT0 to connect the pin to the hardware PWM silicon
+        set_mode(pi_handle, M1PWM, PI_ALT0);
 
         gpio_write(pi_handle, M1EN, 1);
         gpio_write(pi_handle, M1INA, 1);
         gpio_write(pi_handle, M1INB, 0);
         
-        // STANDARD DMA PWM FIX: Bypasses OS audio clock conflicts.
-        // REQUIRES starting the daemon via: sudo pigpiod -s 1
-        set_PWM_frequency(pi_handle, M1PWM, 20000); 
-        set_PWM_range(pi_handle, M1PWM, 255);
-        set_PWM_dutycycle(pi_handle, M1PWM, 0);
+        // SILICON HARDWARE PWM FIX: 
+        // Bypasses pigpiod DMA limitations completely. Forces a true 16kHz wave.
+        hardware_PWM(pi_handle, M1PWM, 20000, 0); 
     }
 
     ~MotorController() {
@@ -130,11 +133,14 @@ public:
     void set_pwm(int duty_cycle) {
         if (duty_cycle < 0) duty_cycle = 0;
         if (duty_cycle > 255) duty_cycle = 255;
-        set_PWM_dutycycle(pi_handle, M1PWM, duty_cycle);
+        
+        // hardware_PWM requires duty cycle scaled out of 1,000,000
+        int hw_duty = (duty_cycle * 1000000) / 255;
+        hardware_PWM(pi_handle, M1PWM, 20000, hw_duty);
     }
 
     void stop_motor() {
-        set_PWM_dutycycle(pi_handle, M1PWM, 0);
+        hardware_PWM(pi_handle, M1PWM, 20000, 0);
         gpio_write(pi_handle, M1EN, 0); 
     }
 };
