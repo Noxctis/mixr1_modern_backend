@@ -15,9 +15,8 @@
 // ==========================================
 // GLOBAL CONFIGURATION & CONSTANTS
 // ==========================================
-// MIXR-1 Primary Encoder: Same Sky AMT113S-V
-// Factory Default PPR = 2048. Quadrature reads 4 edges = 8192.0 CPR.
-constexpr double ENCODER_CPR = 8192.0; 
+// TEST BENCH CONFIG: Pololu Micro Metal Gearmotor
+constexpr double ENCODER_CPR = 617.35; 
 
 constexpr int TCP_PORT = 5000;
 constexpr int LOOP_DELAY_US = 10000; // 10ms target = ~100Hz Hardware Control Loop
@@ -48,24 +47,24 @@ private:
     unsigned int pin_a, pin_b;
     int cb_a, cb_b;
     volatile long long count = 0;
+    
+    // Internal cache tracks the exact states without polling the network
+    volatile uint8_t val_a = 0;
+    volatile uint8_t val_b = 0;
     volatile uint8_t state = 0;
     
-    // Standard quadrature transition array mapping 4-edge states
     const int QUAD_STATES[16] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
 
     static void isr_router(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
-        // level 2 indicates a pigpio watchdog timeout. Ignore it to prevent math corruption.
-        if (level > 1) return; 
-        static_cast<PololuEncoder*>(user)->decode_state();
+        if (level > 1) return; // 2 indicates watchdog timeout. Discard.
+        static_cast<PololuEncoder*>(user)->update_state(gpio, level);
     }
 
-    void decode_state() {
-        // INDUSTRY STANDARD FIX: Direct Register Access
-        // Reads the entire 32-bit GPIO block simultaneously via the daemon.
-        uint32_t bank = read_bank_1(pi_handle);
-        
-        uint8_t val_a = (bank >> pin_a) & 1;
-        uint8_t val_b = (bank >> pin_b) & 1;
+    void update_state(unsigned gpio, unsigned level) {
+        // ZERO-NETWORK-TRIP FIX:
+        // We only use the data explicitly pushed by the daemon's interrupt payload.
+        if (gpio == pin_a) val_a = level;
+        else if (gpio == pin_b) val_b = level;
 
         state = (state << 2) & 0x0F;
         state |= (val_a << 1) | val_b;
@@ -78,6 +77,10 @@ public:
         set_mode(pi_handle, pin_b, PI_INPUT);
         set_pull_up_down(pi_handle, pin_a, PI_PUD_UP);
         set_pull_up_down(pi_handle, pin_b, PI_PUD_UP);
+        
+        // Fetch the baseline states once on startup to align the phase tracker
+        val_a = gpio_read(pi_handle, pin_a);
+        val_b = gpio_read(pi_handle, pin_b);
         
         cb_a = callback_ex(pi_handle, pin_a, EITHER_EDGE, isr_router, this);
         cb_b = callback_ex(pi_handle, pin_b, EITHER_EDGE, isr_router, this);
@@ -99,7 +102,7 @@ private:
     int pi_handle;
     const unsigned int M1EN = 15;
     const unsigned int M1INA = 17;
-    const unsigned int M1PWM = 18; 
+    const unsigned int M1PWM = 13; 
     const unsigned int M1INB = 27;
 
 public:
@@ -107,14 +110,17 @@ public:
         set_mode(pi_handle, M1EN, PI_OUTPUT);
         set_mode(pi_handle, M1INA, PI_OUTPUT);
         set_mode(pi_handle, M1INB, PI_OUTPUT);
+        set_mode(pi_handle, M1PWM, PI_OUTPUT);
 
         gpio_write(pi_handle, M1EN, 1);
         gpio_write(pi_handle, M1INA, 1);
         gpio_write(pi_handle, M1INB, 0);
         
-        // INDUSTRY STANDARD FIX: Silicon-level Hardware PWM
-        // Locks exactly to 20,000 Hz. The duty cycle expects a scale of 0 to 1,000,000.
-        hardware_PWM(pi_handle, M1PWM, 20000, 0); 
+        // STANDARD DMA PWM FIX: Bypasses OS audio clock conflicts.
+        // REQUIRES starting the daemon via: sudo pigpiod -s 1
+        set_PWM_frequency(pi_handle, M1PWM, 20000); 
+        set_PWM_range(pi_handle, M1PWM, 255);
+        set_PWM_dutycycle(pi_handle, M1PWM, 0);
     }
 
     ~MotorController() {
@@ -124,14 +130,11 @@ public:
     void set_pwm(int duty_cycle) {
         if (duty_cycle < 0) duty_cycle = 0;
         if (duty_cycle > 255) duty_cycle = 255;
-        
-        // Maps the UI's 0-255 slider to the silicon's 0-1,000,000 resolution range
-        int hw_duty = (duty_cycle * 1000000) / 255;
-        hardware_PWM(pi_handle, M1PWM, 20000, hw_duty);
+        set_PWM_dutycycle(pi_handle, M1PWM, duty_cycle);
     }
 
     void stop_motor() {
-        hardware_PWM(pi_handle, M1PWM, 20000, 0);
+        set_PWM_dutycycle(pi_handle, M1PWM, 0);
         gpio_write(pi_handle, M1EN, 0); 
     }
 };
@@ -177,7 +180,6 @@ public:
             if (activity > 0 && FD_ISSET(server_fd, &readfds)) {
                 client_socket = accept(server_fd, nullptr, nullptr);
                 
-                // Disable Nagle's Algorithm for zero-latency telemetry streaming
                 int flag = 1;
                 setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
                 
@@ -195,8 +197,6 @@ public:
         return (sent > 0);
     }
 
-    // INDUSTRY STANDARD DRAINAGE: Exhausts the kernel buffer instantly to prevent
-    // trailing command lag when the dashboard slider is moved rapidly.
     bool receive_command(int& new_pwm) {
         if (client_socket < 0) return false;
         bool command_updated = false;
@@ -273,21 +273,17 @@ int main() {
             int telemetry_prescaler = 0;
             bool simulink_is_active = false;
 
-            // DIGITAL FILTER VARIABLES
             double filtered_rpm = 0.0;
-            const double RPM_ALPHA = 0.15; // Tuning coefficient for the EMA filter
+            const double RPM_ALPHA = 0.15; 
 
-            // High-resolution clock tracker initialized for Exact-Time math
             auto last_time = std::chrono::high_resolution_clock::now();
 
             while (run_loop) {
-                // 1. Process Monitor Matrix (Checked at 1Hz to save CPU cycles)
                 if (++simulink_check_counter >= 100) {
                     simulink_check_counter = 0;
                     simulink_is_active = ProcessMonitor::is_simulink_running();
                 }
 
-                // 2. Mode 3 Handover Execution
                 if (simulink_is_active) {
                     if (!mode3_notified) {
                         std::cout << "\n[MIXR-1] MATLAB detected. Releasing hardware pins..." << std::endl;
@@ -299,7 +295,6 @@ int main() {
                         mode3_notified = true;
                     }
                     
-                    // Transmit the UI lock heartbeat
                     if (!network->send_packet(-2.0, -2.0)) break; 
                     usleep(1000000); 
                     continue;
@@ -310,7 +305,6 @@ int main() {
                     mode3_notified = false;
                 }
 
-                // 3. Mode 2 Hardware Claim Initialization
                 if (pi < 0) {
                     std::cout << "[MIXR-1] Claiming hardware for Mode 2..." << std::endl;
                     pi = pigpio_start(nullptr, nullptr);
@@ -320,7 +314,6 @@ int main() {
                         last_count = encoder->get_count(); 
                         filtered_rpm = 0.0; 
                         
-                        // Reset the clock tracker exactly when hardware is claimed
                         last_time = std::chrono::high_resolution_clock::now();
                     } else {
                         std::cerr << "CRITICAL: pigpiod not ready. Retrying..." << std::endl;
@@ -329,7 +322,6 @@ int main() {
                     }
                 }
 
-                // 4. Bi-Directional Client Updates
                 if (network->receive_command(current_pwm)) {
                     if (motor != nullptr) motor->set_pwm(current_pwm);
                     std::cout << "[MIXR-1] CMD Received -> Hardware PWM set to: " << current_pwm << std::endl;
@@ -350,21 +342,15 @@ int main() {
                 double exact_rpm = 0.0;
                 
                 if (dt > 0.0) {
-                    // DEADBAND: Forces true zero if motor is commanded off and ambient
-                    // vibrations cause microscopic 1-2 tick encoder jumps.
                     if (current_pwm == 0 && std::abs(delta_ticks) <= 2) {
                         exact_rpm = 0.0;
                     } else {
-                        // Formula: (Distance / Resolution) / (Time in Minutes)
                         exact_rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * (60.0 / dt);
                     }
                 }
                 
-                // EMA DIGITAL FILTER: Absorbs high-frequency quantization noise while 
-                // preserving the true acceleration curve of the hardware.
                 filtered_rpm = (RPM_ALPHA * exact_rpm) + ((1.0 - RPM_ALPHA) * filtered_rpm);
                 
-                // 6. Decoupled 10Hz Telemetry Transmission
                 if (++telemetry_prescaler >= 10) {
                     telemetry_prescaler = 0;
                     if (!network->send_packet(filtered_rpm, 0.0)) {
@@ -373,11 +359,9 @@ int main() {
                     }
                 }
                 
-                // Base loop delay (~100Hz pacing)
                 usleep(LOOP_DELAY_US); 
             }
 
-            // Safe shutdown cleanup on loop break
             motor.reset();
             encoder.reset();
             if (pi >= 0) pigpio_stop(pi);
