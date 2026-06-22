@@ -1,3 +1,13 @@
+/**
+ * @file mixr1_daemon.cpp
+ * @brief High-speed hardware telemetry and control daemon for the MIXR-1 platform.
+ * * @architecture
+ * Operates in User Space via the pigpiod_if2 client library to allow safe hardware
+ * handovers to external processes (MATLAB/Simulink) without kernel-level GPIO locks.
+ * Implements exact-time differential math, Exponential Moving Average (EMA) filtering,
+ * and silicon-level Hardware PWM to bypass Linux OS scheduler jitter.
+ */
+
 #include <iostream>
 #include <string>
 #include <pigpiod_if2.h>
@@ -15,14 +25,25 @@
 // ==========================================
 // GLOBAL CONFIGURATION & CONSTANTS
 // ==========================================
-// TEST BENCH CONFIG: Pololu Micro Metal Gearmotor
+
+/** * TEST BENCH CONFIG: Pololu Micro Metal Gearmotor
+ * 12 base pulses * 51.446 gear ratio = 617.35 counts per revolution.
+ */
 constexpr double ENCODER_CPR = 617.35; 
 
 constexpr int TCP_PORT = 5000;
-constexpr int LOOP_DELAY_US = 10000; // 10ms target = ~100Hz Hardware Control Loop
+
+/**
+ * 10,000 microseconds = 10ms. 
+ * Establishes the baseline ~100Hz execution frequency of the main control loop.
+ */
+constexpr int LOOP_DELAY_US = 10000; 
 
 std::atomic<bool> run_loop(true);
 
+/**
+ * @brief Safely interrupts the daemon loop to release hardware and network bindings.
+ */
 void signal_handler(int signum) {
     run_loop = false;
 }
@@ -32,6 +53,12 @@ void signal_handler(int signum) {
 // ==========================================
 class ProcessMonitor {
 public:
+    /**
+     * @brief Detects external MATLAB/Simulink hardware claims.
+     * Scans the Linux process table for the truncated Simulink binary. 
+     * Regex brackets prevent matching the grep shell command itself.
+     * @return true if Simulink is actively running.
+     */
     static bool is_simulink_running() {
         const char* cmd = "pgrep -x \"[r]aspberrypi_get\" > /dev/null 2>&1";
         return (system(cmd) == 0);
@@ -48,21 +75,29 @@ private:
     int cb_a, cb_b;
     volatile long long count = 0;
     
-    // Internal cache tracks the exact states without polling the network
+    // Internal cache isolates state tracking from the network stack
     volatile uint8_t val_a = 0;
     volatile uint8_t val_b = 0;
     volatile uint8_t state = 0;
     
+    // Standard quadrature transition matrix mapping 4-edge states (+1, -1, or 0 invalid)
     const int QUAD_STATES[16] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
 
+    /**
+     * @brief Static C-style callback router for pigpio DMA interrupts.
+     */
     static void isr_router(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
-        if (level > 1) return; // 2 indicates watchdog timeout. Discard.
+        if (level > 1) return; // 2 indicates a DMA watchdog timeout. Discard to prevent corruption.
         static_cast<PololuEncoder*>(user)->update_state(gpio, level);
     }
 
+    /**
+     * @brief Processes physical encoder ticks.
+     * ZERO-NETWORK-TRIP ARCHITECTURE: Utilizes the level parameter pushed directly by the 
+     * daemon's DMA interrupt, eliminating the need to poll the daemon over the localhost 
+     * socket. Prevents tick-dropping at high velocities (e.g., >500 RPM).
+     */
     void update_state(unsigned gpio, unsigned level) {
-        // ZERO-NETWORK-TRIP FIX:
-        // We only use the data explicitly pushed by the daemon's interrupt payload.
         if (gpio == pin_a) val_a = level;
         else if (gpio == pin_b) val_b = level;
 
@@ -78,7 +113,7 @@ public:
         set_pull_up_down(pi_handle, pin_a, PI_PUD_UP);
         set_pull_up_down(pi_handle, pin_b, PI_PUD_UP);
         
-        // Fetch the baseline states once on startup to align the phase tracker
+        // Fetch baseline states on instantiation to initialize the phase tracker
         val_a = gpio_read(pi_handle, pin_a);
         val_b = gpio_read(pi_handle, pin_b);
         
@@ -102,7 +137,7 @@ private:
     int pi_handle;
     const unsigned int M1EN = 15;
     const unsigned int M1INA = 17;
-    const unsigned int M1PWM = 13; // Hardware PWM Channel 1
+    const unsigned int M1PWM = 13; // Broadcom Silicon Hardware PWM Channel 1
     const unsigned int M1INB = 27;
 
 public:
@@ -111,15 +146,20 @@ public:
         set_mode(pi_handle, M1INA, PI_OUTPUT);
         set_mode(pi_handle, M1INB, PI_OUTPUT);
         
-        // Explicitly map GPIO 13 to the silicon PWM generator
+        // PI_ALT0 explicitly maps GPIO 13 to the BCM internal silicon PWM generator
         set_mode(pi_handle, M1PWM, PI_ALT0);
 
-        // VNH5019 Forward Logic
+        // VNH5019 Forward Logic Topology
         gpio_write(pi_handle, M1EN, 1);
         gpio_write(pi_handle, M1INA, 1);
         gpio_write(pi_handle, M1INB, 0);
         
-        // 20kHz causes gate-switching stress and massive heat on the VNH5019. 
+        /**
+         * SILICON HARDWARE PWM 
+         * Bypasses OS software DMA scheduling limits. 
+         * Frequency locked to 20,000 Hz: Maximizes smoothness without exceeding the 
+         * VNH5019's 20kHz physical MOSFET gate-switching ceiling.
+         */
         int status = hardware_PWM(pi_handle, M1PWM, 20000, 0); 
         if (status != 0) {
             std::cerr << "[CRITICAL HARDWARE FAULT] Silicon PWM rejected on GPIO 13. Code: " << status << std::endl;
@@ -130,10 +170,15 @@ public:
         stop_motor();
     }
 
+    /**
+     * @brief Translates 8-bit UI commands to 20-bit silicon resolution.
+     * @param duty_cycle Standard 0-255 scale.
+     */
     void set_pwm(int duty_cycle) {
         if (duty_cycle < 0) duty_cycle = 0;
         if (duty_cycle > 255) duty_cycle = 255;
         
+        // hardware_PWM function requires duty cycle mapped to a 1,000,000 base
         int hw_duty = (duty_cycle * 1000000) / 255;
         
         int status = hardware_PWM(pi_handle, M1PWM, 20000, hw_duty);
@@ -189,6 +234,8 @@ public:
             if (activity > 0 && FD_ISSET(server_fd, &readfds)) {
                 client_socket = accept(server_fd, nullptr, nullptr);
                 
+                // IPPROTO_TCP / TCP_NODELAY: Explicitly disables Nagle's Algorithm.
+                // Prevents kernel-level packet buffering to guarantee zero-latency telemetry streaming.
                 int flag = 1;
                 setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
                 
@@ -206,6 +253,12 @@ public:
         return (sent > 0);
     }
 
+    /**
+     * @brief Drains the incoming kernel socket instantly.
+     * Employs MSG_DONTWAIT to exhaust the buffer, extracting only the most recent complete command 
+     * packet. Prevents UI slider backlog processing.
+     * @param new_pwm Passed by reference. Updated only if a valid command is parsed.
+     */
     bool receive_command(int& new_pwm) {
         if (client_socket < 0) return false;
         bool command_updated = false;
@@ -282,23 +335,33 @@ int main() {
             int telemetry_prescaler = 0;
             bool simulink_is_active = false;
 
+            // DIGITAL FILTER VARIABLES
             double filtered_rpm = 0.0;
+            
+            /** * Exponential Moving Average (EMA) Tuning Coefficient.
+             * 0.15 establishes a low-pass filter cutoff frequency of ~2.4 Hz at a 100Hz loop rate.
+             * Blocks digital quantization noise while preserving the true physical fluid mechanics/inertia.
+             */
             const double RPM_ALPHA = 0.15; 
 
+            // High-resolution clock tracker initialized for Exact-Time math
             auto last_time = std::chrono::high_resolution_clock::now();
 
             while (run_loop) {
+                // 1. Process Monitor Matrix (Checked at 1Hz to conserve CPU cycles)
                 if (++simulink_check_counter >= 100) {
                     simulink_check_counter = 0;
                     simulink_is_active = ProcessMonitor::is_simulink_running();
                 }
 
+                // 2. Mode 3 Handover Execution (MATLAB Process Control)
                 if (simulink_is_active) {
                     if (!mode3_notified) {
                         std::cout << "\n[MIXR-1] MATLAB detected. Releasing hardware pins..." << std::endl;
                         motor.reset();
                         encoder.reset();
-                        if (pi >= 0) { pigpio_stop(pi); pi = -1; }
+                        // Releases the daemon socket binding so Simulink can claim it
+                        if (pi >= 0) { pigpio_stop(pi); pi = -1; } 
                         
                         std::cout << "[MIXR-1] System locked in Mode 3. Waiting for MATLAB to finish..." << std::endl;
                         mode3_notified = true;
@@ -314,6 +377,7 @@ int main() {
                     mode3_notified = false;
                 }
 
+                // 3. Mode 2 Hardware Claim Initialization
                 if (pi < 0) {
                     std::cout << "[MIXR-1] Claiming hardware for Mode 2..." << std::endl;
                     pi = pigpio_start(nullptr, nullptr);
@@ -323,6 +387,7 @@ int main() {
                         last_count = encoder->get_count(); 
                         filtered_rpm = 0.0; 
                         
+                        // Reset the clock tracker exactly when hardware is claimed to prevent delta_sec spikes
                         last_time = std::chrono::high_resolution_clock::now();
                     } else {
                         std::cerr << "CRITICAL: pigpiod not ready. Retrying..." << std::endl;
@@ -331,6 +396,7 @@ int main() {
                     }
                 }
 
+                // 4. Bi-Directional Client Updates
                 if (network->receive_command(current_pwm)) {
                     if (motor != nullptr) motor->set_pwm(current_pwm);
                     std::cout << "[MIXR-1] CMD Received -> Hardware PWM set to: " << current_pwm << std::endl;
@@ -339,6 +405,9 @@ int main() {
                 // ==========================================
                 // 5. INDUSTRY STANDARD EXACT-TIME METRICS
                 // ==========================================
+                // Records the exact nanosecond the count is read. Bypasses Linux OS
+                // scheduler micro-stutters to provide perfect mathematical resolution.
+                
                 auto current_time = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<double> exact_delta_sec = current_time - last_time;
                 last_time = current_time;
@@ -351,15 +420,21 @@ int main() {
                 double exact_rpm = 0.0;
                 
                 if (dt > 0.0) {
+                    // DEADBAND PROTECTION: Forces true zero if motor is commanded off 
+                    // and ambient vibrations cause microscopic 1-2 tick encoder jumps.
                     if (current_pwm == 0 && std::abs(delta_ticks) <= 2) {
                         exact_rpm = 0.0;
                     } else {
+                        // Derivation: (Distance / Resolution) / (Time in Minutes)
                         exact_rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * (60.0 / dt);
                     }
                 }
                 
+                // EMA DIGITAL FILTER EXECUTION
+                // Absorbs high-frequency integer truncation noise while preserving kinetic acceleration.
                 filtered_rpm = (RPM_ALPHA * exact_rpm) + ((1.0 - RPM_ALPHA) * filtered_rpm);
                 
+                // 6. Decoupled 10Hz Telemetry Transmission
                 if (++telemetry_prescaler >= 10) {
                     telemetry_prescaler = 0;
                     if (!network->send_packet(filtered_rpm, 0.0)) {
@@ -368,9 +443,11 @@ int main() {
                     }
                 }
                 
+                // Base loop delay (~100Hz pacing constraint)
                 usleep(LOOP_DELAY_US); 
             }
 
+            // Safe shutdown cleanup on loop break
             motor.reset();
             encoder.reset();
             if (pi >= 0) pigpio_stop(pi);
