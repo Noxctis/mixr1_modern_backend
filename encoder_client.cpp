@@ -1,19 +1,27 @@
 #include <iostream>
+#include <string>
 #include <pigpiod_if2.h>
 #include <unistd.h>
 #include <csignal>
 #include <atomic>
 #include <cstring>
 #include <memory>
-#include <chrono> // Added for high-resolution industry-standard timing
+#include <chrono> 
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h> // Required for TCP_NODELAY (Real-time packet streaming)
 
-// --- Global Configuration ---
-constexpr double POLOLU_CPR = 617.35;
+// ==========================================
+// GLOBAL CONFIGURATION & CONSTANTS
+// ==========================================
+// MIXR-1 Primary Encoder: Same Sky AMT113S-V
+// Factory Default PPR = 2048.
+// Quadrature hardware decoding reads all 4 edges: 2048 * 4 = 8192.0 CPR.
+// Note: If mounted pre-gearbox, multiply this by the DOGA motor gear ratio.
+constexpr double ENCODER_CPR = 617.35; 
+
 constexpr int TCP_PORT = 5000;
-// 10,000 microseconds = 10ms = 100Hz Hardware Control Loop
-constexpr int LOOP_DELAY_US = 10000; 
+constexpr int LOOP_DELAY_US = 10000; // 10ms target = ~100Hz Hardware Control Loop
 
 std::atomic<bool> run_loop(true);
 
@@ -26,6 +34,8 @@ void signal_handler(int signum) {
 // ==========================================
 class ProcessMonitor {
 public:
+    // Scans the Linux kernel process table for the exact 15-character truncated 
+    // MATLAB Simulink binary name. Regex brackets prevent matching the search shell itself.
     static bool is_simulink_running() {
         const char* cmd = "pgrep -x \"[r]aspberrypi_get\" > /dev/null 2>&1";
         return (system(cmd) == 0);
@@ -42,8 +52,11 @@ private:
     int cb_a, cb_b;
     volatile long long count = 0;
     volatile uint8_t state = 0;
+    
+    // Standard quadrature transition array mapping 4-edge states
     const int QUAD_STATES[16] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
 
+    // Static router required to bridge C-style hardware callbacks into the C++ class instance
     static void isr_router(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
         static_cast<PololuEncoder*>(user)->decode_state(gpio, level);
     }
@@ -63,6 +76,8 @@ public:
         set_mode(pi_handle, pin_b, PI_INPUT);
         set_pull_up_down(pi_handle, pin_a, PI_PUD_UP);
         set_pull_up_down(pi_handle, pin_b, PI_PUD_UP);
+        
+        // Binds the asynchronous Direct Memory Access (DMA) interrupts to the BCM pins
         cb_a = callback_ex(pi_handle, pin_a, EITHER_EDGE, isr_router, this);
         cb_b = callback_ex(pi_handle, pin_b, EITHER_EDGE, isr_router, this);
     }
@@ -81,6 +96,7 @@ public:
 class MotorController {
 private:
     int pi_handle;
+    // BCM Pin Layout for the Cytron MD20A
     const unsigned int M1EN = 15;
     const unsigned int M1INA = 17;
     const unsigned int M1PWM = 18;
@@ -93,6 +109,7 @@ public:
         set_mode(pi_handle, M1PWM, PI_OUTPUT);
         set_mode(pi_handle, M1INB, PI_OUTPUT);
 
+        // Enforces a 20kHz carrier frequency to completely eliminate acoustic coil whine
         set_PWM_frequency(pi_handle, M1PWM, 20000); 
         set_PWM_range(pi_handle, M1PWM, 255); 
 
@@ -133,6 +150,7 @@ public:
     bool start_server(int port) {
         server_fd = socket(AF_INET, SOCK_STREAM, 0);
         if (server_fd < 0) return false;
+        
         int opt = 1;
         setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -157,6 +175,11 @@ public:
 
             if (activity > 0 && FD_ISSET(server_fd, &readfds)) {
                 client_socket = accept(server_fd, nullptr, nullptr);
+                
+                // Disable Nagle's Algorithm for zero-latency telemetry streaming
+                int flag = 1;
+                setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
+                
                 rx_buffer.clear(); 
                 return (client_socket >= 0);
             }
@@ -171,6 +194,8 @@ public:
         return (sent > 0);
     }
 
+    // INDUSTRY STANDARD DRAINAGE: Exhausts the kernel buffer instantly to prevent
+    // trailing command lag when the dashboard slider is moved rapidly.
     bool receive_command(int& new_pwm) {
         if (client_socket < 0) return false;
         bool command_updated = false;
@@ -247,19 +272,17 @@ int main() {
             int telemetry_prescaler = 0;
             bool simulink_is_active = false;
 
-            // --- FILTER VARIABLES DISABLED ---
-            // double filtered_rpm = 0.0;
-            // const double RPM_ALPHA = 0.15; 
-
-            // High-resolution clock tracker for exact RPM math
+            // High-resolution clock tracker initialized for Exact-Time math
             auto last_time = std::chrono::high_resolution_clock::now();
 
             while (run_loop) {
+                // 1. Process Monitor Matrix (Checked at 1Hz to save CPU cycles)
                 if (++simulink_check_counter >= 100) {
                     simulink_check_counter = 0;
                     simulink_is_active = ProcessMonitor::is_simulink_running();
                 }
 
+                // 2. Mode 3 Handover Execution
                 if (simulink_is_active) {
                     if (!mode3_notified) {
                         std::cout << "\n[MIXR-1] MATLAB detected. Releasing hardware pins..." << std::endl;
@@ -271,6 +294,7 @@ int main() {
                         mode3_notified = true;
                     }
                     
+                    // Transmit the UI lock heartbeat
                     if (!network->send_packet(-2.0, -2.0)) break; 
                     usleep(1000000); 
                     continue;
@@ -281,6 +305,7 @@ int main() {
                     mode3_notified = false;
                 }
 
+                // 3. Mode 2 Hardware Claim Initialization
                 if (pi < 0) {
                     std::cout << "[MIXR-1] Claiming hardware for Mode 2..." << std::endl;
                     pi = pigpio_start(nullptr, nullptr);
@@ -289,7 +314,7 @@ int main() {
                         motor = std::make_unique<MotorController>(pi);
                         last_count = encoder->get_count(); 
                         
-                        // Reset the clock tracker on hardware claim
+                        // Reset the clock tracker exactly when hardware is claimed
                         last_time = std::chrono::high_resolution_clock::now();
                     } else {
                         std::cerr << "CRITICAL: pigpiod not ready. Retrying..." << std::endl;
@@ -298,16 +323,17 @@ int main() {
                     }
                 }
 
-                // 1. Process Real-Time Commands
+                // 4. Bi-Directional Client Updates
                 if (network->receive_command(current_pwm)) {
                     if (motor != nullptr) motor->set_pwm(current_pwm);
                     std::cout << "[MIXR-1] CMD Received -> Hardware PWM set to: " << current_pwm << std::endl;
                 }
 
-                // 2. 100Hz Physical State Math (INDUSTRY STANDARD EXACT-TIME METHOD)
-                // We capture the exact nanosecond we read the count. By dividing the 
-                // raw delta count by the exact delta time in seconds, we completely eliminate 
-                // RPM spikes caused by Linux OS scheduling jitter.
+                // ==========================================
+                // 5. INDUSTRY STANDARD EXACT-TIME METRICS
+                // ==========================================
+                // Records the exact nanosecond the count is read. Bypasses all Linux OS
+                // scheduler micro-stutters to provide perfect mathematical resolution.
                 
                 auto current_time = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<double> exact_delta_sec = current_time - last_time;
@@ -321,29 +347,25 @@ int main() {
                 double exact_rpm = 0.0;
                 
                 if (dt > 0.0) {
-                    // exact_rpm = (Revolutions) / (Minutes)
-                    // exact_rpm = (delta_ticks / POLOLU_CPR) / (dt_seconds / 60.0)
-                    exact_rpm = (static_cast<double>(delta_ticks) / POLOLU_CPR) * (60.0 / dt);
+                    // Formula: (Distance / Resolution) / (Time in Minutes)
+                    // exact_rpm = (delta_ticks / ENCODER_CPR) / (dt_seconds / 60.0)
+                    exact_rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * (60.0 / dt);
                 }
-
-                // --- FILTER DISABLED ---
-                // filtered_rpm = (RPM_ALPHA * exact_rpm) + ((1.0 - RPM_ALPHA) * filtered_rpm);
                 
-                // 3. Decoupled 10Hz Telemetry Transmission
+                // 6. Decoupled 10Hz Telemetry Transmission
                 if (++telemetry_prescaler >= 10) {
                     telemetry_prescaler = 0;
-                    // Transmitting exact_rpm directly instead of filtered_rpm
                     if (!network->send_packet(exact_rpm, 0.0)) {
                         std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
                         break; 
                     }
                 }
                 
-                // Paces the hardware control loop to ~100Hz. The Exact-Time math above
-                // guarantees accurate RPM regardless of microsecond drift in this usleep.
+                // Base loop delay (~100Hz pacing)
                 usleep(LOOP_DELAY_US); 
             }
 
+            // Safe shutdown cleanup on loop break
             motor.reset();
             encoder.reset();
             if (pi >= 0) pigpio_stop(pi);
