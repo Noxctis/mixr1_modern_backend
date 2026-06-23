@@ -24,6 +24,8 @@
 #include <cstring>
 #include <memory>
 #include <chrono> 
+#include <iomanip>
+#include <sstream>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h> 
@@ -200,6 +202,99 @@ public:
 };
 
 // ==========================================
+// HARDWARE MODULE: LCD DISPLAY 1602 (I2C via PCF8574)
+// ==========================================
+class LCD1602 {
+private:
+    int pi_handle;
+    int i2c_handle;
+    int addr;
+    int backlight;
+
+    void write_byte(int val) {
+        i2c_write_byte(pi_handle, i2c_handle, val | backlight);
+    }
+
+    void toggle_enable(int val) {
+        usleep(500);
+        write_byte(val | 0x04);
+        usleep(500);
+        write_byte(val & ~0x04);
+        usleep(500);
+    }
+
+    void send_command(int cmd) {
+        int high = cmd & 0xF0;
+        int low = (cmd << 4) & 0xF0;
+        write_byte(high);
+        toggle_enable(high);
+        write_byte(low);
+        toggle_enable(low);
+    }
+
+    void send_data(int data) {
+        int high = data & 0xF0;
+        int low = (data << 4) & 0xF0;
+        write_byte(high | 0x01); // RS = 1
+        toggle_enable(high | 0x01);
+        write_byte(low | 0x01); // RS = 1
+        toggle_enable(low | 0x01);
+    }
+
+public:
+    LCD1602(int pi, int i2c_addr = 0x27) : pi_handle(pi), addr(i2c_addr), backlight(0x08) {
+        // Open I2C bus 1
+        i2c_handle = i2c_open(pi_handle, 1, addr, 0);
+        if (i2c_handle < 0) {
+            std::cerr << "[LCD ERROR] Failed to open I2C bus for LCD at address 0x" << std::hex << addr << std::endl;
+            return;
+        }
+
+        // Initialization sequence for 4-bit mode (HD44780 standard)
+        usleep(50000);
+        write_byte(0x30);
+        toggle_enable(0x30);
+        usleep(5000);
+        write_byte(0x30);
+        toggle_enable(0x30);
+        usleep(150);
+        write_byte(0x30);
+        toggle_enable(0x30);
+
+        write_byte(0x20); // Switch to 4-bit mode
+        toggle_enable(0x20);
+
+        send_command(0x28); // Function set: 4-bit, 2 line, 5x8 dots
+        send_command(0x0C); // Display on, cursor off, blink off
+        send_command(0x06); // Entry mode set: increment, no shift
+        clear();
+    }
+
+    ~LCD1602() {
+        if (i2c_handle >= 0) {
+            clear();
+            i2c_close(pi_handle, i2c_handle);
+        }
+    }
+
+    void clear() {
+        send_command(0x01); // Clear display
+        usleep(2000);       // Clear command needs more time
+    }
+
+    void set_cursor(int row, int col) {
+        int row_offsets[] = { 0x00, 0x40 }; // Standard offsets for 16x2
+        send_command(0x80 | (col + row_offsets[row]));
+    }
+
+    void print(const std::string& str) {
+        for (char c : str) {
+            send_data(c);
+        }
+    }
+};
+
+// ==========================================
 // NETWORK MODULE: TCP SERVER
 // ==========================================
 class TelemetryServer {
@@ -332,6 +427,7 @@ int main() {
             int pi = -1;
             std::unique_ptr<PololuEncoder> encoder = nullptr;
             std::unique_ptr<MotorController> motor = nullptr;
+            std::unique_ptr<LCD1602> lcd = nullptr;
             
             bool mode3_notified = false;
             long long last_count = 0;
@@ -367,6 +463,7 @@ int main() {
                         std::cout << "\n[MIXR-1] MATLAB detected. Releasing hardware pins..." << std::endl;
                         motor.reset();
                         encoder.reset();
+                        lcd.reset();
                         // Releases the daemon socket binding so Simulink can claim it
                         if (pi >= 0) { pigpio_stop(pi); pi = -1; } 
                         
@@ -392,6 +489,7 @@ int main() {
                     if (pi >= 0) {
                         encoder = std::make_unique<PololuEncoder>(pi, 23, 24);
                         motor = std::make_unique<MotorController>(pi);
+                        lcd = std::make_unique<LCD1602>(pi); // Address 0x27 is the default in the class
                         last_count = encoder->get_count(); 
                         filtered_rpm = 0.0; 
                         
@@ -472,12 +570,22 @@ int main() {
                  */
                 filtered_rpm = (RPM_ALPHA * exact_rpm) + ((1.0 - RPM_ALPHA) * filtered_rpm);
                 
-                // 6. Decoupled 10Hz Telemetry Transmission
+                // 6. Decoupled 10Hz Telemetry Transmission & LCD Updates
                 if (++telemetry_prescaler >= 10) {
                     telemetry_prescaler = 0;
                     if (!network->send_packet(filtered_rpm, 0.0)) {
                         std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
                         break; 
+                    }
+                    
+                    if (lcd) {
+                        std::ostringstream lcd_rpm, lcd_pwm;
+                        lcd_rpm << std::fixed << std::setprecision(1) << "RPM: " << filtered_rpm << "   ";
+                        lcd_pwm << "PWM: " << current_pwm << "   ";
+                        lcd->set_cursor(0, 0);
+                        lcd->print(lcd_rpm.str());
+                        lcd->set_cursor(1, 0);
+                        lcd->print(lcd_pwm.str());
                     }
                 }
                 
@@ -488,6 +596,7 @@ int main() {
             // Safe shutdown cleanup on loop break
             motor.reset();
             encoder.reset();
+            lcd.reset();
             if (pi >= 0) pigpio_stop(pi);
         }
         network->stop_server();
