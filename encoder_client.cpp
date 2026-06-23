@@ -216,11 +216,10 @@ private:
     }
 
     void toggle_enable(int val) {
-        usleep(500);
-        write_byte(val | 0x04);
-        usleep(500);
-        write_byte(val & ~0x04);
-        usleep(500);
+        write_byte(val | 0x04); // EN = 1
+        usleep(50);             // Minimum enable pulse width
+        write_byte(val & ~0x04); // EN = 0
+        usleep(50);             // Settle time for typical LCD commands
     }
 
     void send_command(int cmd) {
