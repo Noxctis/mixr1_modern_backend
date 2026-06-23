@@ -440,9 +440,9 @@ int main() {
             double filtered_rpm = 0.0;
             
             // 800ms SMA (Simple Moving Average) variables
-            // At ~100Hz loop rate, 80 samples = 800ms
-            const int SMA_WINDOW = 80;
-            double sma_history[80] = {0.0};
+            // At 10Hz network rate, 8 samples = 800ms (Exactly matches Python's array)
+            const int SMA_WINDOW = 8;
+            double sma_history[8] = {0.0};
             int sma_index = 0;
             double sma_sum = 0.0;
             double sma_rpm = 0.0;
@@ -585,19 +585,20 @@ int main() {
                  */
                 filtered_rpm = (RPM_ALPHA * exact_rpm) + ((1.0 - RPM_ALPHA) * filtered_rpm);
                 
-                // --- 800ms SIMPLE MOVING AVERAGE CALCULATION ---
-                // Matches the sample rate of the DT2234 Tachometer for comparison
-                // We use filtered_rpm here to ensure the display matches the python precisely
-                sma_sum -= sma_history[sma_index];
-                sma_history[sma_index] = filtered_rpm; 
-                sma_sum += sma_history[sma_index];
-                sma_index = (sma_index + 1) % SMA_WINDOW;
-                if (sma_count < SMA_WINDOW) sma_count++;
-                sma_rpm = sma_sum / sma_count;
-                
                 // 6. Decoupled 10Hz Telemetry Transmission & LCD Updates
                 if (++telemetry_prescaler >= 10) {
                     telemetry_prescaler = 0;
+                    
+                    // --- 8-SAMPLE UI SYNC AVERAGE ---
+                    // By executing this specifically in the 10Hz network block, we mimic the 
+                    // Python Dashboard's array indices perfectly to guarantee the decimals match exactly.
+                    sma_sum -= sma_history[sma_index];
+                    sma_history[sma_index] = filtered_rpm; 
+                    sma_sum += sma_history[sma_index];
+                    sma_index = (sma_index + 1) % SMA_WINDOW;
+                    if (sma_count < SMA_WINDOW) sma_count++;
+                    sma_rpm = sma_sum / sma_count;
+
                     // Sending the exact EMA RPM as parameter 1, and the Torque calculation as parameter 2
                     // The python dashboard will continue receiving torque in slot 2.
                     if (!network->send_packet(filtered_rpm, 0.0)) {
