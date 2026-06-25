@@ -3,15 +3,6 @@
  * @brief High-speed hardware telemetry and control daemon for the MIXR-1 chemical engineering platform.
  * @author Chrys Sean T. Sevilla, Cyril John Christian Calo, Sid Andre Bordario
  * @institution University of San Carlos - Computer Engineering Department
- * * @architecture
- * Operates in User Space via the pigpiod_if2 client library. This architecture allows
- * safe hardware handovers to external processes (MATLAB/Simulink) without triggering 
- * kernel-level GPIO locks.
- * * @features
- * 1. Exact-time differential math using high-resolution chrono clocks.
- * 2. Exponential Moving Average (EMA) filtering for quantization noise attenuation.
- * 3. Zero-network-trip encoder state tracking via DMA interrupt payloads.
- * 4. Silicon-level Hardware PWM locked at 20kHz for the VNH5019 driver.
  */
 
 #include <iostream>
@@ -23,95 +14,159 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
-#include <chrono> 
+#include <chrono>
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <array>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <netinet/tcp.h> 
+#include <netinet/tcp.h>
 
 // ==========================================
-// GLOBAL CONFIGURATION & CONSTANTS
+// 1. CONFIGURATION SPACE
+// Industry Standard: Centralized compile-time configuration prevents magic numbers.
 // ==========================================
+namespace Config {
+    constexpr double ENCODER_CPR = 617.35;
+    constexpr double RPM_ALPHA = 0.15;
+    constexpr size_t SMA_WINDOW_SIZE = 8;
+    constexpr int DEADBAND_TICK_THRESHOLD = 2;
 
-/** * @brief TEST BENCH CONFIG: Pololu Micro Metal Gearmotor
- * Calculation: 12 base magnetic pulses * 51.446 gearbox ratio = 617.35 counts per revolution.
- */
-constexpr double ENCODER_CPR = 617.35; 
+    constexpr int TCP_PORT = 5000;
+    constexpr int LOOP_DELAY_US = 10000;         // 100Hz Main Loop
+    constexpr int TELEMETRY_PRESCALER = 10;      // 10Hz UI Transmission
+    constexpr int SIMULINK_CHECK_INTERVAL = 100; // 1Hz Process Check
 
-constexpr int TCP_PORT = 5000;
+    constexpr unsigned int PIN_ENC_A = 23;
+    constexpr unsigned int PIN_ENC_B = 24;
+    constexpr unsigned int PIN_M1_EN = 15;
+    constexpr unsigned int PIN_M1_INA = 17;
+    constexpr unsigned int PIN_M1_INB = 27;
+    constexpr unsigned int PIN_M1_PWM = 13;
+    constexpr int I2C_LCD_ADDR = 0x27;
+    constexpr int PWM_FREQUENCY = 20000;         
+}
 
-/**
- * @brief Establishes the baseline ~100Hz execution frequency of the main control loop.
- * 10,000 microseconds = 10ms. 
- */
-constexpr int LOOP_DELAY_US = 10000; 
+std::atomic<bool> run_loop{true};
 
-std::atomic<bool> run_loop(true);
-
-/**
- * @brief Safely interrupts the daemon loop to release hardware and network bindings on SIGINT/SIGTERM.
- */
 void signal_handler(int signum) {
     run_loop = false;
 }
 
 // ==========================================
-// SYSTEM MODULE: PROCESS MONITOR
+// 2. SYSTEM MODULE: PROCESS MONITOR
 // ==========================================
 class ProcessMonitor {
 public:
-    /**
-     * @brief Detects external MATLAB/Simulink hardware claims.
-     * Scans the Linux process table for the truncated Simulink binary. 
-     * Regex brackets prevent matching the grep shell command itself.
-     * @return true if Simulink is actively running.
-     */
-    static bool is_simulink_running() {
+    [[nodiscard]] static bool is_simulink_running() {
         const char* cmd = "pgrep -x \"[r]aspberrypi_get\" > /dev/null 2>&1";
-        return (system(cmd) == 0);
+        return (std::system(cmd) == 0);
     }
 };
 
 // ==========================================
-// HARDWARE MODULE: QUADRATURE ENCODER
+// 3. DSP & KINEMATICS ENGINE
+// Encapsulates the chronometry clock, deadband filters, EMA, and SMA. 
+// main() no longer knows how time is calculated.
+// ==========================================
+class KinematicsEngine {
+private:
+    std::chrono::time_point<std::chrono::high_resolution_clock> last_time;
+    long long last_count = 0;
+    
+    double ema_rpm = 0.0;
+    std::array<double, Config::SMA_WINDOW_SIZE> sma_history{};
+    size_t sma_index = 0;
+    double sma_sum = 0.0;
+    size_t sma_count = 0;
+
+public:
+    struct TelemetryState {
+        double exact_rpm;
+        double ema_filtered_rpm;
+        double sma_ui_rpm;
+    };
+
+    void reset(long long current_encoder_count) {
+        last_time = std::chrono::high_resolution_clock::now();
+        last_count = current_encoder_count;
+        ema_rpm = 0.0;
+        sma_sum = 0.0;
+        sma_index = 0;
+        sma_count = 0;
+        sma_history.fill(0.0);
+    }
+
+    [[nodiscard]] TelemetryState process(long long current_count, int current_pwm, bool update_sma) {
+        TelemetryState state{0.0, 0.0, 0.0};
+
+        // Exact-Time Chronometry generated securely inside the engine
+        auto current_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> dt_sec = current_time - last_time;
+        last_time = current_time;
+
+        long long delta_ticks = current_count - last_count;
+        last_count = current_count;
+
+        // Kinematics Math
+        if (dt_sec.count() > 0.0) {
+            if (current_pwm == 0 && std::abs(delta_ticks) <= Config::DEADBAND_TICK_THRESHOLD) {
+                state.exact_rpm = 0.0;
+            } else {
+                state.exact_rpm = (static_cast<double>(delta_ticks) / Config::ENCODER_CPR) * (60.0 / dt_sec.count());
+            }
+        }
+
+        // Apply EMA
+        ema_rpm = (Config::RPM_ALPHA * state.exact_rpm) + ((1.0 - Config::RPM_ALPHA) * ema_rpm);
+        state.ema_filtered_rpm = ema_rpm;
+
+        // Apply UI SMA
+        if (update_sma) {
+            sma_sum -= sma_history[sma_index];
+            sma_history[sma_index] = ema_rpm;
+            sma_sum += sma_history[sma_index];
+            
+            sma_index = (sma_index + 1) % Config::SMA_WINDOW_SIZE;
+            if (sma_count < Config::SMA_WINDOW_SIZE) sma_count++;
+        }
+        
+        state.sma_ui_rpm = (sma_count == 0) ? 0.0 : (sma_sum / static_cast<double>(sma_count));
+        return state;
+    }
+};
+
+// ==========================================
+// 4. HARDWARE MODULE: QUADRATURE ENCODER
 // ==========================================
 class PololuEncoder {
 private:
     int pi_handle;
     unsigned int pin_a, pin_b;
     int cb_a, cb_b;
-    volatile long long count = 0;
     
-    // Internal cache isolates state tracking from the network stack to prevent latency
-    volatile uint8_t val_a = 0;
-    volatile uint8_t val_b = 0;
-    volatile uint8_t state = 0;
+    // Thread-safe atomic increment for hardware interrupts
+    std::atomic<long long> count{0};
+    uint8_t state = 0;
+    uint8_t val_a = 0;
+    uint8_t val_b = 0;
     
-    // Standard quadrature transition matrix mapping 4-edge states (+1, -1, or 0 for invalid/noise)
-    const int QUAD_STATES[16] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
+    static constexpr int QUAD_STATES[16] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
 
-    /**
-     * @brief Static C-style callback router required for pigpio DMA interrupts.
-     */
     static void isr_router(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
-        if (level > 1) return; // Level 2 indicates a DMA watchdog timeout. Discard to prevent math corruption.
+        if (level > 1) return;
         static_cast<PololuEncoder*>(user)->update_state(gpio, level);
     }
 
-    /**
-     * @brief Processes physical encoder ticks.
-     * ZERO-NETWORK-TRIP ARCHITECTURE: Utilizes the exact level parameter pushed directly by the 
-     * daemon's DMA interrupt, eliminating the need to poll the daemon over the localhost socket. 
-     * This physically prevents data-dropping and phase-shifting at high velocities.
-     */
     void update_state(unsigned gpio, unsigned level) {
         if (gpio == pin_a) val_a = level;
         else if (gpio == pin_b) val_b = level;
 
         state = (state << 2) & 0x0F;
         state |= (val_a << 1) | val_b;
-        count += QUAD_STATES[state];
+        
+        count.fetch_add(QUAD_STATES[state], std::memory_order_relaxed);
     }
 
 public:
@@ -121,7 +176,6 @@ public:
         set_pull_up_down(pi_handle, pin_a, PI_PUD_UP);
         set_pull_up_down(pi_handle, pin_b, PI_PUD_UP);
         
-        // Fetch baseline states on instantiation to initialize the phase tracker alignment
         val_a = gpio_read(pi_handle, pin_a);
         val_b = gpio_read(pi_handle, pin_b);
         
@@ -134,43 +188,31 @@ public:
         callback_cancel(cb_b);
     }
 
-    long long get_count() const { return count; }
+    [[nodiscard]] long long get_count() const {
+        return count.load(std::memory_order_relaxed);
+    }
 };
 
 // ==========================================
-// HARDWARE MODULE: MOTOR CONTROLLER (VNH5019)
+// 5. HARDWARE MODULE: MOTOR CONTROLLER
 // ==========================================
 class MotorController {
 private:
     int pi_handle;
-    const unsigned int M1EN = 15;
-    const unsigned int M1INA = 17;
-    const unsigned int M1PWM = 13; // Broadcom Silicon Hardware PWM Channel 1
-    const unsigned int M1INB = 27;
 
 public:
-    MotorController(int pi) : pi_handle(pi) {
-        set_mode(pi_handle, M1EN, PI_OUTPUT);
-        set_mode(pi_handle, M1INA, PI_OUTPUT);
-        set_mode(pi_handle, M1INB, PI_OUTPUT);
-        
-        // PI_ALT0 explicitly maps GPIO 13 to the BCM internal silicon PWM generator
-        set_mode(pi_handle, M1PWM, PI_ALT0);
+    explicit MotorController(int pi) : pi_handle(pi) {
+        set_mode(pi_handle, Config::PIN_M1_EN, PI_OUTPUT);
+        set_mode(pi_handle, Config::PIN_M1_INA, PI_OUTPUT);
+        set_mode(pi_handle, Config::PIN_M1_INB, PI_OUTPUT);
+        set_mode(pi_handle, Config::PIN_M1_PWM, PI_ALT0);
 
-        // VNH5019 Forward Logic Topology
-        gpio_write(pi_handle, M1EN, 1);
-        gpio_write(pi_handle, M1INA, 1);
-        gpio_write(pi_handle, M1INB, 0);
+        gpio_write(pi_handle, Config::PIN_M1_EN, 1);
+        gpio_write(pi_handle, Config::PIN_M1_INA, 1);
+        gpio_write(pi_handle, Config::PIN_M1_INB, 0);
         
-        /**
-         * SILICON HARDWARE PWM 
-         * Bypasses OS software DMA scheduling limits. 
-         * Frequency locked to 20,000 Hz: Pushes the acoustic carrier frequency up to the 
-         * theoretical ceiling of the STMicroelectronics VNH5019 chip.
-         */
-        int status = hardware_PWM(pi_handle, M1PWM, 20000, 0); 
-        if (status != 0) {
-            std::cerr << "[CRITICAL HARDWARE FAULT] Silicon PWM rejected on GPIO 13. Code: " << status << std::endl;
+        if (hardware_PWM(pi_handle, Config::PIN_M1_PWM, Config::PWM_FREQUENCY, 0) != 0) {
+            std::cerr << "[CRITICAL] Silicon PWM rejected on GPIO 13\n";
         }
     }
 
@@ -178,94 +220,68 @@ public:
         stop_motor();
     }
 
-    /**
-     * @brief Translates 8-bit UI commands to 20-bit silicon resolution.
-     * @param duty_cycle Standard 0-255 scale.
-     */
     void set_pwm(int duty_cycle) {
-        if (duty_cycle < 0) duty_cycle = 0;
-        if (duty_cycle > 255) duty_cycle = 255;
-        
-        // hardware_PWM function requires duty cycle mapped to a 1,000,000 base integer
+        duty_cycle = std::clamp(duty_cycle, 0, 255);
         int hw_duty = (duty_cycle * 1000000) / 255;
-        
-        int status = hardware_PWM(pi_handle, M1PWM, 20000, hw_duty);
-        if (status != 0) {
-            std::cerr << "[PWM ERROR] Failed to update duty cycle. Code: " << status << std::endl;
-        }
+        hardware_PWM(pi_handle, Config::PIN_M1_PWM, Config::PWM_FREQUENCY, hw_duty);
     }
 
     void stop_motor() {
-        hardware_PWM(pi_handle, M1PWM, 20000, 0);
-        gpio_write(pi_handle, M1EN, 0); 
+        hardware_PWM(pi_handle, Config::PIN_M1_PWM, Config::PWM_FREQUENCY, 0);
+        gpio_write(pi_handle, Config::PIN_M1_EN, 0);
     }
 };
 
 // ==========================================
-// HARDWARE MODULE: LCD DISPLAY 1602 (I2C via PCF8574)
+// 6. HARDWARE MODULE: LCD DISPLAY 1602
 // ==========================================
 class LCD1602 {
 private:
     int pi_handle;
     int i2c_handle;
     int addr;
-    int backlight;
+    int backlight = 0x08;
 
     void write_byte(int val) {
         i2c_write_byte(pi_handle, i2c_handle, val | backlight);
     }
 
     void toggle_enable(int val) {
-        write_byte(val | 0x04); // EN = 1
-        usleep(50);             // Minimum enable pulse width
-        write_byte(val & ~0x04); // EN = 0
-        usleep(50);             // Settle time for typical LCD commands
+        write_byte(val | 0x04);
+        usleep(50);
+        write_byte(val & ~0x04);
+        usleep(50);
     }
 
     void send_command(int cmd) {
         int high = cmd & 0xF0;
         int low = (cmd << 4) & 0xF0;
-        write_byte(high);
-        toggle_enable(high);
-        write_byte(low);
-        toggle_enable(low);
+        write_byte(high); toggle_enable(high);
+        write_byte(low); toggle_enable(low);
     }
 
     void send_data(int data) {
         int high = data & 0xF0;
         int low = (data << 4) & 0xF0;
-        write_byte(high | 0x01); // RS = 1
-        toggle_enable(high | 0x01);
-        write_byte(low | 0x01); // RS = 1
-        toggle_enable(low | 0x01);
+        write_byte(high | 0x01); toggle_enable(high | 0x01);
+        write_byte(low | 0x01); toggle_enable(low | 0x01);
     }
 
 public:
-    LCD1602(int pi, int i2c_addr = 0x27) : pi_handle(pi), addr(i2c_addr), backlight(0x08) {
-        // Open I2C bus 1
+    LCD1602(int pi, int i2c_addr = Config::I2C_LCD_ADDR) : pi_handle(pi), addr(i2c_addr) {
         i2c_handle = i2c_open(pi_handle, 1, addr, 0);
-        if (i2c_handle < 0) {
-            std::cerr << "[LCD ERROR] Failed to open I2C bus for LCD at address 0x" << std::hex << addr << std::endl;
-            return;
+        if (i2c_handle < 0) return;
+
+        usleep(50000);
+        for (int i = 0; i < 3; ++i) {
+            write_byte(0x30); toggle_enable(0x30);
+            usleep((i == 0) ? 5000 : 150);
         }
 
-        // Initialization sequence for 4-bit mode (HD44780 standard)
-        usleep(50000);
-        write_byte(0x30);
-        toggle_enable(0x30);
-        usleep(5000);
-        write_byte(0x30);
-        toggle_enable(0x30);
-        usleep(150);
-        write_byte(0x30);
-        toggle_enable(0x30);
-
-        write_byte(0x20); // Switch to 4-bit mode
-        toggle_enable(0x20);
-
-        send_command(0x28); // Function set: 4-bit, 2 line, 5x8 dots
-        send_command(0x0C); // Display on, cursor off, blink off
-        send_command(0x06); // Entry mode set: increment, no shift
+        write_byte(0x20); toggle_enable(0x20);
+        send_command(0x28);
+        send_command(0x0C);
+        send_command(0x06);
         clear();
     }
 
@@ -277,35 +293,38 @@ public:
     }
 
     void clear() {
-        send_command(0x01); // Clear display
-        usleep(2000);       // Clear command needs more time
+        send_command(0x01);
+        usleep(2000);
     }
 
     void set_cursor(int row, int col) {
-        int row_offsets[] = { 0x00, 0x40 }; // Standard offsets for 16x2
+        int row_offsets[] = { 0x00, 0x40 };
         send_command(0x80 | (col + row_offsets[row]));
     }
 
     void print(const std::string& str) {
-        for (char c : str) {
-            send_data(c);
-        }
+        for (char c : str) send_data(c);
     }
 };
 
 // ==========================================
-// NETWORK MODULE: TCP SERVER
+// 7. NETWORK MODULE: TCP SERVER
 // ==========================================
 class TelemetryServer {
 private:
     int server_fd = -1;
     int client_socket = -1;
-    std::string rx_buffer = ""; 
+    std::string rx_buffer;
+
+    void disconnect_client() {
+        if (client_socket >= 0) close(client_socket);
+        client_socket = -1;
+    }
 
 public:
     ~TelemetryServer() { stop_server(); }
 
-    bool start_server(int port) {
+    [[nodiscard]] bool start_server(int port) {
         server_fd = socket(AF_INET, SOCK_STREAM, 0);
         if (server_fd < 0) return false;
         
@@ -318,50 +337,39 @@ public:
         address.sin_port = htons(port);
 
         if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) return false;
-        if (listen(server_fd, 1) < 0) return false;
-        return true;
+        return listen(server_fd, 1) >= 0;
     }
 
-    bool wait_for_client() {
-        std::cout << "[MIXR-1] Mode 2 Active. Waiting for Dashboard (Port " << TCP_PORT << ")..." << std::endl;
+    [[nodiscard]] bool wait_for_client() {
+        std::cout << "[MIXR-1] Waiting for Dashboard (Port " << Config::TCP_PORT << ")...\n";
         while (run_loop) {
             fd_set readfds;
             FD_ZERO(&readfds);
             FD_SET(server_fd, &readfds);
-            struct timeval tv{1, 0}; 
-            int activity = select(server_fd + 1, &readfds, nullptr, nullptr, &tv);
-
-            if (activity > 0 && FD_ISSET(server_fd, &readfds)) {
-                client_socket = accept(server_fd, nullptr, nullptr);
-                
-                // IPPROTO_TCP / TCP_NODELAY: Explicitly disables Nagle's Algorithm.
-                // Prevents kernel-level packet buffering to guarantee zero-latency telemetry streaming.
-                int flag = 1;
-                setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
-                
-                rx_buffer.clear(); 
-                return (client_socket >= 0);
+            struct timeval tv{1, 0};
+            
+            if (select(server_fd + 1, &readfds, nullptr, nullptr, &tv) > 0) {
+                if (FD_ISSET(server_fd, &readfds)) {
+                    client_socket = accept(server_fd, nullptr, nullptr);
+                    int flag = 1;
+                    setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
+                    rx_buffer.clear();
+                    return client_socket >= 0;
+                }
             }
         }
-        return false; 
+        return false;
     }
 
-    bool send_packet(double rpm, double torque) {
+    [[nodiscard]] bool send_packet(double rpm, double torque) const {
         if (client_socket < 0) return false;
         std::string packet = std::to_string(rpm) + "," + std::to_string(torque) + "\n";
-        ssize_t sent = send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL);
-        return (sent > 0);
+        return send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0;
     }
 
-    /**
-     * @brief Drains the incoming kernel socket instantly.
-     * Employs MSG_DONTWAIT to exhaust the buffer, extracting only the most recent complete command 
-     * packet. Prevents UI slider backlog accumulation and resulting hardware desynchronization.
-     * @param new_pwm Passed by reference. Updated only if a valid command is parsed.
-     */
-    bool receive_command(int& new_pwm) {
+    [[nodiscard]] bool receive_command(int& new_pwm) {
         if (client_socket < 0) return false;
-        bool command_updated = false;
+        bool updated = false;
         char chunk[1024];
 
         while (true) {
@@ -370,7 +378,7 @@ public:
                 chunk[bytes] = '\0';
                 rx_buffer += chunk;
             } else {
-                break; 
+                break;
             }
         }
 
@@ -383,17 +391,11 @@ public:
             if (cmd_pos != std::string::npos) {
                 try {
                     new_pwm = std::stoi(line.substr(cmd_pos + 8));
-                    command_updated = true;
+                    updated = true;
                 } catch (...) {}
             }
         }
-        
-        return command_updated;
-    }
-
-    void disconnect_client() {
-        if (client_socket >= 0) close(client_socket);
-        client_socket = -1;
+        return updated;
     }
 
     void stop_server() {
@@ -404,7 +406,8 @@ public:
 };
 
 // ==========================================
-// MAIN DAEMON LOOP
+// 8. MAIN DAEMON ORCHESTRATOR
+// The main loop is now entirely devoid of physics math.
 // ==========================================
 int main() {
     std::signal(SIGINT, signal_handler);
@@ -412,16 +415,17 @@ int main() {
     std::signal(SIGPIPE, SIG_IGN); 
 
     auto network = std::make_unique<TelemetryServer>();
+    KinematicsEngine kinematics;
 
     while (run_loop) {
-        if (!network->start_server(TCP_PORT)) {
-            std::cerr << "CRITICAL: Port " << TCP_PORT << " locked. Retrying..." << std::endl;
+        if (!network->start_server(Config::TCP_PORT)) {
+            std::cerr << "CRITICAL: Port locked. Retrying...\n";
             usleep(2000000);
             continue;
         }
 
         if (network->wait_for_client()) {
-            std::cout << "[MIXR-1] Dashboard Connected. Managing state engine..." << std::endl;
+            std::cout << "[MIXR-1] Dashboard Connected.\n";
             
             int pi = -1;
             std::unique_ptr<PololuEncoder> encoder = nullptr;
@@ -429,199 +433,82 @@ int main() {
             std::unique_ptr<LCD1602> lcd = nullptr;
             
             bool mode3_notified = false;
-            long long last_count = 0;
             int current_pwm = 0;
-
-            int simulink_check_counter = 100; 
+            int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL; 
             int telemetry_prescaler = 0;
             bool simulink_is_active = false;
 
-            // DIGITAL FILTER VARIABLES
-            double filtered_rpm = 0.0;
-            
-            // 800ms SMA (Simple Moving Average) variables
-            // At 10Hz network rate, 8 samples = 800ms (Exactly matches Python's array)
-            const int SMA_WINDOW = 8;
-            double sma_history[8] = {0.0};
-            int sma_index = 0;
-            double sma_sum = 0.0;
-            double sma_rpm = 0.0;
-            int sma_count = 0;
-            
-            /** * @brief Exponential Moving Average (EMA) Tuning Coefficient.
-             * 0.15 establishes a low-pass filter cutoff frequency of ~2.4 Hz at a 100Hz loop rate.
-             * Blocks digital quantization noise generated by integer tick limits while preserving 
-             * the true physical momentum of the fluid mechanics.
-             */
-            const double RPM_ALPHA = 0.15; 
-
-            // High-resolution clock tracker initialized for Exact-Time math
-            auto last_time = std::chrono::high_resolution_clock::now();
-
             while (run_loop) {
-                // 1. Process Monitor Matrix (Checked at 1Hz to conserve CPU cycles)
-                if (++simulink_check_counter >= 100) {
+                // Interlock check
+                if (++simulink_check_counter >= Config::SIMULINK_CHECK_INTERVAL) {
                     simulink_check_counter = 0;
                     simulink_is_active = ProcessMonitor::is_simulink_running();
                 }
 
-                // 2. Mode 3 Handover Execution (MATLAB Process Control)
+                // MATLAB Handover
                 if (simulink_is_active) {
                     if (!mode3_notified) {
-                        std::cout << "\n[MIXR-1] MATLAB detected. Releasing hardware pins..." << std::endl;
+                        std::cout << "[MIXR-1] MATLAB detected. Releasing hardware...\n";
                         motor.reset();
                         encoder.reset();
                         lcd.reset();
-                        // Releases the daemon socket binding so Simulink can claim it
                         if (pi >= 0) { pigpio_stop(pi); pi = -1; } 
-                        
-                        std::cout << "[MIXR-1] System locked in Mode 3. Waiting for MATLAB to finish..." << std::endl;
                         mode3_notified = true;
                     }
-                    
-                    // Transmit the UI lock heartbeat
                     if (!network->send_packet(-2.0, -2.0)) break; 
                     usleep(1000000); 
                     continue;
                 }
 
                 if (mode3_notified) {
-                    std::cout << "\n[MIXR-1] MATLAB teardown complete. Safely resuming backend." << std::endl;
+                    std::cout << "[MIXR-1] MATLAB teardown complete.\n";
                     mode3_notified = false;
                 }
 
-                // 3. Mode 2 Hardware Claim Initialization
+                // Claim Hardware
                 if (pi < 0) {
-                    std::cout << "[MIXR-1] Claiming hardware for Mode 2..." << std::endl;
                     pi = pigpio_start(nullptr, nullptr);
                     if (pi >= 0) {
-                        encoder = std::make_unique<PololuEncoder>(pi, 23, 24);
+                        encoder = std::make_unique<PololuEncoder>(pi, Config::PIN_ENC_A, Config::PIN_ENC_B);
                         motor = std::make_unique<MotorController>(pi);
-                        lcd = std::make_unique<LCD1602>(pi); // Address 0x27 is the default in the class
-                        last_count = encoder->get_count(); 
-                        filtered_rpm = 0.0; 
+                        lcd = std::make_unique<LCD1602>(pi);
                         
-                        // Reset the SMA buffer when hardware starts
-                        sma_index = 0;
-                        sma_sum = 0.0;
-                        sma_rpm = 0.0;
-                        sma_count = 0;
-                        for (int i = 0; i < SMA_WINDOW; ++i) sma_history[i] = 0.0;
-                        
-                        // Reset the clock tracker exactly when hardware is claimed to prevent delta_sec spikes
-                        last_time = std::chrono::high_resolution_clock::now();
+                        // Seed the engine immediately upon hardware connection
+                        kinematics.reset(encoder->get_count());
                     } else {
-                        std::cerr << "CRITICAL: pigpiod not ready. Retrying..." << std::endl;
                         usleep(2000000);
                         continue;
                     }
                 }
 
-                // 4. Bi-Directional Client Updates
-                if (network->receive_command(current_pwm)) {
-                    if (motor != nullptr) motor->set_pwm(current_pwm);
-                    std::cout << "[MIXR-1] CMD Received -> Hardware PWM set to: " << current_pwm << std::endl;
+                // Network RX 
+                if (network->receive_command(current_pwm) && motor) {
+                    motor->set_pwm(current_pwm);
                 }
 
-                // ==========================================
-                // 5. INDUSTRY STANDARD EXACT-TIME METRICS & DSP
-                // ==========================================
+                // Engine Execution
+                bool update_ui = (++telemetry_prescaler >= Config::TELEMETRY_PRESCALER);
+                if (update_ui) telemetry_prescaler = 0;
 
-                /*
-                 * ASYNCHRONOUS TIME-DELTA CAPTURE
-                 * Linux is a General Purpose OS (GPOS), not an RTOS. The kernel scheduler 
-                 * introduces unpredictable micro-stutters (jitter), causing loop times to vary.
-                 * Capturing the exact nanosecond via hardware chronometry rather than assuming 
-                 * a rigid 10ms loop time ensures the velocity division scales perfectly, 
-                 * neutralizing OS-induced mathematical artifacts.
-                 */
-                auto current_time = std::chrono::high_resolution_clock::now();
-                std::chrono::duration<double> exact_delta_sec = current_time - last_time;
-                last_time = current_time;
+                // Main loop passes raw data in, gets clean struct out. Zero math in main.
+                auto state = kinematics.process(encoder->get_count(), current_pwm, update_ui);
 
-                /*
-                 * DISCRETE POSITION DIFFERENTIAL (Hybrid Method)
-                 * Calculates the exact integer step change in quadrature states since the last loop.
-                 * This cleanly decouples the high-speed hardware interrupts from the math loop.
-                 */
-                long long current_count = encoder->get_count();
-                long long delta_ticks = current_count - last_count;
-                last_count = current_count;
-                
-                double dt = exact_delta_sec.count();
-                double exact_rpm = 0.0;
-                
-                if (dt > 0.0) {
-                    /*
-                     * MECHANICAL DEADBAND (NOISE GATE)
-                     * When PWM is 0, the impeller is at rest. However, ambient workbench vibrations 
-                     * or internal mechanical settling can cause the encoder disc to dither rapidly 
-                     * between two magnetic poles (+1, -1). At a 100Hz sample rate, this 1-tick 
-                     * dither amplifies into a persistent +/- 9.6 RPM false reading. This condition 
-                     * clamps the output to true zero, preventing integral windup in subsequent controllers.
-                     */
-                    if (current_pwm == 0 && std::abs(delta_ticks) <= 2) {
-                        exact_rpm = 0.0;
-                    } else {
-                        /*
-                         * DIMENSIONAL DERIVATION
-                         * 1. (delta_ticks / ENCODER_CPR) = Fractional shaft revolutions.
-                         * 2. (60.0 / dt) = Conversion from 'revolutions per dt' to 'revolutions per minute'.
-                         */
-                        exact_rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * (60.0 / dt);
-                    }
-                }
-                
-                /*
-                 * INFINITE IMPULSE RESPONSE (IIR) LOW-PASS FILTER
-                 * Quadrature encoders are discrete and truncate fractional movement, producing 
-                 * 'Quantization Noise' (e.g., alternating between reading 10 and 11 ticks). 
-                 * Passing raw noise to a PID Derivative term causes violent control instability.
-                 * * Equation: y[n] = (alpha * x[n]) + ((1 - alpha) * y[n-1])
-                 * * This Exponential Moving Average (EMA) applies a smoothing coefficient (RPM_ALPHA = 0.15).
-                 * At 100Hz, this establishes a cutoff frequency (fc) of ~2.4 Hz. It aggressively 
-                 * attenuates 100Hz high-frequency sensor error while preserving the true low-frequency 
-                 * fluid mechanics and kinetic momentum of the physical motor.
-                 */
-                filtered_rpm = (RPM_ALPHA * exact_rpm) + ((1.0 - RPM_ALPHA) * filtered_rpm);
-                
-                // 6. Decoupled 10Hz Telemetry Transmission & LCD Updates
-                if (++telemetry_prescaler >= 10) {
-                    telemetry_prescaler = 0;
-                    
-                    // --- 8-SAMPLE UI SYNC AVERAGE ---
-                    // By executing this specifically in the 10Hz network block, we mimic the 
-                    // Python Dashboard's array indices perfectly to guarantee the decimals match exactly.
-                    sma_sum -= sma_history[sma_index];
-                    sma_history[sma_index] = filtered_rpm; 
-                    sma_sum += sma_history[sma_index];
-                    sma_index = (sma_index + 1) % SMA_WINDOW;
-                    if (sma_count < SMA_WINDOW) sma_count++;
-                    sma_rpm = sma_sum / sma_count;
-
-                    // Sending the exact EMA RPM as parameter 1, and the Torque calculation as parameter 2
-                    // The python dashboard will continue receiving torque in slot 2.
-                    if (!network->send_packet(filtered_rpm, 0.0)) {
-                        std::cout << "\n[MIXR-1] Dashboard Disconnected." << std::endl;
-                        break; 
-                    }
+                // Network TX & Presentation
+                if (update_ui) {
+                    if (!network->send_packet(state.ema_filtered_rpm, 0.0)) break; 
                     
                     if (lcd) {
-                        std::ostringstream lcd_rpm, lcd_pwm;
-                        lcd_rpm << std::fixed << std::setprecision(1) << "RPM: " << sma_rpm << "   ";
-                        lcd_pwm << "PWM: " << current_pwm << "   ";
-                        lcd->set_cursor(0, 0);
-                        lcd->print(lcd_rpm.str());
-                        lcd->set_cursor(1, 0);
-                        lcd->print(lcd_pwm.str());
+                        std::ostringstream r_str, p_str;
+                        r_str << std::fixed << std::setprecision(1) << "RPM: " << state.sma_ui_rpm << "   ";
+                        p_str << "PWM: " << current_pwm << "   ";
+                        lcd->set_cursor(0, 0); lcd->print(r_str.str());
+                        lcd->set_cursor(1, 0); lcd->print(p_str.str());
                     }
                 }
                 
-                // Base loop delay (~100Hz pacing constraint)
-                usleep(LOOP_DELAY_US); 
+                usleep(Config::LOOP_DELAY_US); 
             }
 
-            // Safe shutdown cleanup on loop break
             motor.reset();
             encoder.reset();
             lcd.reset();
@@ -630,6 +517,6 @@ int main() {
         network->stop_server();
     }
 
-    std::cout << "\n[MIXR-1] Intercepted stop signal. Daemon safely offline." << std::endl;
+    std::cout << "\n[MIXR-1] Daemon safely offline.\n";
     return 0;
 }
