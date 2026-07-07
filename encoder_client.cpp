@@ -39,6 +39,7 @@ namespace Config {
     constexpr double RPM_ALPHA = 0.15;                   ///< EMA Smoothing coefficient (~2.4Hz Low-Pass Cutoff at 100Hz loop)
     constexpr size_t SMA_WINDOW_SIZE = 8;                ///< UI Rolling average (8 ticks @ 10Hz = 800ms to match LCD tachometer gate)
     constexpr int DEADBAND_TICK_THRESHOLD = 2;           ///< Rejects +/- 1-tick quantization noise dithering when PWM is 0
+    constexpr int RPM_SAMPLE_WINDOW_US = 100000;         ///< 100ms fixed counting gate for a steadier RPM estimate
 
     // --- Networking & Execution Timing ---
     constexpr int TCP_PORT = 5000;                       ///< Binding port for the Python Dashboard / GUI
@@ -99,6 +100,9 @@ class KinematicsEngine {
 private:
     std::chrono::time_point<std::chrono::high_resolution_clock> last_time;
     long long last_count = 0;
+    std::chrono::duration<double> sample_time{0.0};
+    long long sample_ticks = 0;
+    double last_sampled_rpm = 0.0;
     
     double ema_rpm = 0.0;
     std::array<double, Config::SMA_WINDOW_SIZE> sma_history{};
@@ -122,6 +126,9 @@ public:
     void reset(long long current_encoder_count) {
         last_time = std::chrono::high_resolution_clock::now();
         last_count = current_encoder_count;
+        sample_time = std::chrono::duration<double>::zero();
+        sample_ticks = 0;
+        last_sampled_rpm = 0.0;
         ema_rpm = 0.0;
         sma_sum = 0.0;
         sma_index = 0;
@@ -148,15 +155,22 @@ public:
         last_count = current_count;
 
         delta_ticks *= Config::ENCODER_DIRECTION;
+        sample_ticks += delta_ticks;
+        sample_time += dt_sec;
 
         // 2. Velocity Math & Deadband Gate
-        if (dt_sec.count() > 0.0) {
-            if (current_pwm == 0 && std::abs(delta_ticks) <= Config::DEADBAND_TICK_THRESHOLD) {
-                state.exact_rpm = 0.0; // Suppress mechanical vibration dithering
+        if (sample_time.count() >= static_cast<double>(Config::RPM_SAMPLE_WINDOW_US) / 1000000.0) {
+            if (current_pwm == 0 && std::abs(sample_ticks) <= Config::DEADBAND_TICK_THRESHOLD) {
+                last_sampled_rpm = 0.0; // Suppress mechanical vibration dithering
             } else {
-                state.exact_rpm = (static_cast<double>(delta_ticks) / Config::ENCODER_CPR) * (60.0 / dt_sec.count());
+                last_sampled_rpm = (static_cast<double>(sample_ticks) / Config::ENCODER_CPR) * (60.0 / sample_time.count());
             }
+
+            sample_ticks = 0;
+            sample_time = std::chrono::duration<double>::zero();
         }
+
+        state.exact_rpm = last_sampled_rpm;
 
         // 3. Exponential Moving Average (IIR Hardware Filter)
         // Eliminates digital quantization noise before transmission
