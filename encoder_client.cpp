@@ -47,8 +47,9 @@ namespace Config {
     constexpr int SIMULINK_CHECK_INTERVAL = 100;         // Polls the OS process list every 1 second (100 ticks)
 
     // --- Hardware Pinout & Peripherals (BCM GPIO) ---
-    constexpr unsigned int PIN_ENC_A = 23;               ///< Quadrature Channel A (Interrupt driven)
-    constexpr unsigned int PIN_ENC_B = 24;               ///< Quadrature Channel B (Interrupt driven)
+    constexpr unsigned int PIN_ENC_A = 24;               ///< Quadrature Channel A (Interrupt driven)
+    constexpr unsigned int PIN_ENC_B = 23;               ///< Quadrature Channel B (Interrupt driven)
+    constexpr int ENCODER_DIRECTION = -1;                ///< Flip sign when the physical phase order is reversed
     constexpr unsigned int PIN_M1_EN = 15;               ///< VNH5019 Enable
     constexpr unsigned int PIN_M1_INA = 17;              ///< VNH5019 Direction A
     constexpr unsigned int PIN_M1_INB = 27;              ///< VNH5019 Direction B
@@ -145,6 +146,8 @@ public:
 
         long long delta_ticks = current_count - last_count;
         last_count = current_count;
+
+        delta_ticks *= Config::ENCODER_DIRECTION;
 
         // 2. Velocity Math & Deadband Gate
         if (dt_sec.count() > 0.0) {
