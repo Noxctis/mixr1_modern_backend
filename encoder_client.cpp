@@ -273,11 +273,11 @@ public:
     }
 
     /**
-     * @brief Translates 8-bit UI commands to 20-bit silicon resolution.
+     * @brief Translates 12-bit UI commands to 20-bit silicon resolution.
      */
     void set_pwm(int duty_cycle) {
-        duty_cycle = std::clamp(duty_cycle, 0, 255);
-        int hw_duty = (duty_cycle * 1000000) / 255;
+        duty_cycle = std::clamp(duty_cycle, 0, 4095);
+        int hw_duty = (duty_cycle * 1000000) / 4095;
         hardware_PWM(pi_handle, Config::PIN_M1_PWM, Config::PWM_FREQUENCY, hw_duty);
     }
 
@@ -458,6 +458,7 @@ public:
             if (cmd_pos != std::string::npos) {
                 try {
                     new_pwm = std::stoi(line.substr(cmd_pos + 8));
+                    std::cout << "[MIXR-1] PWM received from dashboard: " << new_pwm << '\n';
                     updated = true;
                 } catch (...) {}
             }
