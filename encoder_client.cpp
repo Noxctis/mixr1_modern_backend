@@ -426,9 +426,9 @@ public:
         return false;
     }
 
-    [[nodiscard]] bool send_packet(double rpm, double torque) const {
+    [[nodiscard]] bool send_packet(double raw_rpm, double filtered_rpm) const {
         if (client_socket < 0) return false;
-        std::string packet = std::to_string(rpm) + "," + std::to_string(torque) + "\n";
+        std::string packet = std::to_string(raw_rpm) + "," + std::to_string(filtered_rpm) + "\n";
         return send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0;
     }
 
@@ -572,14 +572,14 @@ int main() {
 
                 // 6. Network TX & Presentation
                 if (update_ui) {
-                    if (!network->send_packet(state.ema_filtered_rpm, 0.0)) break; 
+                    if (!network->send_packet(state.exact_rpm, state.ema_filtered_rpm)) break; 
                     
                     if (lcd) {
-                        std::ostringstream r_str, p_str;
-                        r_str << std::fixed << std::setprecision(1) << "RPM: " << state.sma_ui_rpm << "   ";
-                        p_str << "PWM: " << current_pwm << "   ";
-                        lcd->set_cursor(0, 0); lcd->print(r_str.str());
-                        lcd->set_cursor(1, 0); lcd->print(p_str.str());
+                        std::ostringstream raw_str, filtered_str;
+                        raw_str << std::fixed << std::setprecision(1) << "RAW: " << state.exact_rpm << "   ";
+                        filtered_str << std::fixed << std::setprecision(1) << "FLT: " << state.ema_filtered_rpm << "   ";
+                        lcd->set_cursor(0, 0); lcd->print(raw_str.str());
+                        lcd->set_cursor(1, 0); lcd->print(filtered_str.str());
                     }
                 }
                 
