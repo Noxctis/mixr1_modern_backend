@@ -151,16 +151,18 @@ public:
         sample_ticks += delta_ticks;
         sample_time += dt_sec;
 
+        // 2. Velocity Math & Deadband Gate
         if (sample_time.count() >= static_cast<double>(Config::RPM_SAMPLE_WINDOW_US) / 1000000.0) {
             if (current_pwm == 0 && std::abs(sample_ticks) <= Config::DEADBAND_TICK_THRESHOLD) {
-                last_sampled_rpm = 0.0; 
+                last_sampled_rpm = 0.0; // Suppress mechanical vibration dithering
+                
+                // FLUSH THE FILTERS: Kill the IIR exponential decay instantly
+                ema_rpm = 0.0;
+                sma_history.fill(0.0);
+                sma_sum = 0.0;
             } else {
                 last_sampled_rpm = (static_cast<double>(sample_ticks) / Config::ENCODER_CPR) * (60.0 / sample_time.count());
             }
-
-            sample_ticks = 0;
-            sample_time = std::chrono::duration<double>::zero();
-        }
 
         state.exact_rpm = last_sampled_rpm;
 
