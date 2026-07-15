@@ -148,16 +148,25 @@ public:
         last_count = current_count;
 
         delta_ticks *= Config::ENCODER_DIRECTION;
+        sample_ticks += delta_ticks;
+        sample_time += dt_sec;
 
-        double instantaneous_rpm = 0.0;
-        if (dt_sec.count() > 0.0) {
-            instantaneous_rpm = (static_cast<double>(delta_ticks) / Config::ENCODER_CPR) * (60.0 / dt_sec.count());
-        }
+        // ACCUMULATOR GATE: Only calculate RPM when the time window has fully elapsed
+        if (sample_time.count() >= static_cast<double>(Config::RPM_SAMPLE_WINDOW_US) / 1000000.0) {
+            if (current_pwm == 0 && std::abs(sample_ticks) <= Config::DEADBAND_TICK_THRESHOLD) {
+                last_sampled_rpm = 0.0; 
+                
+                // FILTER FLUSH: Explicitly kill the IIR exponential decay to prevent dashboard lag
+                ema_rpm = 0.0;
+                sma_history.fill(0.0);
+                sma_sum = 0.0;
+            } else {
+                last_sampled_rpm = std::abs((static_cast<double>(sample_ticks) / Config::ENCODER_CPR) * (60.0 / sample_time.count()));
+            }
 
-        if (current_pwm == 0 && std::abs(delta_ticks) <= Config::DEADBAND_TICK_THRESHOLD) {
-            last_sampled_rpm = 0.0;
-        } else {
-            last_sampled_rpm = std::abs(instantaneous_rpm);
+            // Reset accumulators for the next window
+            sample_ticks = 0;
+            sample_time = std::chrono::duration<double>::zero();
         }
 
         state.exact_rpm = last_sampled_rpm;
