@@ -124,10 +124,15 @@ void logToCSV(const std::string& sessionID, int testNumber, int trialNumber, int
     
     int absoluteError = static_cast<int>(metrics.average) - targetDistance;
     
+    // Apply the linear regression calibration formula
+    float calibratedReading = (static_cast<float>(metrics.average) - 9.067f) / 1.052f;
+    float calibratedError = calibratedReading - static_cast<float>(targetDistance);
+    
     if (file.is_open()) {
         if (writeHeader) {
-            file << "Session_ID,Test_Number,Trial_Number,Target_Distance_mm,Sensor_Avg_mm,Absolute_Error_mm,Min_Read_mm,Max_Read_mm,Valid_Samples,Target_Samples\n";
+            file << "Session_ID,Test_Number,Trial_Number,Target_Distance_mm,Sensor_Avg_mm,Absolute_Error_mm,Min_Read_mm,Max_Read_mm,Valid_Samples,Target_Samples,Calibrated_Reading_mm,Calibrated_Error_mm\n";
         }
+        
         file << sessionID << "," 
              << testNumber << "," 
              << trialNumber << "," 
@@ -137,11 +142,14 @@ void logToCSV(const std::string& sessionID, int testNumber, int trialNumber, int
              << metrics.min << "," 
              << metrics.max << "," 
              << metrics.validSamples << "," 
-             << metrics.targetSamples << "\n";
+             << metrics.targetSamples << ","
+             << std::fixed << std::setprecision(2) << calibratedReading << ","
+             << std::fixed << std::setprecision(2) << calibratedError << "\n";
              
-        std::cout << "[SYSTEM] Logged -> Avg: " << metrics.average << " mm | Error: " << (absoluteError > 0 ? "+" : "") << absoluteError 
-                  << " mm | Spread: [" << metrics.min << " to " << metrics.max << "] | Yield: " 
-                  << metrics.validSamples << "/" << metrics.targetSamples << "\n";
+        std::cout << "[SYSTEM] Logged -> Raw: " << metrics.average << " mm | Calib: " 
+                  << std::fixed << std::setprecision(2) << calibratedReading << " mm | Calib Error: " 
+                  << (calibratedError > 0 ? "+" : "") << calibratedError << " mm\n";
+                  
     } else {
         std::cerr << "[!] CRITICAL: Could not open " << DATA_FILE << " for writing.\n";
     }
@@ -194,7 +202,7 @@ void runRecordDataPoint(VL53L0X& sensor) {
         logToCSV(currentSessionID, currentTestNumber, t, targetDistance, metrics);
     }
     
-    currentTestNumber++; // Corrected: Increments only after the target distance batch is finished
+    currentTestNumber++; // Increments only after the target distance batch is finished
     std::cout << "\n>> Finished all " << trials << " trials for " << targetDistance << " mm." << std::endl;
 }
 
@@ -206,21 +214,30 @@ void runContinuousRead(VL53L0X& sensor) {
     // Flush any pending stdin characters
     while (kbhit()) getchar();
 
+    // Lock the output format to 2 decimal places for the calibrated float
+    std::cout << std::fixed << std::setprecision(2);
+
     while (!systemOffline && !kbhit()) {
         try {
             uint16_t dist = sensor.readRangeSingleMillimeters();
             if (!sensor.timeoutOccurred() && dist > 0 && dist < 2000) {
-                std::cout << "\rCurrent Sensor Reading: " << dist << " mm      " << std::flush;
+                // Apply the linear regression calibration formula
+                float calibratedDist = (static_cast<float>(dist) - 9.067f) / 1.052f;
+                
+                std::cout << "\rRaw: " << dist << " mm | Calibrated: " << calibratedDist << " mm          " << std::flush;
             } else {
-                std::cout << "\rCurrent Sensor Reading: [OUT OF RANGE]      " << std::flush;
+                std::cout << "\rSensor Reading: [OUT OF RANGE]                                  " << std::flush;
             }
         } catch (...) {
-            std::cout << "\rCurrent Sensor Reading: [I2C ERROR]         " << std::flush;
+            std::cout << "\rSensor Reading: [I2C ERROR]                                     " << std::flush;
         }
         usleep(50000); // 50ms refresh rate for smooth console output
     }
 
     if (kbhit()) getchar();
+    
+    // Reset formatting back to default before returning to the main menu
+    std::cout << std::defaultfloat;
     std::cout << "\n\nStopped continuous read." << std::endl;
 }
 
