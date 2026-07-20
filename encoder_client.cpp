@@ -27,6 +27,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include "vl53l0x-linux/VL53L0X.hpp"
 
 // ==========================================
 // 1. GLOBAL CONFIGURATION (INDUSTRY STANDARD)
@@ -468,6 +469,8 @@ int main() {
 
     auto network = std::make_unique<TelemetryServer>();
     KinematicsEngine kinematics;
+    VL53L0X tof_sensor;
+    uint16_t tof_distance = 0;
 
     while (run_loop) {
         if (!network->start_server(Config::TCP_PORT)) {
@@ -526,13 +529,15 @@ int main() {
                         motor = std::make_unique<MotorController>(pi);
                         lcd = std::make_unique<LCD1602>(pi);
                         
-                        kinematics.reset(encoder->get_count());
-                    } else {
-                        usleep(2000000);
-                        continue;
+                    // Initialize ToF sensor
+                    try {
+                        tof_sensor.initialize();
+                        tof_sensor.setTimeout(500);
+                        tof_sensor.setMeasurementTimingBudget(33000); // Standard timing budget
+                    } catch (const std::exception& e) {
+                        std::cerr << "[Warning] ToF sensor initialization: " << e.what() << "\n";
                     }
-                }
-
+                    
                 if (network->receive_command(current_pwm) && motor) {
                     motor->set_pwm(current_pwm);
                 }
@@ -553,12 +558,22 @@ int main() {
                 }
 
                 if (update_lcd) {
+                    // Read ToF sensor
+                    try {
+                        tof_distance = tof_sensor.readRangeSingleMillimeters();
+                        if (tof_sensor.timeoutOccurred()) {
+                            tof_distance = 0;
+                        }
+                    } catch (...) {
+                        tof_distance = 0;
+                    }
+                    
                     if (lcd) {
-                        std::ostringstream raw_str, filtered_str;
-                        raw_str << std::fixed << std::setprecision(1) << "RAW: " << state.exact_rpm << "   ";
-                        filtered_str << std::fixed << std::setprecision(1) << "FLT: " << state.ema_filtered_rpm << "   ";
-                        lcd->set_cursor(0, 0); lcd->print(raw_str.str());
-                        lcd->set_cursor(1, 0); lcd->print(filtered_str.str());
+                        std::ostringstream rpm_str, tof_str;
+                        rpm_str << std::fixed << std::setprecision(1) << "RPM: " << state.ema_filtered_rpm << "   ";
+                        tof_str << std::fixed << std::setprecision(0) << "TOF: " << tof_distance << " mm";
+                        lcd->set_cursor(0, 0); lcd->print(rpm_str.str());
+                        lcd->set_cursor(1, 0); lcd->print(tof_str.str());
                     }
                 }
                 
