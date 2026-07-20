@@ -1,0 +1,6 @@
+Session_ID,Test_Number,Trial_Number,Target_Water_Level_mm,Sensor_Avg_mm,Absolute_Error_mm,Min_Read_mm,Max_Read_mm,Valid_Samples,Target_Samples
+20260720_155044,1,1,200,197,-3,195,203,10,10
+20260720_155044,1,2,200,201,1,200,204,10,10
+20260720_155044,1,3,200,201,1,200,202,10,10
+20260720_155044,1,4,200,200,0,200,203,10,10
+20260720_155044,1,5,200,200,0,199,204,10,10
