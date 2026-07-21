@@ -11,6 +11,7 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <cmath>
 
 // BCM Pin Definitions
 #define MOTOR_INA 17
@@ -53,7 +54,7 @@ void stopPump() {
 void runPump() {
     digitalWrite(MOTOR_INA, HIGH);
     digitalWrite(MOTOR_INB, LOW);
-    pwmWrite(MOTOR_PWM, 1024);
+    pwmWrite(MOTOR_PWM, 256);
 }
 
 // Generates a unique timestamp string for the session ID
@@ -140,16 +141,18 @@ SensorMetrics getSensorMetrics(VL53L0X& sensor, int samples, int delay_us = 1000
     return metrics;
 }
 
-// Appends raw water testing metrics to CSV
+// Restored 12-Column CSV Logging with Calibration Formula
 void logToCSV(const std::string& sessionID, int testNumber, int trialNumber, int targetDistance, const SensorMetrics& metrics) {
     bool writeHeader = !fileExists(DATA_FILE);
     std::ofstream file(DATA_FILE, std::ios::app);
     
     int absoluteError = static_cast<int>(metrics.average) - targetDistance;
+    float calibratedReading = (static_cast<float>(metrics.average) - 9.067f) / 1.052f;
+    float calibratedError = calibratedReading - static_cast<float>(targetDistance);
     
     if (file.is_open()) {
         if (writeHeader) {
-            file << "Session_ID,Test_Number,Trial_Number,Target_Water_Level_mm,Sensor_Avg_mm,Absolute_Error_mm,Min_Read_mm,Max_Read_mm,Valid_Samples,Target_Samples\n";
+            file << "Session_ID,Test_Number,Trial_Number,Target_Distance_mm,Sensor_Avg_mm,Absolute_Error_mm,Min_Read_mm,Max_Read_mm,Valid_Samples,Target_Samples,Calibrated_Reading_mm,Calibrated_Error_mm\n";
         }
         
         file << sessionID << "," 
@@ -161,24 +164,25 @@ void logToCSV(const std::string& sessionID, int testNumber, int trialNumber, int
              << metrics.min << "," 
              << metrics.max << "," 
              << metrics.validSamples << "," 
-             << metrics.targetSamples << "\n";
+             << metrics.targetSamples << ","
+             << std::fixed << std::setprecision(2) << calibratedReading << ","
+             << std::fixed << std::setprecision(2) << calibratedError << "\n";
              
-        std::cout << "[SYSTEM] Logged -> Raw Avg: " << metrics.average << " mm | Spread: [" 
-                  << metrics.min << " to " << metrics.max << "] | Yield: " 
-                  << metrics.validSamples << "/" << metrics.targetSamples << "\n";
+        std::cout << "[SYSTEM] Logged -> Raw: " << metrics.average << " mm | Calib: " 
+                  << std::fixed << std::setprecision(2) << calibratedReading << " mm | Calib Error: " 
+                  << (calibratedError > 0 ? "+" : "") << calibratedError << " mm\n";
                   
     } else {
         std::cerr << "[!] CRITICAL: Could not open " << DATA_FILE << " for writing.\n";
     }
 }
 
-// MODE 1: Calibrate Container Bottom (Using filtered burst)
+// MODE 1: Calibrate Container Bottom
 uint16_t runCalibration(VL53L0X& sensor) {
     std::cout << "\n--- [ MODE 1: CONTAINER ZERO ] ---" << std::endl;
     std::cout << "Ensure the MIXR-1 container is EMPTY." << std::endl;
     std::cout << "Taking high-fidelity burst measurement to establish baseline..." << std::endl;
     
-    // Take a large 20-sample burst with 50ms gaps for a highly stable baseline
     SensorMetrics metrics = getSensorMetrics(sensor, 20, 50000); 
 
     if (metrics.validSamples == 0) {
@@ -187,8 +191,11 @@ uint16_t runCalibration(VL53L0X& sensor) {
     }
     
     uint16_t containerZero = metrics.average;
-    std::cout << ">> Calibration Complete. Container bottom set at: " << containerZero << " mm from sensor.\n" << std::endl;
-    std::cout << ">> Baseline Jitter: +/- " << (metrics.max - metrics.min) << " mm (" << metrics.validSamples << "/20 yield)\n" << std::endl;
+    float calibratedZero = (static_cast<float>(containerZero) - 9.067f) / 1.052f;
+
+    std::cout << ">> Calibration Complete." << std::endl;
+    std::cout << ">> Raw Container Bottom: " << containerZero << " mm" << std::endl;
+    std::cout << ">> Calibrated Bottom (Aligns with Ruler): " << std::fixed << std::setprecision(2) << calibratedZero << " mm\n" << std::defaultfloat << std::endl;
 
     if (saveContainerZero(containerZero)) {
         std::cout << "[SYSTEM] Calibration saved for next launch.\n" << std::endl;
@@ -199,25 +206,42 @@ uint16_t runCalibration(VL53L0X& sensor) {
     return containerZero;
 }
 
-// MODE 2: Fluid Fill Sequence (Using fast-burst filtering)
+// MODE 2: Fluid Fill Sequence (Selectable Logic)
 void runFillSequence(VL53L0X& sensor, uint16_t containerZero) {
     if (containerZero == 0) {
         std::cout << "\n[!] ERROR: You must run Calibration before starting a fill sequence.\n" << std::endl;
         return;
     }
     
-    uint16_t targetLevel;
+    float calibratedContainerZero = (static_cast<float>(containerZero) - 9.067f) / 1.052f;
+    int controlChoice = 0;
+    
     std::cout << "\n--- [ MODE 2: START PUMP FILL ] ---" << std::endl;
-    std::cout << "Container bottom is " << containerZero << " mm away." << std::endl;
+    std::cout << "Select Pump Control Logic:" << std::endl;
+    std::cout << "  [1] RAW Logic        (Container Zero: " << containerZero << " mm)" << std::endl;
+    std::cout << "  [2] CALIBRATED Logic (Container Zero: " << std::fixed << std::setprecision(2) << calibratedContainerZero << " mm)" << std::defaultfloat << std::endl;
+    std::cout << "Selection: ";
+    
+    if (!(std::cin >> controlChoice) || (controlChoice != 1 && controlChoice != 2)) {
+        std::cin.clear();
+        std::cin.ignore(10000, '\n');
+        std::cout << "[!] Invalid logic selection. Returning to menu.\n" << std::endl;
+        return;
+    }
+    
+    uint16_t targetLevel;
     std::cout << "Enter target water level (height from bottom in mm): ";
     std::cin >> targetLevel;
     
-    if (targetLevel > containerZero) {
-        std::cout << "[!] ERROR: Target water level cannot exceed container depth.\n" << std::endl;
+    if (controlChoice == 1 && targetLevel > containerZero) {
+        std::cout << "[!] ERROR: Target exceeds raw container depth.\n" << std::endl;
+        return;
+    } else if (controlChoice == 2 && targetLevel > calibratedContainerZero) {
+        std::cout << "[!] ERROR: Target exceeds calibrated container depth.\n" << std::endl;
         return;
     }
 
-    std::cout << "\n[SYSTEM] Pump ACTIVATED." << std::endl;
+    std::cout << "\n[SYSTEM] Pump ACTIVATED using " << (controlChoice == 1 ? "RAW" : "CALIBRATED") << " logic." << std::endl;
     std::cout << ">>> PRESS [CTRL+C] FOR EMERGENCY STOP <<<\n" << std::endl;
     
     emergencyStop = 0; 
@@ -226,32 +250,40 @@ void runFillSequence(VL53L0X& sensor, uint16_t containerZero) {
     runPump();
     
     while (!emergencyStop) {
-        // Fast 5-sample burst for responsive pump control
         SensorMetrics metrics = getSensorMetrics(sensor, 5, 5000); 
         
         if (metrics.validSamples == 0) {
             consecutiveLosses++;
             if (consecutiveLosses >= 6) {
-                std::cerr << "\n\n[!] CRITICAL: Complete IR signal loss on water surface! Emergency Halt." << std::endl;
+                std::cerr << "\n\n[!] CRITICAL: Complete IR signal loss! Emergency Halt." << std::endl;
                 break;
             }
-            continue; // Skip calculation if blind, try again
+            continue; 
         }
-        consecutiveLosses = 0; // Reset failsafe on valid read
+        consecutiveLosses = 0; 
 
-        int waterLevel = static_cast<int>(containerZero) - static_cast<int>(metrics.average);
-        if (waterLevel < 0) waterLevel = 0;
-
-        std::cout << "\rLevel: " << waterLevel << "/" << targetLevel << " mm | Sensor Dist: " 
-                  << metrics.average << " mm | Yield: " << metrics.validSamples << "/5    " << std::flush;
+        // Calculate both logic paths concurrently
+        float calibratedDist = (static_cast<float>(metrics.average) - 9.067f) / 1.052f;
         
-        // Bang-bang shutoff logic
-        if (waterLevel >= targetLevel) {
+        int rawWaterLevel = static_cast<int>(containerZero) - static_cast<int>(metrics.average);
+        float calibWaterLevel = calibratedContainerZero - calibratedDist;
+        
+        if (rawWaterLevel < 0) rawWaterLevel = 0;
+        if (calibWaterLevel < 0) calibWaterLevel = 0;
+
+        // Assign the active level driving the pump shutoff based on user selection
+        float activeWaterLevel = (controlChoice == 1) ? static_cast<float>(rawWaterLevel) : calibWaterLevel;
+
+        std::cout << "\rLevel: " << std::fixed << std::setprecision(1) << activeWaterLevel << "/" << targetLevel << " mm | Raw: " 
+                  << metrics.average << " mm | Calib: " << calibratedDist << " mm | Yield: " << metrics.validSamples << "/5    " << std::flush;
+        
+        if (activeWaterLevel >= targetLevel) {
             std::cout << "\n\n[SYSTEM] Target level reached. Pump SHUTTING DOWN.\n" << std::endl;
             break;
         }
     }
     
+    std::cout << std::defaultfloat; // Reset formatting
     stopPump();
     if (emergencyStop && !systemOffline) {
         std::cout << "\n[!] EMERGENCY STOP ENGAGED. Pump halted.\n" << std::endl;
@@ -259,17 +291,32 @@ void runFillSequence(VL53L0X& sensor, uint16_t containerZero) {
 }
 
 // MODE 3: Record Static Water Data
-void runRecordDataPoint(VL53L0X& sensor) {
+void runRecordDataPoint(VL53L0X& sensor, uint16_t containerZero) {
+    if (containerZero == 0) {
+        std::cout << "\n[!] ERROR: You must run Calibration (Mode 1) first.\n" << std::endl;
+        return;
+    }
+
+    float calibratedContainerZero = (static_cast<float>(containerZero) - 9.067f) / 1.052f;
+
     std::cout << "\n--- [ MODE 3: DATA RECORDING ] ---" << std::endl;
     
-    int targetDistance;
-    std::cout << "Enter the actual physical water depth (mm): ";
-    if (!(std::cin >> targetDistance)) {
+    int targetLevel;
+    std::cout << "Enter the physical water level from bottom (mm): ";
+    if (!(std::cin >> targetLevel)) {
         std::cin.clear();
         std::cin.ignore(10000, '\n');
         std::cout << "[!] Invalid input. Returning to menu." << std::endl;
         return;
     }
+
+    if (targetLevel > calibratedContainerZero) {
+        std::cout << "[!] ERROR: Target water level exceeds known container depth." << std::endl;
+        return;
+    }
+
+    // Calculates the true expected distance from the sensor to the water surface using the calibrated geometry
+    int expectedDistance = static_cast<int>(std::round(calibratedContainerZero - targetLevel));
 
     int trials;
     std::cout << "Enter number of trials for this depth (e.g., 5): ";
@@ -282,6 +329,10 @@ void runRecordDataPoint(VL53L0X& sensor) {
     
     std::cin.ignore(10000, '\n');
 
+    std::cout << "\n[SYSTEM] Using Calibrated Container Zero: " << std::fixed << std::setprecision(2) << calibratedContainerZero << " mm" << std::defaultfloat << std::endl;
+    std::cout << "[SYSTEM] Desired Water Level: " << targetLevel << " mm" << std::endl;
+    std::cout << "[SYSTEM] Expected sensor reading to surface: " << expectedDistance << " mm" << std::endl;
+
     for (int t = 1; t <= trials; ++t) {
         std::cout << "\n[Trial " << t << "/" << trials << "] Wait for water to settle, then press ENTER...";
         std::string dummy;
@@ -290,12 +341,13 @@ void runRecordDataPoint(VL53L0X& sensor) {
         SensorMetrics metrics = getSensorMetrics(sensor, 10);
 
         if (metrics.validSamples == 0) {
-            std::cout << "[!] ERROR: Failed to get any valid readings. Surface scattering too high." << std::endl;
+            std::cout << "[!] ERROR: Failed to get any valid readings." << std::endl;
             t--; 
             continue;
         }
 
-        logToCSV(currentSessionID, currentTestNumber, t, targetDistance, metrics);
+        // Pass expectedDistance so the CSV columns properly calculate errors against the calibrated ruler geometry
+        logToCSV(currentSessionID, currentTestNumber, t, expectedDistance, metrics);
     }
     
     currentTestNumber++; 
@@ -303,23 +355,40 @@ void runRecordDataPoint(VL53L0X& sensor) {
 }
 
 // MODE 4: Continuous Read Stream
-void runContinuousRead(VL53L0X& sensor) {
+void runContinuousRead(VL53L0X& sensor, uint16_t containerZero) {
+    if (containerZero == 0) {
+        std::cout << "\n[!] ERROR: You must run Calibration (Mode 1) first.\n" << std::endl;
+        return;
+    }
+
+    float calibratedContainerZero = (static_cast<float>(containerZero) - 9.067f) / 1.052f;
+
     std::cout << "\n--- [ MODE 4: CONTINUOUS STREAM ] ---" << std::endl;
     std::cout << "Streaming sensor data. Press ANY KEY to stop.\n\n";
 
     while (kbhit()) getchar();
+    std::cout << std::fixed << std::setprecision(1);
 
     while (!systemOffline && !kbhit()) {
         SensorMetrics metrics = getSensorMetrics(sensor, 3, 10000);
         
         if (metrics.validSamples > 0) {
-            std::cout << "\rRaw Dist: " << metrics.average << " mm | Yield: " << metrics.validSamples << "/3 | Spread: " << (metrics.max - metrics.min) << " mm       " << std::flush;
+            float calibratedDist = (static_cast<float>(metrics.average) - 9.067f) / 1.052f;
+            
+            // Calculate Water Levels
+            int rawLevel = static_cast<int>(containerZero) - static_cast<int>(metrics.average);
+            float calibLevel = calibratedContainerZero - calibratedDist;
+            
+            std::cout << "\rRaw Lvl: " << rawLevel << " mm (" << metrics.average << " dist) | "
+                      << "Calib Lvl: " << calibLevel << " mm (" << calibratedDist << " dist) | "
+                      << "Yield: " << metrics.validSamples << "/3       " << std::flush;
         } else {
-            std::cout << "\rRaw Dist: [OUT OF RANGE / SCATTERED]                                " << std::flush;
+            std::cout << "\r[SCATTERED]                                                                    " << std::flush;
         }
     }
 
     if (kbhit()) getchar();
+    std::cout << std::defaultfloat;
     std::cout << "\n\nStopped continuous read." << std::endl;
 }
 
@@ -357,7 +426,9 @@ int main() {
     std::cout << "=========================================" << std::endl;
     
     if (containerZero != 0) {
-        std::cout << "Loaded saved container zero: " << containerZero << " mm from sensor." << std::endl;
+        float calibDisp = (static_cast<float>(containerZero) - 9.067f) / 1.052f;
+        std::cout << "Loaded saved container zero: " << containerZero << " mm raw (" 
+                  << std::fixed << std::setprecision(2) << calibDisp << " mm calib)." << std::defaultfloat << std::endl;
     }
 
     while (!systemOffline) {
@@ -384,10 +455,10 @@ int main() {
                 std::cin.clear();
                 break;
             case 3:
-                runRecordDataPoint(sensor);
+                runRecordDataPoint(sensor, containerZero);
                 break;
             case 4:
-                runContinuousRead(sensor);
+                runContinuousRead(sensor, containerZero);
                 break;
             case 5:
                 systemOffline = 1;
