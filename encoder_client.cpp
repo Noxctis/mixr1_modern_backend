@@ -3,11 +3,6 @@
  * @brief High-speed hardware telemetry and control daemon for the MIXR-1 chemical engineering platform.
  * @author Chrys Sean T. Sevilla, Cyril John Christian Calo, Sid Andre Bordario
  * @institution University of San Carlos - Computer Engineering Department
- * @details 
- * This daemon operates as the primary hardware abstraction layer (HAL) for the MIXR-1 plant.
- * It executes in user-space via the pigpiod_if2 client library, ensuring non-blocking DMA access
- * to Broadcom silicon peripherals. The architecture is explicitly decoupled to allow seamless 
- * hardware handovers to external control processes (e.g., MATLAB/Simulink Real-Time).
  */
 
 #include <iostream>
@@ -33,39 +28,18 @@
 // ==========================================
 namespace Config {
     // --- Kinematics & DSP ---
-    // UPGRADE: 48 PPR encoder x 4 edges x 51.446 gear ratio. Mandatory for >50Hz sampling to suppress quantization noise.
-    constexpr double ENCODER_CPR = 617.35;               
+    // DIRECT DRIVE: 48 PPR encoder x 4 edges = 192 CPR. 
+    constexpr double ENCODER_CPR = 192;               
     constexpr double RPM_ALPHA = 0.15;                   ///< EMA Smoothing coefficient
     constexpr size_t SMA_WINDOW_SIZE = 8;                ///< UI Rolling average (8 ticks @ 10Hz LCD update = 800ms)
     constexpr int DEADBAND_TICK_THRESHOLD = 2;           ///< Rejects noise dithering when PWM is 0
 
     // --- Execution Pacing Matrix ---
-    // Thesis testing: Uncomment exactly ONE of the frequency blocks below.
-    // LCD_PRESCALER isolates the slow I2C bus (3ms execution) to guarantee 10Hz UI redraws without crashing the main CPU loop.
-
-    /* --- 10Hz Configuration (High latency, very smooth data) --- */
-    // constexpr int RPM_SAMPLE_WINDOW_US = 100000;
-    // constexpr int LOOP_DELAY_US = 10000;
-    // constexpr int NETWORK_PRESCALER = 10;
-    // constexpr int LCD_PRESCALER = 10;
-
-    /* --- 50Hz Configuration (Decent middle ground) --- */
-    // constexpr int RPM_SAMPLE_WINDOW_US = 20000;
-    // constexpr int LOOP_DELAY_US = 10000;
-    // constexpr int NETWORK_PRESCALER = 2;
-    // constexpr int LCD_PRESCALER = 5;
-
     /* --- 100Hz Configuration (Standard industrial PID baseline) [ACTIVE] --- */
     constexpr int RPM_SAMPLE_WINDOW_US = 10000;
     constexpr int LOOP_DELAY_US = 10000;
     constexpr int NETWORK_PRESCALER = 1;
     constexpr int LCD_PRESCALER = 10;
-
-    /* --- 200Hz Configuration (High responsiveness, requires fast CPU) --- */
-    // constexpr int RPM_SAMPLE_WINDOW_US = 5000;
-    // constexpr int LOOP_DELAY_US = 5000;
-    // constexpr int NETWORK_PRESCALER = 1;
-    // constexpr int LCD_PRESCALER = 20;
 
     // --- Networking & Peripherals ---
     constexpr int SIMULINK_CHECK_INTERVAL = 100;         ///< Polls the OS process list every 1 second
@@ -74,6 +48,7 @@ namespace Config {
     // --- Hardware Pinout (BCM GPIO) ---
     constexpr unsigned int PIN_ENC_A = 24;               ///< Quadrature Channel A (Interrupt driven)
     constexpr unsigned int PIN_ENC_B = 23;               ///< Quadrature Channel B (Interrupt driven)
+    constexpr unsigned int PIN_ENC_X = 22;               ///< Index Channel X (1 pulse per revolution)
     constexpr int ENCODER_DIRECTION = -1;                ///< Flip sign when the physical phase order is reversed
     constexpr unsigned int PIN_M1_EN = 15;               ///< VNH5019 Enable
     constexpr unsigned int PIN_M1_INA = 17;              ///< VNH5019 Direction A
@@ -151,12 +126,9 @@ public:
         sample_ticks += delta_ticks;
         sample_time += dt_sec;
 
-        // ACCUMULATOR GATE: Only calculate RPM when the time window has fully elapsed
         if (sample_time.count() >= static_cast<double>(Config::RPM_SAMPLE_WINDOW_US) / 1000000.0) {
             if (current_pwm == 0 && std::abs(sample_ticks) <= Config::DEADBAND_TICK_THRESHOLD) {
                 last_sampled_rpm = 0.0; 
-                
-                // FILTER FLUSH: Explicitly kill the IIR exponential decay to prevent dashboard lag
                 ema_rpm = 0.0;
                 sma_history.fill(0.0);
                 sma_sum = 0.0;
@@ -164,13 +136,11 @@ public:
                 last_sampled_rpm = std::abs((static_cast<double>(sample_ticks) / Config::ENCODER_CPR) * (60.0 / sample_time.count()));
             }
 
-            // Reset accumulators for the next window
             sample_ticks = 0;
             sample_time = std::chrono::duration<double>::zero();
         }
 
         state.exact_rpm = last_sampled_rpm;
-
         ema_rpm = (Config::RPM_ALPHA * state.exact_rpm) + ((1.0 - Config::RPM_ALPHA) * ema_rpm);
         state.ema_filtered_rpm = ema_rpm;
 
@@ -191,13 +161,15 @@ public:
 // ==========================================
 // 4. HARDWARE MODULE: QUADRATURE ENCODER
 // ==========================================
-class PololuEncoder {
+class AMT102Encoder {
 private:
     int pi_handle;
-    unsigned int pin_a, pin_b;
-    int cb_a, cb_b;
+    unsigned int pin_a, pin_b, pin_x;
+    int cb_a, cb_b, cb_x;
     
     std::atomic<long long> count{0};
+    std::atomic<long long> revolutions{0};
+    
     uint8_t state = 0;
     uint8_t val_a = 0;
     uint8_t val_b = 0;
@@ -206,7 +178,13 @@ private:
 
     static void isr_router(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
         if (level > 1) return; 
-        static_cast<PololuEncoder*>(user)->update_state(gpio, level);
+        static_cast<AMT102Encoder*>(user)->update_state(gpio, level);
+    }
+
+    static void isr_index(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
+        if (level == 1) { // Rising edge on Index pulse
+            static_cast<AMT102Encoder*>(user)->revolutions.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 
     void update_state(unsigned gpio, unsigned level) {
@@ -220,26 +198,35 @@ private:
     }
 
 public:
-    PololuEncoder(int pi, unsigned int a, unsigned int b) : pi_handle(pi), pin_a(a), pin_b(b) {
+    AMT102Encoder(int pi, unsigned int a, unsigned int b, unsigned int x) : pi_handle(pi), pin_a(a), pin_b(b), pin_x(x) {
         set_mode(pi_handle, pin_a, PI_INPUT);
         set_mode(pi_handle, pin_b, PI_INPUT);
+        set_mode(pi_handle, pin_x, PI_INPUT);
+        
         set_pull_up_down(pi_handle, pin_a, PI_PUD_UP);
         set_pull_up_down(pi_handle, pin_b, PI_PUD_UP);
+        set_pull_up_down(pi_handle, pin_x, PI_PUD_OFF); // Driven high by encoder, no pull needed
         
         val_a = gpio_read(pi_handle, pin_a);
         val_b = gpio_read(pi_handle, pin_b);
         
         cb_a = callback_ex(pi_handle, pin_a, EITHER_EDGE, isr_router, this);
         cb_b = callback_ex(pi_handle, pin_b, EITHER_EDGE, isr_router, this);
+        cb_x = callback_ex(pi_handle, pin_x, RISING_EDGE, isr_index, this);
     }
 
-    ~PololuEncoder() {
+    ~AMT102Encoder() {
         callback_cancel(cb_a);
         callback_cancel(cb_b);
+        callback_cancel(cb_x);
     }
 
     [[nodiscard]] long long get_count() const {
         return count.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] long long get_revolutions() const {
+        return revolutions.load(std::memory_order_relaxed);
     }
 };
 
@@ -255,7 +242,6 @@ public:
         set_mode(pi_handle, Config::PIN_M1_EN, PI_OUTPUT);
         set_mode(pi_handle, Config::PIN_M1_INA, PI_OUTPUT);
         set_mode(pi_handle, Config::PIN_M1_INB, PI_OUTPUT);
-        
         set_mode(pi_handle, Config::PIN_M1_PWM, PI_ALT0);
 
         gpio_write(pi_handle, Config::PIN_M1_EN, 1);
@@ -267,9 +253,7 @@ public:
         }
     }
 
-    ~MotorController() {
-        stop_motor(); 
-    }
+    ~MotorController() { stop_motor(); }
 
     void set_pwm(int duty_cycle) {
         duty_cycle = std::clamp(duty_cycle, 0, 4095);
@@ -413,9 +397,9 @@ public:
         return false;
     }
 
-    [[nodiscard]] bool send_packet(double raw_rpm, double filtered_rpm) const {
+    [[nodiscard]] bool send_packet(double raw_rpm, double filtered_rpm, long long revolutions) const {
         if (client_socket < 0) return false;
-        std::string packet = std::to_string(raw_rpm) + "," + std::to_string(filtered_rpm) + "\n";
+        std::string packet = std::to_string(raw_rpm) + "," + std::to_string(filtered_rpm) + "," + std::to_string(revolutions) + "\n";
         return send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0;
     }
 
@@ -480,7 +464,7 @@ int main() {
             std::cout << "[MIXR-1] Dashboard Connected.\n";
             
             int pi = -1;
-            std::unique_ptr<PololuEncoder> encoder = nullptr;
+            std::unique_ptr<AMT102Encoder> encoder = nullptr;
             std::unique_ptr<MotorController> motor = nullptr;
             std::unique_ptr<LCD1602> lcd = nullptr;
             
@@ -488,7 +472,6 @@ int main() {
             int current_pwm = 0;
             int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL; 
             
-            // Decoupled prescalers to protect execution bandwidth
             int network_prescaler = 0;
             int lcd_prescaler = 0;
             
@@ -509,7 +492,7 @@ int main() {
                         if (pi >= 0) { pigpio_stop(pi); pi = -1; } 
                         mode3_notified = true;
                     }
-                    if (!network->send_packet(-2.0, -2.0)) break; 
+                    if (!network->send_packet(-2.0, -2.0, -2)) break; 
                     usleep(1000000); 
                     continue;
                 }
@@ -522,7 +505,7 @@ int main() {
                 if (pi < 0) {
                     pi = pigpio_start(nullptr, nullptr);
                     if (pi >= 0) {
-                        encoder = std::make_unique<PololuEncoder>(pi, Config::PIN_ENC_A, Config::PIN_ENC_B);
+                        encoder = std::make_unique<AMT102Encoder>(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
                         motor = std::make_unique<MotorController>(pi);
                         lcd = std::make_unique<LCD1602>(pi);
                         
@@ -537,26 +520,24 @@ int main() {
                     motor->set_pwm(current_pwm);
                 }
 
-                // 5. Prescaler Logic
                 bool update_net = (++network_prescaler >= Config::NETWORK_PRESCALER);
                 if (update_net) network_prescaler = 0;
 
                 bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
                 if (update_lcd) lcd_prescaler = 0;
 
-                // Sync the SMA rolling average filter strictly to the LCD visual redraw (10Hz)
                 auto state = kinematics.process(encoder->get_count(), current_pwm, update_lcd);
 
-                // 6. Network TX & Presentation
                 if (update_net) {
-                    if (!network->send_packet(state.exact_rpm, state.ema_filtered_rpm)) break; 
+                    if (!network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder->get_revolutions())) break; 
                 }
 
                 if (update_lcd) {
                     if (lcd) {
                         std::ostringstream raw_str, filtered_str;
-                        raw_str << std::fixed << std::setprecision(1) << "RAW: " << state.exact_rpm << "   ";
-                        filtered_str << std::fixed << std::setprecision(1) << "FLT: " << state.ema_filtered_rpm << "   ";
+                        // Format modified to fit Index Revolutions ("X") on the 16x2 screen
+                        raw_str << std::fixed << std::setprecision(1) << "R:" << state.exact_rpm << " X:" << encoder->get_revolutions() << "   ";
+                        filtered_str << std::fixed << std::setprecision(1) << "FLT: " << state.ema_filtered_rpm << "       ";
                         lcd->set_cursor(0, 0); lcd->print(raw_str.str());
                         lcd->set_cursor(1, 0); lcd->print(filtered_str.str());
                     }
