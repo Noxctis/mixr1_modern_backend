@@ -41,6 +41,18 @@ namespace Config {
     constexpr int NETWORK_PRESCALER = 1;
     constexpr int LCD_PRESCALER = 10;
 
+    /* --- 200Hz Configuration (Faster loop / tighter control) [COMMENTED OUT] --- */
+    // constexpr int RPM_SAMPLE_WINDOW_US = 5000;
+    // constexpr int LOOP_DELAY_US = 5000;
+    // constexpr int NETWORK_PRESCALER = 1;
+    // constexpr int LCD_PRESCALER = 10;
+
+    /* --- 50Hz Configuration (Slower telemetry / display update) [COMMENTED OUT] --- */
+    // constexpr int RPM_SAMPLE_WINDOW_US = 20000;
+    // constexpr int LOOP_DELAY_US = 20000;
+    // constexpr int NETWORK_PRESCALER = 1;
+    // constexpr int LCD_PRESCALER = 10;
+
     // --- Networking & Peripherals ---
     constexpr int SIMULINK_CHECK_INTERVAL = 100;         ///< Polls the OS process list every 1 second
     constexpr int TCP_PORT = 5000;                       ///< Binding port for the Python Dashboard / GUI
