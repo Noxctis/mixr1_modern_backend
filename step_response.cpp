@@ -12,8 +12,8 @@
 #include <atomic>
 
 // --- Hardware Pins ---
-constexpr unsigned int PIN_ENC_A = 24;
-constexpr unsigned int PIN_ENC_B = 23;
+constexpr unsigned int PIN_ENC_A = 23;
+constexpr unsigned int PIN_ENC_B = 24;
 constexpr unsigned int PIN_ENC_X = 22; // Index Pulse Pin
 constexpr unsigned int PIN_PWM = 13;
 constexpr unsigned int PIN_EN = 15;
