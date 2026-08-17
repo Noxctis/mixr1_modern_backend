@@ -21,9 +21,9 @@ constexpr unsigned int PIN_INA = 17;
 constexpr unsigned int PIN_INB = 27;
 
 // --- System Configuration ---
-<<<<<<< HEAD
-// Encoder directly on output shaft: 48 PPR * 4 edges = 192 CPR
-constexpr double ENCODER_CPR = 192.0; 
+constexpr double ENCODER_CPR = 192.0; // 48 PPR * 4 edges
+constexpr int PWM_FREQ = 20000;
+constexpr int LOOP_DELAY_US = 10000; // 100Hz
 
 // ==========================================
 // AMT102 ENCODER MODULE
@@ -96,9 +96,9 @@ public:
 // MAIN EXECUTOR
 // ==========================================
 int main() {
->>>>>>> 5217e21 (feat(step_response): add PWM step response capture functionality)
     sched_param sch;
     int policy;
+    pthread_getschedparam(pthread_self(), &policy, &sch);
     sch.sched_priority = 90;
     if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch) != 0) {
         std::cerr << "[WARNING] Failed to set SCHED_FIFO. Must run with sudo.\n";
