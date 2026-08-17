@@ -1,6 +1,6 @@
 /**
  * @file mixr1_daemon.cpp
- * @brief High-speed hardware telemetry and control daemon for the MIXR-1 chemical engineering platform.
+ * @brief High-speed hardware telemetry and PI control daemon for the MIXR-1 chemical engineering platform.
  * @author Chrys Sean T. Sevilla, Cyril John Christian Calo, Sid Andre Bordario
  * @institution University of San Carlos - Computer Engineering Department
  */
@@ -19,6 +19,7 @@
 #include <iomanip>
 #include <sstream>
 #include <array>
+#include <thread>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -28,46 +29,32 @@
 // ==========================================
 namespace Config {
     // --- Kinematics & DSP ---
-    // DIRECT DRIVE: 48 PPR encoder x 4 edges = 192 CPR. 
     constexpr double ENCODER_CPR = 192;               
-    constexpr double RPM_ALPHA = 0.15;                   ///< EMA Smoothing coefficient
-    constexpr size_t SMA_WINDOW_SIZE = 8;                ///< UI Rolling average (8 ticks @ 10Hz LCD update = 800ms)
-    constexpr int DEADBAND_TICK_THRESHOLD = 2;           ///< Rejects noise dithering when PWM is 0
+    constexpr double RPM_ALPHA = 0.15;                   
+    constexpr size_t SMA_WINDOW_SIZE = 8;                
+    constexpr int DEADBAND_TICK_THRESHOLD = 2;           
 
     // --- Execution Pacing Matrix ---
-    /* --- 100Hz Configuration (Standard industrial PID baseline) [ACTIVE] --- */
     constexpr int RPM_SAMPLE_WINDOW_US = 10000;
-    constexpr int LOOP_DELAY_US = 10000;
+    constexpr int LOOP_DELAY_US = 10000; // strictly 100Hz
     constexpr int NETWORK_PRESCALER = 1;
     constexpr int LCD_PRESCALER = 10;
 
-    /* --- 200Hz Configuration (Faster loop / tighter control) [COMMENTED OUT] --- */
-    // constexpr int RPM_SAMPLE_WINDOW_US = 5000;
-    // constexpr int LOOP_DELAY_US = 5000;
-    // constexpr int NETWORK_PRESCALER = 1;
-    // constexpr int LCD_PRESCALER = 10;
-
-    /* --- 50Hz Configuration (Slower telemetry / display update) [COMMENTED OUT] --- */
-    // constexpr int RPM_SAMPLE_WINDOW_US = 20000;
-    // constexpr int LOOP_DELAY_US = 20000;
-    // constexpr int NETWORK_PRESCALER = 1;
-    // constexpr int LCD_PRESCALER = 10;
-
     // --- Networking & Peripherals ---
-    constexpr int SIMULINK_CHECK_INTERVAL = 100;         ///< Polls the OS process list every 1 second
-    constexpr int TCP_PORT = 5000;                       ///< Binding port for the Python Dashboard / GUI
+    constexpr int SIMULINK_CHECK_INTERVAL = 100;         
+    constexpr int TCP_PORT = 5000;                       
 
     // --- Hardware Pinout (BCM GPIO) ---
-    constexpr unsigned int PIN_ENC_A = 24;               ///< Quadrature Channel A (Interrupt driven)
-    constexpr unsigned int PIN_ENC_B = 23;               ///< Quadrature Channel B (Interrupt driven)
-    constexpr unsigned int PIN_ENC_X = 22;               ///< Index Channel X (1 pulse per revolution)
-    constexpr int ENCODER_DIRECTION = -1;                ///< Flip sign when the physical phase order is reversed
-    constexpr unsigned int PIN_M1_EN = 15;               ///< VNH5019 Enable
-    constexpr unsigned int PIN_M1_INA = 17;              ///< VNH5019 Direction A
-    constexpr unsigned int PIN_M1_INB = 27;              ///< VNH5019 Direction B
-    constexpr unsigned int PIN_M1_PWM = 13;              ///< PI_ALT0 Hardware PWM Silicon Output
-    constexpr int I2C_LCD_ADDR = 0x27;                   ///< 16x2 Display Backpack Address
-    constexpr int PWM_FREQUENCY = 20000;                 ///< 20kHz Carrier Frequency (Acoustically inaudible)
+    constexpr unsigned int PIN_ENC_A = 24;               
+    constexpr unsigned int PIN_ENC_B = 23;               
+    constexpr unsigned int PIN_ENC_X = 22;               
+    constexpr int ENCODER_DIRECTION = -1;                
+    constexpr unsigned int PIN_M1_EN = 15;               
+    constexpr unsigned int PIN_M1_INA = 17;              
+    constexpr unsigned int PIN_M1_INB = 27;              
+    constexpr unsigned int PIN_M1_PWM = 13;              
+    constexpr int I2C_LCD_ADDR = 0x27;                   
+    constexpr int PWM_FREQUENCY = 20000;                 
 }
 
 std::atomic<bool> run_loop{true};
@@ -171,7 +158,42 @@ public:
 };
 
 // ==========================================
-// 4. HARDWARE MODULE: QUADRATURE ENCODER
+// 4. PI CONTROLLER ENGINE
+// ==========================================
+class PIController {
+private:
+    double Kp, Ki;
+    double integral_sum = 0.0;
+    double max_pwm = 4095.0; 
+
+public:
+    PIController(double kp, double ki) : Kp(kp), Ki(ki) {}
+
+    void reset() { integral_sum = 0.0; }
+
+    int compute(double setpoint_rpm, double current_rpm, double dt) {
+        if (dt <= 0.0) return 0;
+
+        double error = setpoint_rpm - current_rpm;
+        integral_sum += error * dt;
+
+        // Anti-windup
+        if (Ki > 0) {
+            if (integral_sum > (max_pwm / Ki)) integral_sum = (max_pwm / Ki);
+            else if (integral_sum < -(max_pwm / Ki)) integral_sum = -(max_pwm / Ki);
+        }
+
+        double output = (Kp * error) + (Ki * integral_sum);
+
+        if (output > max_pwm) output = max_pwm;
+        else if (output < 0) output = 0; 
+        
+        return static_cast<int>(output);
+    }
+};
+
+// ==========================================
+// 5. HARDWARE MODULE: QUADRATURE ENCODER
 // ==========================================
 class AMT102Encoder {
 private:
@@ -194,7 +216,7 @@ private:
     }
 
     static void isr_index(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
-        if (level == 1) { // Rising edge on Index pulse
+        if (level == 1) { 
             static_cast<AMT102Encoder*>(user)->revolutions.fetch_add(1, std::memory_order_relaxed);
         }
     }
@@ -217,7 +239,7 @@ public:
         
         set_pull_up_down(pi_handle, pin_a, PI_PUD_UP);
         set_pull_up_down(pi_handle, pin_b, PI_PUD_UP);
-        set_pull_up_down(pi_handle, pin_x, PI_PUD_OFF); // Driven high by encoder, no pull needed
+        set_pull_up_down(pi_handle, pin_x, PI_PUD_OFF); 
         
         val_a = gpio_read(pi_handle, pin_a);
         val_b = gpio_read(pi_handle, pin_b);
@@ -243,7 +265,7 @@ public:
 };
 
 // ==========================================
-// 5. HARDWARE MODULE: MOTOR CONTROLLER
+// 6. HARDWARE MODULE: MOTOR CONTROLLER
 // ==========================================
 class MotorController {
 private:
@@ -269,8 +291,9 @@ public:
 
     void set_pwm(int duty_cycle) {
         duty_cycle = std::clamp(duty_cycle, 0, 4095);
-        int hw_duty = (duty_cycle * 1000000) / 4095;
-        hardware_PWM(pi_handle, Config::PIN_M1_PWM, Config::PWM_FREQUENCY, hw_duty);
+        // Explicit 64-bit cast to prevent 32-bit integer overflow during high PWM assignments
+        long long hw_duty = (static_cast<long long>(duty_cycle) * 1000000LL) / 4095LL;
+        hardware_PWM(pi_handle, Config::PIN_M1_PWM, Config::PWM_FREQUENCY, static_cast<int>(hw_duty));
     }
 
     void stop_motor() {
@@ -280,7 +303,7 @@ public:
 };
 
 // ==========================================
-// 6. HARDWARE MODULE: LCD DISPLAY 1602
+// 7. HARDWARE MODULE: LCD DISPLAY 1602
 // ==========================================
 class LCD1602 {
 private:
@@ -355,7 +378,7 @@ public:
 };
 
 // ==========================================
-// 7. NETWORK MODULE: TCP SERVER
+// 8. NETWORK MODULE: TCP SERVER
 // ==========================================
 class TelemetryServer {
 private:
@@ -415,7 +438,7 @@ public:
         return send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0;
     }
 
-    [[nodiscard]] bool receive_command(int& new_pwm) {
+    [[nodiscard]] bool receive_command(double& target_rpm) {
         if (client_socket < 0) return false;
         bool updated = false;
         char chunk[1024];
@@ -435,11 +458,11 @@ public:
             std::string line = rx_buffer.substr(0, pos);
             rx_buffer.erase(0, pos + 1);
 
-            size_t cmd_pos = line.find("CMD:PWM,");
+            size_t cmd_pos = line.find("CMD:RPM,");
             if (cmd_pos != std::string::npos) {
                 try {
-                    new_pwm = std::stoi(line.substr(cmd_pos + 8));
-                    std::cout << "[MIXR-1] PWM received from dashboard: " << new_pwm << '\n';
+                    target_rpm = std::stod(line.substr(cmd_pos + 8));
+                    std::cout << "[MIXR-1] RPM target received from dashboard: " << target_rpm << '\n';
                     updated = true;
                 } catch (...) {}
             }
@@ -455,9 +478,18 @@ public:
 };
 
 // ==========================================
-// 8. MAIN DAEMON ORCHESTRATOR
+// 9. MAIN DAEMON ORCHESTRATOR
 // ==========================================
 int main() {
+    // Elevate to Real-Time Priority
+    sched_param sch;
+    int policy;
+    pthread_getschedparam(pthread_self(), &policy, &sch);
+    sch.sched_priority = 90;
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch) != 0) {
+        std::cerr << "[WARNING] Failed to set SCHED_FIFO. Must run with sudo for deterministic PI control.\n";
+    }
+
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGPIPE, SIG_IGN); 
@@ -480,7 +512,11 @@ int main() {
             std::unique_ptr<MotorController> motor = nullptr;
             std::unique_ptr<LCD1602> lcd = nullptr;
             
+            // Evaluated and specifically tuned for OS-10L high-speed 1500 RPM operations
+            PIController pi_control(1.464, 46.848);
+            
             bool mode3_notified = false;
+            double target_rpm = 0.0;
             int current_pwm = 0;
             int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL; 
             
@@ -489,7 +525,18 @@ int main() {
             
             bool simulink_is_active = false;
 
+            auto next_wake = std::chrono::steady_clock::now();
+            auto last_time = next_wake;
+
             while (run_loop) {
+                // Ensure strictly timed loop execution to maintain accuracy of the integral term
+                next_wake += std::chrono::microseconds(Config::LOOP_DELAY_US);
+                std::this_thread::sleep_until(next_wake);
+
+                auto current_time = std::chrono::steady_clock::now();
+                std::chrono::duration<double> dt = current_time - last_time;
+                last_time = current_time;
+
                 if (++simulink_check_counter >= Config::SIMULINK_CHECK_INTERVAL) {
                     simulink_check_counter = 0;
                     simulink_is_active = ProcessMonitor::is_simulink_running();
@@ -501,11 +548,12 @@ int main() {
                         motor.reset();
                         encoder.reset();
                         lcd.reset();
+                        pi_control.reset(); // Prevent integral windup while hardware is released
+                        target_rpm = 0.0;
                         if (pi >= 0) { pigpio_stop(pi); pi = -1; } 
                         mode3_notified = true;
                     }
                     if (!network->send_packet(-2.0, -2.0, -2)) break; 
-                    usleep(1000000); 
                     continue;
                 }
 
@@ -522,14 +570,16 @@ int main() {
                         lcd = std::make_unique<LCD1602>(pi);
                         
                         kinematics.reset(encoder->get_count());
+                        last_time = std::chrono::steady_clock::now();
+                        next_wake = last_time;
                     } else {
-                        usleep(2000000);
                         continue;
                     }
                 }
 
-                if (network->receive_command(current_pwm) && motor) {
-                    motor->set_pwm(current_pwm);
+                if (network->receive_command(target_rpm)) {
+                    // Reset integral term if target is zeroed to prevent runaway
+                    if (target_rpm <= 0.0) pi_control.reset();
                 }
 
                 bool update_net = (++network_prescaler >= Config::NETWORK_PRESCALER);
@@ -540,6 +590,16 @@ int main() {
 
                 auto state = kinematics.process(encoder->get_count(), current_pwm, update_lcd);
 
+                if (motor && !simulink_is_active) {
+                    if (target_rpm > 0.0) {
+                        current_pwm = pi_control.compute(target_rpm, state.exact_rpm, dt.count());
+                        motor->set_pwm(current_pwm);
+                    } else {
+                        current_pwm = 0;
+                        motor->set_pwm(0);
+                    }
+                }
+
                 if (update_net) {
                     if (!network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder->get_revolutions())) break; 
                 }
@@ -547,21 +607,18 @@ int main() {
                 if (update_lcd) {
                     if (lcd) {
                         std::ostringstream raw_str, filtered_str;
-                        // Format modified to fit Index Revolutions ("X") on the 16x2 screen
                         raw_str << std::fixed << std::setprecision(1) << "R:" << state.exact_rpm << " X:" << encoder->get_revolutions() << "   ";
                         filtered_str << std::fixed << std::setprecision(1) << "FLT: " << state.ema_filtered_rpm << "       ";
                         lcd->set_cursor(0, 0); lcd->print(raw_str.str());
                         lcd->set_cursor(1, 0); lcd->print(filtered_str.str());
                     }
                 }
-                
-                usleep(Config::LOOP_DELAY_US); 
             }
 
             motor.reset();
             encoder.reset();
             lcd.reset();
-            if (pi >= 0) pigpio_stop(pi);
+            if (pi >= 0) { pigpio_stop(pi); pi = -1; }
         }
         network->stop_server();
     }
