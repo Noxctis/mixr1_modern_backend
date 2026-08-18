@@ -56,7 +56,8 @@ int main() {
             std::unique_ptr<MotorController> motor = nullptr;
             std::unique_ptr<LCD1602> lcd = nullptr;
             
-            PIController pi_control(1.464, 46.848);
+            // Controller now loads parameters safely from the configuration file
+            PIController pi_control(Config::PI_KP, Config::PI_KI);
             
             bool mode3_notified = false;
             double target_rpm = 0.0;

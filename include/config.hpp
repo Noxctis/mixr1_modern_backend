@@ -3,16 +3,25 @@
 #include <cstddef>
 
 namespace Config {
+    // --- Kinematics & DSP ---
     constexpr double ENCODER_CPR = 192;               
     constexpr double RPM_ALPHA = 0.15;                   
     constexpr size_t SMA_WINDOW_SIZE = 8;                
     constexpr int DEADBAND_TICK_THRESHOLD = 2;           
+
+    // --- PI Controller Tuning (1500 RPM High-Speed Model) ---
+    constexpr double PI_KP = 1.464;
+    constexpr double PI_KI = 46.848;
+
+    // --- Execution Pacing Matrix ---
     constexpr int RPM_SAMPLE_WINDOW_US = 10000;
     constexpr int LOOP_DELAY_US = 10000; 
     constexpr int NETWORK_PRESCALER = 1;
     constexpr int LCD_PRESCALER = 10;
     constexpr int SIMULINK_CHECK_INTERVAL = 100;         
     constexpr int TCP_PORT = 5000;                       
+
+    // --- Hardware Pinout (BCM GPIO) ---
     constexpr unsigned int PIN_ENC_A = 24;               
     constexpr unsigned int PIN_ENC_B = 23;               
     constexpr unsigned int PIN_ENC_X = 22;               
