@@ -10,18 +10,19 @@ namespace Config {
     constexpr size_t SMA_WINDOW_SIZE = 8;                
     constexpr int DEADBAND_TICK_THRESHOLD = 2;           
 
-    // --- GAIN SCHEDULING (Bisection Fluid Mapping) ---
+    // --- GAIN SCHEDULING (Linear Interpolation Matrix) ---
     struct GainTier {
-        double rpm_threshold; // Upper RPM limit for this tier
+        double rpm; // Baseline RPM
         double Kp;
         double Ki;
     };
     
-    constexpr std::array<GainTier, 4> PI_SCHEDULE = {{
-        {600.0,  1.5387, 40.3388},  // Low speed (0 to 600 RPM)
-        {1100.0, 1.5195, 41.8610},  // Mid speed (601 to 1100 RPM)
-        {1600.0, 1.4901, 37.8287},  // Mid-High (1101 to 1600 RPM)
-        {2500.0, 1.4740, 40.1298}   // High speed (1601 to 2500 RPM)
+    constexpr std::array<GainTier, 5> PI_SCHEDULE = {{
+        {0.00,    1.9646, 48.5934}, // Test 1: Stiction/Startup
+        {342.81,  1.5387, 40.3388}, // Test 2: Low-Mid Speed
+        {861.56,  1.5195, 41.8610}, // Test 3: Mid Speed
+        {1378.44, 1.4901, 37.8287}, // Test 4: Mid-High Speed
+        {1766.56, 1.4740, 40.1298}  // Test 5: Nominal Max Speed
     }};
 
     // --- Execution Pacing Matrix ---
