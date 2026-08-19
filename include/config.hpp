@@ -1,6 +1,7 @@
 // include/config.hpp
 #pragma once
 #include <cstddef>
+#include <array>
 
 namespace Config {
     // --- Kinematics & DSP ---
@@ -9,9 +10,19 @@ namespace Config {
     constexpr size_t SMA_WINDOW_SIZE = 8;                
     constexpr int DEADBAND_TICK_THRESHOLD = 2;           
 
-    // --- PI Controller Tuning (1500 RPM High-Speed Model) ---
-    constexpr double PI_KP = 1.464;
-    constexpr double PI_KI = 46.848;
+    // --- GAIN SCHEDULING (Bisection Fluid Mapping) ---
+    struct GainTier {
+        double rpm_threshold; // Upper RPM limit for this tier
+        double Kp;
+        double Ki;
+    };
+    
+    constexpr std::array<GainTier, 4> PI_SCHEDULE = {{
+        {600.0,  1.5387, 40.3388},  // Low speed (0 to 600 RPM)
+        {1100.0, 1.5195, 41.8610},  // Mid speed (601 to 1100 RPM)
+        {1600.0, 1.4901, 37.8287},  // Mid-High (1101 to 1600 RPM)
+        {2500.0, 1.4740, 40.1298}   // High speed (1601 to 2500 RPM)
+    }};
 
     // --- Execution Pacing Matrix ---
     constexpr int RPM_SAMPLE_WINDOW_US = 10000;
