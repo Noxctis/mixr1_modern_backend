@@ -1,6 +1,6 @@
 /**
- * step_response_high_speed.cpp
- * Purpose: Captures a 70% to 80% PWM step response at 100Hz with SCHED_FIFO priority using the AMT102-V.
+ * step_response_bisection.cpp
+ * Purpose: Interactive Step Response Logger for Bisection Mapping under fluid load.
  */
 #include <iostream>
 #include <fstream>
@@ -10,20 +10,21 @@
 #include <thread>
 #include <pthread.h>
 #include <atomic>
+#include <string>
 
 // --- Hardware Pins ---
-constexpr unsigned int PIN_ENC_A = 23;
-constexpr unsigned int PIN_ENC_B = 24;
-constexpr unsigned int PIN_ENC_X = 22; // Index Pulse Pin
+constexpr unsigned int PIN_ENC_A = 24; // Ensure these match your actual wiring
+constexpr unsigned int PIN_ENC_B = 23;
+constexpr unsigned int PIN_ENC_X = 22; 
 constexpr unsigned int PIN_PWM = 13;
 constexpr unsigned int PIN_EN = 15;
 constexpr unsigned int PIN_INA = 17;
 constexpr unsigned int PIN_INB = 27;
 
 // --- System Configuration ---
-constexpr double ENCODER_CPR = 192.0; // 48 PPR * 4 edges
+constexpr double ENCODER_CPR = 192.0; 
 constexpr int PWM_FREQ = 20000;
-constexpr int LOOP_DELAY_US = 10000; // 100Hz
+constexpr int LOOP_DELAY_US = 10000; // strictly 100Hz
 
 // ==========================================
 // AMT102 ENCODER MODULE
@@ -96,6 +97,33 @@ public:
 // MAIN EXECUTOR
 // ==========================================
 int main() {
+    std::cout << "======================================\n";
+    std::cout << " MIXR-1 BISECTION STEP TEST GENERATOR \n";
+    std::cout << "======================================\n";
+    std::cout << "1. Test 1 (0% to 10% PWM) - Stiction/Low Speed\n";
+    std::cout << "2. Test 2 (15% to 25% PWM) - Bisect Low\n";
+    std::cout << "3. Test 3 (35% to 45% PWM) - Midpoint\n";
+    std::cout << "4. Test 4 (55% to 65% PWM) - Bisect High\n";
+    std::cout << "5. Test 5 (70% to 80% PWM) - Nominal Max\n";
+    std::cout << "Select test (1-5): ";
+    
+    int choice;
+    std::cin >> choice;
+
+    int base_pct = 0, step_pct = 0;
+    if (choice == 1) { base_pct = 0; step_pct = 10; }
+    else if (choice == 2) { base_pct = 15; step_pct = 25; }
+    else if (choice == 3) { base_pct = 35; step_pct = 45; }
+    else if (choice == 4) { base_pct = 55; step_pct = 65; }
+    else if (choice == 5) { base_pct = 70; step_pct = 80; }
+    else { std::cerr << "Invalid choice. Exiting.\n"; return 1; }
+
+    int baseline_pwm = (base_pct * 4095) / 100;
+    int step_pwm = (step_pct * 4095) / 100;
+    
+    std::string filename = "step_response_" + std::to_string(base_pct) + "_" + std::to_string(step_pct) + ".csv";
+
+    // Elevate to Real-Time priority
     sched_param sch;
     int policy;
     pthread_getschedparam(pthread_self(), &policy, &sch);
@@ -114,17 +142,16 @@ int main() {
     set_mode(pi, PIN_INB, PI_OUTPUT); gpio_write(pi, PIN_INB, 0);
     set_mode(pi, PIN_PWM, PI_ALT0);
 
-    std::ofstream log_file("step_response_data.csv");
+    std::ofstream log_file(filename);
     log_file << "Time_s,Raw_RPM,Revolutions\n";
 
-    std::cout << "[SYSTEM] Spinning up to 70% PWM baseline...\n";
-    int baseline_pwm = 2866; // 70% of 4095
-    hardware_PWM(pi, PIN_PWM, PWM_FREQ, (baseline_pwm * 1000000LL) / 4095);
+    std::cout << "\n[SYSTEM] Spinning up to " << base_pct << "% PWM baseline...\n";
+    hardware_PWM(pi, PIN_PWM, PWM_FREQ, (static_cast<long long>(baseline_pwm) * 1000000LL) / 4095LL);
     
-    // Wait 3 seconds for the physical motor to completely stabilize
+    // Wait for fluid dynamics to stabilize
     usleep(3000000); 
 
-    std::cout << "[SYSTEM] Recording 1-second baseline at 70% PWM...\n";
+    std::cout << "[SYSTEM] Recording 1-second baseline...\n";
 
     auto absolute_start = std::chrono::steady_clock::now();
     auto next_wake = absolute_start;
@@ -140,7 +167,8 @@ int main() {
         long long delta_ticks = current_count - last_count;
         last_count = current_count;
 
-        double rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * 6000.0;
+        // Multiply by -1 if motor spins physically opposite to encoder phase
+        double rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * 6000.0 * -1;
         
         log_file << elapsed.count() << "," << rpm << "," << encoder.get_revolutions() << "\n";
 
@@ -148,9 +176,8 @@ int main() {
         std::this_thread::sleep_until(next_wake);
     }
 
-    std::cout << "[SYSTEM] Triggering 80% PWM Step for 3 seconds...\n";
-    int step_pwm = 3276; // 80% of 4095
-    hardware_PWM(pi, PIN_PWM, PWM_FREQ, (step_pwm * 1000000LL) / 4095);
+    std::cout << "[SYSTEM] Triggering " << step_pct << "% PWM Step for 3 seconds...\n";
+    hardware_PWM(pi, PIN_PWM, PWM_FREQ, (static_cast<long long>(step_pwm) * 1000000LL) / 4095LL);
 
     // 3-Second Step
     while (true) {
@@ -162,7 +189,7 @@ int main() {
         long long delta_ticks = current_count - last_count;
         last_count = current_count;
 
-        double rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * 6000.0;
+        double rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * 6000.0 * -1;
         
         log_file << elapsed.count() << "," << rpm << "," << encoder.get_revolutions() << "\n";
 
@@ -175,6 +202,6 @@ int main() {
     log_file.close();
     pigpio_stop(pi);
 
-    std::cout << "[SYSTEM] Done. Data saved to 'step_response_data.csv'\n";
+    std::cout << "[SYSTEM] Done. Data saved to '" << filename << "'\n";
     return 0;
 }
