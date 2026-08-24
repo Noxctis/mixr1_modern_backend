@@ -1,4 +1,4 @@
-target_rpm,pi_steady_state_error_rpm,open_loop_nearest_error_rpm,improvement_percent
+target_rpm,pi_steady_state_error_rpm,open_loop_interpolated_error_rpm,improvement_percent
 0.0,nan,nan,nan
 250.0,2.6963103250000007,19.790392097500018,86.37565990751338
 500.0,3.7700190300000007,5.332800113749954,29.305075202809856

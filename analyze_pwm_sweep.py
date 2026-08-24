@@ -153,13 +153,28 @@ def fit_open_loop(summary):
 
 
 def baseline_error(target, open_loop_summary):
-    if target <= 0.0 or not open_loop_summary:
+    points = [(row["pwm_percent"], row["clean_mean_raw_rpm"])
+              for row in open_loop_summary
+              if math.isfinite(row["clean_mean_raw_rpm"])]
+    points.sort()
+    if target <= 0.0 or len(points) < 2:
         return float("nan")
-    return min(abs(target - row["clean_mean_raw_rpm"]) for row in open_loop_summary)
+    requested_pwm = min(100.0, max(0.0, target / 2500.0 * 100.0))
+    if requested_pwm <= points[0][0]:
+        predicted = points[0][1]
+    elif requested_pwm >= points[-1][0]:
+        predicted = points[-1][1]
+    else:
+        for (lower_pwm, lower_rpm), (upper_pwm, upper_rpm) in zip(points, points[1:]):
+            if lower_pwm <= requested_pwm <= upper_pwm:
+                fraction = (requested_pwm - lower_pwm) / (upper_pwm - lower_pwm)
+                predicted = lower_rpm + fraction * (upper_rpm - lower_rpm)
+                break
+    return abs(target - predicted)
 
 
 def write_controller_comparison(path, pi_summary, open_loop_summary):
-    fields = ["target_rpm", "pi_steady_state_error_rpm", "open_loop_nearest_error_rpm",
+    fields = ["target_rpm", "pi_steady_state_error_rpm", "open_loop_interpolated_error_rpm",
               "improvement_percent"]
     with open(path, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -172,8 +187,61 @@ def write_controller_comparison(path, pi_summary, open_loop_summary):
                            if math.isfinite(open_error) and open_error > 0.0 else float("nan"))
             writer.writerow({"target_rpm": target,
                              "pi_steady_state_error_rpm": pi_error,
-                             "open_loop_nearest_error_rpm": open_error,
+                             "open_loop_interpolated_error_rpm": open_error,
                              "improvement_percent": improvement})
+
+
+def write_report(path, datasets, settling_band, late_limit_us):
+    open_loop = next((summary for name, (_, summary) in datasets.items()
+                      if "Open loop" in name), None)
+    pi_datasets = [(name, summary) for name, (_, summary) in datasets.items() if "PI" in name]
+    with open(path, "w") as handle:
+        handle.write("# Motor and PI Controller Test Report\n\n")
+        handle.write("## Experiment interpretation\n\n")
+        handle.write("The open-loop test applies fixed PWM levels from 0% to 100%. "
+                     "The PI test applies matching RPM setpoints. Open-loop data is the plant baseline; "
+                     "PI data measures feedback tracking. FIFO and non-FIFO runs are scheduling comparisons.\n\n")
+        handle.write("## Metrics\n\n")
+        handle.write(f"Steady-state statistics discard the first configured settling interval and remove timing outliers above {late_limit_us:.0f} us. "
+                     f"Transient settling uses filtered RPM and a +/-{settling_band * 100:.0f}% target band.\n\n")
+        handle.write("- Mean RPM: average measured raw RPM.\n")
+        handle.write("- Standard deviation: spread of raw RPM, including timing effects.\n")
+        handle.write("- Clean standard deviation: raw RPM spread after timing outliers are excluded.\n")
+        handle.write("- Loop jitter: standard deviation of the measured loop period.\n")
+        handle.write("- Maximum lateness: largest delay after the absolute scheduled wake time.\n")
+        handle.write("- Timing outliers: samples whose lateness exceeds the configured threshold.\n")
+        handle.write("- Rise time: time for filtered RPM to move from 10% to 90% of target.\n")
+        handle.write("- Settling time: time after which filtered RPM remains within the settling band.\n")
+        handle.write("- Overshoot: maximum amount above target, expressed as a percentage.\n")
+        handle.write("- Steady-state error: mean absolute target error in the final fifth of a step.\n\n")
+        handle.write("## First-order model\n\n")
+        handle.write("Use the identified motor model:\n\n")
+        handle.write("$$G(s)=\\frac{K}{s+a}=\\frac{K_m}{\\tau s+1},\\qquad \\tau=\\frac{1}{a}$$\n\n")
+        handle.write("Here, K (or K_m) is the input-to-speed gain, a is the response rate, and tau is the time constant. "
+                     "Estimate these from the raw open-loop step responses, not from the PI response. The PWM sweep supplies the steady-state input/output relationship; "
+                     "the time trace supplies the dynamic time constant.\n\n")
+        handle.write("## IMC and gain selection\n\n")
+        handle.write("For a first-order-plus-delay model, an IMC PI rule is:\n\n")
+        handle.write("$$G(s)=\\frac{K_m e^{-\\theta s}}{\\tau s+1},\\qquad "
+                     "K_p=\\frac{\\tau}{K_m(\\lambda+\\theta)},\\qquad K_i=\\frac{K_p}{\\tau}$$\n\n")
+        handle.write("lambda sets the desired closed-loop speed: smaller lambda is faster but less robust, while larger lambda is slower but more robust. "
+                     "The current C++ implementation uses the measured gain schedule in config.hpp and linearly interpolates Kp and Ki by target RPM. "
+                     "Describe these as IMC-derived only if the scheduled values were calculated with the IMC equations above; otherwise describe them as experimentally tuned gain-schedule values.\n\n")
+        handle.write("## Controller improvement\n\n")
+        handle.write("PI improvement is evaluated against the open-loop RPM predicted at the corresponding PWM percentage:\n\n")
+        handle.write("$$Improvement=100\\left(1-\\frac{e_{PI}}{e_{open}}\\right)\\%$$\n\n")
+        handle.write("where e is mean absolute steady-state RPM error. Use the generated comparison CSV and PI performance plot. "
+                     "Report water-loaded and no-load tests separately because water turbulence changes the plant.\n\n")
+        if open_loop:
+            model = fit_open_loop(open_loop)
+            if model:
+                handle.write(f"The current open-loop settled data has an approximate linear steady-state fit of RPM = {model[0]:.2f} * PWM(%) + {model[1]:.2f}. "
+                             "This is a static characterization, not the dynamic first-order model by itself.\n\n")
+        for name, summary in pi_datasets:
+            finite_errors = [row["steady_state_error_rpm"] for row in summary
+                             if math.isfinite(row["steady_state_error_rpm"])]
+            if finite_errors:
+                handle.write(f"{name}: mean PI steady-state error across valid targets = {mean(finite_errors):.2f} RPM.\n")
 
 
 def make_plots(datasets, output_dir):
@@ -190,7 +258,7 @@ def make_plots(datasets, output_dir):
         spread = [row["clean_std_raw_rpm"] for row in summary]
         axis.errorbar(pwm, rpm, yerr=spread, marker="o", capsize=3,
                       label=name, color=colors.get(name))
-    axis.set(title="Raw RPM characterization", xlabel="PWM (%)", ylabel="RPM")
+    axis.set(title="RPM characterization and PI tracking", xlabel="PWM (%) or target RPM", ylabel="RPM")
     axis.grid(alpha=0.3)
     axis.legend()
     figure.tight_layout()
@@ -199,7 +267,7 @@ def make_plots(datasets, output_dir):
 
     figure, axis = plt.subplots(figsize=(10, 6))
     for name, (_, summary) in datasets.items():
-        pwm = [row["pwm_percent"] for row in summary]
+        pwm = [row["target_rpm"] if "PI" in name else row["pwm_percent"] for row in summary]
         jitter = [row["std_period_us"] for row in summary]
         axis.plot(pwm, jitter, marker="o", label=name, color=colors.get(name))
     axis.set(title="Loop-period jitter", xlabel="PWM (%)", ylabel="Period standard deviation (us)")
@@ -295,6 +363,10 @@ def main():
                 comparison_path = os.path.join(args.output, name.lower().replace(" ", "_") + "_comparison.csv")
                 write_controller_comparison(comparison_path, summary, open_loop)
                 print(f"Controller comparison saved to {comparison_path}")
+
+    report_path = os.path.join(args.output, "controller_analysis_report.md")
+    write_report(report_path, datasets, args.settling_band, args.late_limit_us)
+    print(f"Report saved to {report_path}")
 
     make_plots(datasets, args.output)
     if plt is not None:
