@@ -155,21 +155,26 @@ def fit_open_loop(summary):
 def baseline_error(target, open_loop_summary):
     points = [(row["pwm_percent"], row["clean_mean_raw_rpm"])
               for row in open_loop_summary
-              if math.isfinite(row["clean_mean_raw_rpm"])]
+              if math.isfinite(row["pwm_percent"])
+              and math.isfinite(row["clean_mean_raw_rpm"])]
     points.sort()
     if target <= 0.0 or len(points) < 2:
         return float("nan")
+
     requested_pwm = min(100.0, max(0.0, target / 2500.0 * 100.0))
     if requested_pwm <= points[0][0]:
         predicted = points[0][1]
     elif requested_pwm >= points[-1][0]:
         predicted = points[-1][1]
     else:
+        # Keep a fallback so static analyzers know this is always assigned.
+        predicted = points[-1][1]
         for (lower_pwm, lower_rpm), (upper_pwm, upper_rpm) in zip(points, points[1:]):
             if lower_pwm <= requested_pwm <= upper_pwm:
                 fraction = (requested_pwm - lower_pwm) / (upper_pwm - lower_pwm)
                 predicted = lower_rpm + fraction * (upper_rpm - lower_rpm)
                 break
+
     return abs(target - predicted)
 
 
