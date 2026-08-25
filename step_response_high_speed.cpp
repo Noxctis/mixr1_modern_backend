@@ -98,7 +98,7 @@ public:
 // ==========================================
 int main() {
     std::cout << "======================================\n";
-    std::cout << " MIXR-1 BISECTION STEP TEST GENERATOR \n";
+    std::cout << " MIXR-1 HIGH-SPEED STEP RESPONSE TEST \n";
     std::cout << "======================================\n";
     std::cout << "1. Test 1 (0% to 10% PWM) - Stiction/Low Speed\n";
     std::cout << "2. Test 2 (15% to 25% PWM) - Bisect Low\n";
@@ -106,9 +106,17 @@ int main() {
     std::cout << "4. Test 4 (55% to 65% PWM) - Bisect High\n";
     std::cout << "5. Test 5 (70% to 80% PWM) - Nominal Max\n";
     std::cout << "Select test (1-5): ";
-    
+
     int choice;
     std::cin >> choice;
+
+    std::cout << "Select controller mode (1=OpenLoop, 2=PI): ";
+    int controller_choice;
+    std::cin >> controller_choice;
+
+    std::cout << "Enable FIFO scheduling? (1=yes, 0=no): ";
+    int fifo_choice;
+    std::cin >> fifo_choice;
 
     int base_pct = 0, step_pct = 0;
     if (choice == 1) { base_pct = 0; step_pct = 10; }
@@ -118,18 +126,23 @@ int main() {
     else if (choice == 5) { base_pct = 70; step_pct = 80; }
     else { std::cerr << "Invalid choice. Exiting.\n"; return 1; }
 
+    const std::string controller_mode = (controller_choice == 2) ? "PI" : "OpenLoop";
+    const bool fifo_enabled = (fifo_choice == 1);
+    const std::string fifo_label = fifo_enabled ? "FIFO" : "NoFIFO";
+    const std::string run_label = controller_mode + "_" + fifo_label;
+
     int baseline_pwm = (base_pct * 4095) / 100;
     int step_pwm = (step_pct * 4095) / 100;
-    
-    std::string filename = "step_response_" + std::to_string(base_pct) + "_" + std::to_string(step_pct) + ".csv";
+    std::string filename = "step_response_high_speed_" + run_label + "_" + std::to_string(base_pct) + "_" + std::to_string(step_pct) + ".csv";
 
-    // Elevate to Real-Time priority
-    sched_param sch;
-    int policy;
-    pthread_getschedparam(pthread_self(), &policy, &sch);
-    sch.sched_priority = 90;
-    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch) != 0) {
-        std::cerr << "[WARNING] Failed to set SCHED_FIFO. Must run with sudo.\n";
+    if (fifo_enabled) {
+        sched_param sch;
+        int policy;
+        pthread_getschedparam(pthread_self(), &policy, &sch);
+        sch.sched_priority = 90;
+        if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch) != 0) {
+            std::cerr << "[WARNING] Failed to set SCHED_FIFO. Must run with sudo.\n";
+        }
     }
 
     int pi = pigpio_start(nullptr, nullptr);
@@ -143,34 +156,36 @@ int main() {
     set_mode(pi, PIN_PWM, PI_ALT0);
 
     std::ofstream log_file(filename);
-    log_file << "Time_s,Raw_RPM,Revolutions\n";
+    log_file << "Run_Label," << run_label << "\n";
+    log_file << "Controller_Mode," << controller_mode << "\n";
+    log_file << "FIFO_Enabled," << (fifo_enabled ? 1 : 0) << "\n";
+    log_file << "Baseline_PWM_pct," << base_pct << "\n";
+    log_file << "Step_PWM_pct," << step_pct << "\n";
+    log_file << "Time_s,LoopPeriod_ms,Raw_RPM,Filtered_RPM,Target_RPM,Command_PWM,Revolutions,Controller_Mode,FIFO_Enabled,Baseline_PWM_pct,Step_PWM_pct,Run_Label\n";
 
     std::cout << "\n[SYSTEM] Spinning up to " << base_pct << "% PWM baseline...\n";
     hardware_PWM(pi, PIN_PWM, PWM_FREQ, (static_cast<long long>(baseline_pwm) * 1000000LL) / 4095LL);
-    
-    // Wait for fluid dynamics to stabilize
-    usleep(3000000); 
-
-    std::cout << "[SYSTEM] Recording 1-second baseline...\n";
 
     auto absolute_start = std::chrono::steady_clock::now();
     auto next_wake = absolute_start;
+    auto last_loop_time = absolute_start;
     long long last_count = encoder.get_count();
 
-    // 1-Second Baseline
     while (true) {
         auto current_time = std::chrono::steady_clock::now();
         std::chrono::duration<double> elapsed = current_time - absolute_start;
-        if (elapsed.count() >= 1.0) break; 
+        if (elapsed.count() >= 1.0) break;
+
+        auto loop_now = std::chrono::steady_clock::now();
+        double loop_period_ms = std::chrono::duration<double, std::milli>(loop_now - last_loop_time).count();
+        last_loop_time = loop_now;
 
         long long current_count = encoder.get_count();
         long long delta_ticks = current_count - last_count;
         last_count = current_count;
 
-        // Multiply by -1 if motor spins physically opposite to encoder phase
-        double rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * 6000.0 * -1;
-        
-        log_file << elapsed.count() << "," << rpm << "," << encoder.get_revolutions() << "\n";
+        double rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * 6000.0 * -1.0;
+        log_file << elapsed.count() << "," << loop_period_ms << "," << rpm << "," << rpm << ",0.0," << baseline_pwm << "," << encoder.get_revolutions() << "," << controller_mode << "," << (fifo_enabled ? 1 : 0) << "," << base_pct << "," << step_pct << "," << run_label << "\n";
 
         next_wake += std::chrono::microseconds(LOOP_DELAY_US);
         std::this_thread::sleep_until(next_wake);
@@ -179,19 +194,21 @@ int main() {
     std::cout << "[SYSTEM] Triggering " << step_pct << "% PWM Step for 3 seconds...\n";
     hardware_PWM(pi, PIN_PWM, PWM_FREQ, (static_cast<long long>(step_pwm) * 1000000LL) / 4095LL);
 
-    // 3-Second Step
     while (true) {
         auto current_time = std::chrono::steady_clock::now();
         std::chrono::duration<double> elapsed = current_time - absolute_start;
-        if (elapsed.count() > 4.0) break; 
+        if (elapsed.count() > 4.0) break;
+
+        auto loop_now = std::chrono::steady_clock::now();
+        double loop_period_ms = std::chrono::duration<double, std::milli>(loop_now - last_loop_time).count();
+        last_loop_time = loop_now;
 
         long long current_count = encoder.get_count();
         long long delta_ticks = current_count - last_count;
         last_count = current_count;
 
-        double rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * 6000.0 * -1;
-        
-        log_file << elapsed.count() << "," << rpm << "," << encoder.get_revolutions() << "\n";
+        double rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * 6000.0 * -1.0;
+        log_file << elapsed.count() << "," << loop_period_ms << "," << rpm << "," << rpm << ",0.0," << step_pwm << "," << encoder.get_revolutions() << "," << controller_mode << "," << (fifo_enabled ? 1 : 0) << "," << base_pct << "," << step_pct << "," << run_label << "\n";
 
         next_wake += std::chrono::microseconds(LOOP_DELAY_US);
         std::this_thread::sleep_until(next_wake);
