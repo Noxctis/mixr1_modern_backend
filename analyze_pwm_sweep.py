@@ -447,7 +447,7 @@ def make_plots(datasets, output_dir):
                 continue
             x_values = [row["target_rpm"] for row in summary]
             y_values = [row[key] for row in summary]
-            axis.plot(x_values, y_values, marker="o", label=name, color=colors.get(name))
+            axis.plot(x_values, y_values, marker="o", label=name, color=color_map.get(name))
         axis.set_title(title)
         axis.grid(alpha=0.3)
     axes[0, 0].legend()

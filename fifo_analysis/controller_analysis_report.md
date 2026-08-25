@@ -19,6 +19,11 @@ Steady-state statistics discard the first configured settling interval and remov
 - Overshoot: maximum amount above target, expressed as a percentage.
 - Steady-state error: mean absolute target error in the final fifth of a step.
 
+### Jitter metrics
+
+- Open loop FIFO: mean RMS jitter = 8.97 us, mean P95 abs jitter = 18.34 us, mean P99 abs jitter = 34.07 us, mean CV = 0.09%
+- PI FIFO: mean RMS jitter = 5.58 us, mean P95 abs jitter = 10.93 us, mean P99 abs jitter = 22.91 us, mean CV = 0.06%
+
 ## First-order model
 
 Use the identified motor model:
@@ -37,7 +42,7 @@ lambda sets the desired closed-loop speed: smaller lambda is faster but less rob
 
 ## Controller improvement
 
-PI improvement is evaluated against the nearest measured open-loop operating point:
+PI improvement is evaluated against the open-loop RPM predicted at the corresponding PWM percentage:
 
 $$Improvement=100\left(1-\frac{e_{PI}}{e_{open}}\right)\%$$
 
