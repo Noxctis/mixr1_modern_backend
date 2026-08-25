@@ -15,13 +15,38 @@ except ImportError:
 
 
 def read_csv(path):
+    """Read CSV rows into a list of dicts.
+
+    Preserve known string metadata fields (intended_mode, intended_fifo, fifo_active, condition)
+    and convert numeric fields to float when possible. Skip rows missing essential numeric
+    fields such as elapsed_s or step_index.
+    """
     rows = []
+    string_fields = {"intended_mode", "intended_fifo", "fifo_active", "condition"}
     with open(path, newline="") as handle:
-        for row in csv.DictReader(handle):
+        reader = csv.DictReader(handle)
+        for raw_row in reader:
+            parsed = {}
+            # Convert numeric-looking fields and preserve known string metadata
+            for key, value in raw_row.items():
+                if value is None:
+                    parsed[key] = float("nan")
+                    continue
+                val = value.strip()
+                if key in string_fields:
+                    parsed[key] = val
+                else:
+                    try:
+                        parsed[key] = float(val) if val != "" else float("nan")
+                    except (TypeError, ValueError):
+                        parsed[key] = float("nan")
+            # Require essential numeric fields to be present and finite
             try:
-                rows.append({key: float(value) for key, value in row.items()})
-            except (TypeError, ValueError):
+                if math.isnan(parsed.get("elapsed_s", float("nan"))) or math.isnan(parsed.get("step_index", float("nan"))):
+                    continue
+            except Exception:
                 continue
+            rows.append(parsed)
     return rows
 
 
@@ -97,6 +122,28 @@ def summarize(rows, settle_seconds, late_limit_us, settling_band):
         clean_raw = [row["raw_rpm"] for row in clean]
         response = response_metrics(full_group, settling_band)
         target = mean([row["target_rpm"] for row in full_group])
+
+        # period statistics
+        mean_period = mean(periods)
+        # population RMS jitter (root-mean-square of deviations from mean)
+        if periods:
+            rms_jitter = math.sqrt(sum((p - mean_period) ** 2 for p in periods) / len(periods))
+            abs_devs = [abs(p - mean_period) for p in periods]
+            p95_abs = percentile(abs_devs, 0.95)
+            p99_abs = percentile(abs_devs, 0.99)
+            cv_period = (rms_jitter / mean_period) if mean_period != 0.0 else float("nan")
+        else:
+            rms_jitter = float("nan")
+            p95_abs = float("nan")
+            p99_abs = float("nan")
+            cv_period = float("nan")
+
+        # capture canonical metadata if present
+        meta_mode = group[0].get("intended_mode") if group and group[0].get("intended_mode") else ""
+        meta_fifo = group[0].get("intended_fifo") if group and group[0].get("intended_fifo") else ""
+        meta_fifo_active = group[0].get("fifo_active") if group and group[0].get("fifo_active") else ""
+        meta_condition = group[0].get("condition") if group and group[0].get("condition") else ""
+
         summary.append({
             "pwm_percent": pwm,
             "step_index": step,
@@ -109,12 +156,20 @@ def summarize(rows, settle_seconds, late_limit_us, settling_band):
             "clean_samples": len(clean),
             "clean_mean_raw_rpm": mean(clean_raw),
             "clean_std_raw_rpm": stddev(clean_raw),
-            "mean_period_us": mean(periods),
+            "mean_period_us": mean_period,
             "std_period_us": stddev(periods),
+            "rms_period_us": rms_jitter,
+            "p95_abs_jitter_us": p95_abs,
+            "p99_abs_jitter_us": p99_abs,
+            "cv_period": cv_period,
             "p95_late_us": percentile(late, 0.95),
             "max_late_us": max(late) if late else float("nan"),
             "late_cycles": sum(value > 0.0 for value in late),
             "timing_outliers": sum(value > late_limit_us for value in late),
+            "intended_mode": meta_mode,
+            "intended_fifo": meta_fifo,
+            "fifo_active": meta_fifo_active,
+            "condition": meta_condition,
             **response,
         })
     return grouped, summary
@@ -178,22 +233,68 @@ def baseline_error(target, open_loop_summary):
     return abs(target - predicted)
 
 
+def _interpolate_metric_by_pwm(target, open_loop_summary, metric_name):
+    """Interpolate a metric from open-loop summary rows based on the equivalent PWM for a target RPM."""
+    points = [(row["pwm_percent"], row.get(metric_name, float("nan")))
+              for row in open_loop_summary
+              if math.isfinite(row.get("pwm_percent", float("nan"))) and math.isfinite(row.get(metric_name, float("nan")))]
+    points.sort()
+    if not points:
+        return float("nan")
+    requested_pwm = min(100.0, max(0.0, target / 2500.0 * 100.0))
+    if requested_pwm <= points[0][0]:
+        return points[0][1]
+    if requested_pwm >= points[-1][0]:
+        return points[-1][1]
+    for (lp, lv), (up, uv) in zip(points, points[1:]):
+        if lp <= requested_pwm <= up:
+            fraction = (requested_pwm - lp) / (up - lp) if up != lp else 0.0
+            return lv + fraction * (uv - lv)
+    return float("nan")
+
+
 def write_controller_comparison(path, pi_summary, open_loop_summary):
     fields = ["target_rpm", "pi_steady_state_error_rpm", "open_loop_interpolated_error_rpm",
-              "improvement_percent"]
+              "improvement_percent",
+              # PI-side jitter metrics (aggregated at this target row)
+              "pi_rms_period_us", "pi_p95_abs_jitter_us", "pi_p99_abs_jitter_us", "pi_cv_period",
+              # Open-loop interpolated jitter metrics for the equivalent PWM
+              "open_rms_period_us", "open_p95_abs_jitter_us", "open_p99_abs_jitter_us", "open_cv_period"]
+
     with open(path, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for row in pi_summary:
             target = row["target_rpm"]
-            pi_error = row["steady_state_error_rpm"]
+            pi_error = row.get("steady_state_error_rpm", float("nan"))
             open_error = baseline_error(target, open_loop_summary)
             improvement = ((open_error - pi_error) / open_error * 100.0
                            if math.isfinite(open_error) and open_error > 0.0 else float("nan"))
+
+            # PI jitter metrics directly from the PI summary row
+            pi_rms = row.get("rms_period_us", float("nan"))
+            pi_p95 = row.get("p95_abs_jitter_us", float("nan"))
+            pi_p99 = row.get("p99_abs_jitter_us", float("nan"))
+            pi_cv = row.get("cv_period", float("nan"))
+
+            # Interpolate equivalent open-loop jitter metrics by PWM
+            open_rms = _interpolate_metric_by_pwm(target, open_loop_summary, "rms_period_us")
+            open_p95 = _interpolate_metric_by_pwm(target, open_loop_summary, "p95_abs_jitter_us")
+            open_p99 = _interpolate_metric_by_pwm(target, open_loop_summary, "p99_abs_jitter_us")
+            open_cv = _interpolate_metric_by_pwm(target, open_loop_summary, "cv_period")
+
             writer.writerow({"target_rpm": target,
                              "pi_steady_state_error_rpm": pi_error,
                              "open_loop_interpolated_error_rpm": open_error,
-                             "improvement_percent": improvement})
+                             "improvement_percent": improvement,
+                             "pi_rms_period_us": pi_rms,
+                             "pi_p95_abs_jitter_us": pi_p95,
+                             "pi_p99_abs_jitter_us": pi_p99,
+                             "pi_cv_period": pi_cv,
+                             "open_rms_period_us": open_rms,
+                             "open_p95_abs_jitter_us": open_p95,
+                             "open_p99_abs_jitter_us": open_p99,
+                             "open_cv_period": open_cv})
 
 
 def write_report(path, datasets, settling_band, late_limit_us):
@@ -219,6 +320,26 @@ def write_report(path, datasets, settling_band, late_limit_us):
         handle.write("- Settling time: time after which filtered RPM remains within the settling band.\n")
         handle.write("- Overshoot: maximum amount above target, expressed as a percentage.\n")
         handle.write("- Steady-state error: mean absolute target error in the final fifth of a step.\n\n")
+
+        # Jitter metrics summary across each dataset (averaged over PWM/step points)
+        handle.write("### Jitter metrics\n\n")
+        for name, (_, summary) in datasets.items():
+            # prefer canonical condition label when present
+            display_name = summary[0].get("condition") if summary and summary[0].get("condition") else name
+            display_label = display_name.replace("_", " ")
+            rms_vals = [row.get("rms_period_us", float("nan")) for row in summary if math.isfinite(row.get("rms_period_us", float("nan")))]
+            p95_vals = [row.get("p95_abs_jitter_us", float("nan")) for row in summary if math.isfinite(row.get("p95_abs_jitter_us", float("nan")))]
+            p99_vals = [row.get("p99_abs_jitter_us", float("nan")) for row in summary if math.isfinite(row.get("p99_abs_jitter_us", float("nan")))]
+            cv_vals = [row.get("cv_period", float("nan")) for row in summary if math.isfinite(row.get("cv_period", float("nan")))]
+            if rms_vals:
+                mean_rms = mean(rms_vals)
+                mean_p95 = mean(p95_vals) if p95_vals else float("nan")
+                mean_p99 = mean(p99_vals) if p99_vals else float("nan")
+                mean_cv = mean(cv_vals) if cv_vals else float("nan")
+                handle.write(f"- {display_label}: mean RMS jitter = {mean_rms:.2f} us, mean P95 abs jitter = {mean_p95:.2f} us, mean P99 abs jitter = {mean_p99:.2f} us, mean CV = {mean_cv * 100.0:.2f}%\n")
+            else:
+                handle.write(f"- {display_label}: jitter metrics not available.\n")
+        handle.write("\n")
         handle.write("## First-order model\n\n")
         handle.write("Use the identified motor model:\n\n")
         handle.write("$$G(s)=\\frac{K}{s+a}=\\frac{K_m}{\\tau s+1},\\qquad \\tau=\\frac{1}{a}$$\n\n")
@@ -254,15 +375,25 @@ def make_plots(datasets, output_dir):
         print("Plots skipped: matplotlib is not installed.", file=sys.stderr)
         return
 
-    colors = {"PI FIFO": "tab:blue", "PI no FIFO": "tab:orange",
-              "Open loop FIFO": "tab:green", "Open loop no FIFO": "tab:red"}
+    # Normalize display names to use spaces for legend and map to colors
+    color_map = {"PI FIFO": "tab:blue", "PI no FIFO": "tab:orange",
+                 "Open loop FIFO": "tab:green", "Open loop no FIFO": "tab:red",
+                 "PI_FIFO": "tab:blue", "PI_noFIFO": "tab:orange",
+                 "OpenLoop_FIFO": "tab:green", "OpenLoop_NoFIFO": "tab:red"}
+
     figure, axis = plt.subplots(figsize=(10, 6))
     for name, (_, summary) in datasets.items():
-        pwm = [row["target_rpm"] if "PI" in name else row["pwm_percent"] for row in summary]
+        # Use condition metadata if present in summary rows; otherwise infer from dataset name
+        if summary and summary[0].get("condition"):
+            display_name = summary[0].get("condition")
+        else:
+            display_name = name
+        display_label = display_name.replace("_", " ")
+        pwm = [row["target_rpm"] if ("PI" in display_label or display_label.startswith("PI")) else row["pwm_percent"] for row in summary]
         rpm = [row["clean_mean_raw_rpm"] for row in summary]
         spread = [row["clean_std_raw_rpm"] for row in summary]
         axis.errorbar(pwm, rpm, yerr=spread, marker="o", capsize=3,
-                      label=name, color=colors.get(name))
+                      label=display_label, color=color_map.get(display_name, None))
     axis.set(title="RPM characterization and PI tracking", xlabel="PWM (%) or target RPM", ylabel="RPM")
     axis.grid(alpha=0.3)
     axis.legend()
@@ -272,9 +403,14 @@ def make_plots(datasets, output_dir):
 
     figure, axis = plt.subplots(figsize=(10, 6))
     for name, (_, summary) in datasets.items():
-        pwm = [row["target_rpm"] if "PI" in name else row["pwm_percent"] for row in summary]
-        jitter = [row["std_period_us"] for row in summary]
-        axis.plot(pwm, jitter, marker="o", label=name, color=colors.get(name))
+        if summary and summary[0].get("condition"):
+            display_name = summary[0].get("condition")
+        else:
+            display_name = name
+        display_label = display_name.replace("_", " ")
+        pwm = [row["target_rpm"] if ("PI" in display_label or display_label.startswith("PI")) else row["pwm_percent"] for row in summary]
+        jitter = [row.get("std_period_us", float("nan")) for row in summary]
+        axis.plot(pwm, jitter, marker="o", label=display_label, color=color_map.get(display_name, None))
     axis.set(title="Loop-period jitter", xlabel="PWM (%)", ylabel="Period standard deviation (us)")
     axis.grid(alpha=0.3)
     axis.legend()
@@ -322,6 +458,45 @@ def make_plots(datasets, output_dir):
     figure.savefig(os.path.join(output_dir, "pi_performance.png"), dpi=160)
     plt.close(figure)
 
+    # Jitter comparison summary (per-dataset mean P95/P99 and RMS)
+    jitter_summary_path = os.path.join(output_dir, "jitter_summary.csv")
+    jitter_rows = []
+    for name, (_, summary) in datasets.items():
+        if not summary:
+            continue
+        display_name = summary[0].get("condition") if summary and summary[0].get("condition") else name
+        mean_rms = mean([row.get("rms_period_us", float("nan")) for row in summary if math.isfinite(row.get("rms_period_us", float("nan")))])
+        mean_p95 = mean([row.get("p95_abs_jitter_us", float("nan")) for row in summary if math.isfinite(row.get("p95_abs_jitter_us", float("nan")))])
+        mean_p99 = mean([row.get("p99_abs_jitter_us", float("nan")) for row in summary if math.isfinite(row.get("p99_abs_jitter_us", float("nan")))])
+        mean_cv = mean([row.get("cv_period", float("nan")) for row in summary if math.isfinite(row.get("cv_period", float("nan")))])
+        jitter_rows.append({"condition": display_name, "mean_rms_us": mean_rms, "mean_p95_abs_us": mean_p95, "mean_p99_abs_us": mean_p99, "mean_cv": mean_cv})
+
+    # write CSV summary
+    if jitter_rows:
+        with open(jitter_summary_path, "w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(jitter_rows[0]))
+            writer.writeheader()
+            writer.writerows(jitter_rows)
+
+        # create P95/P99 bar chart
+        conditions = [r["condition"] for r in jitter_rows]
+        p95_vals = [r["mean_p95_abs_us"] for r in jitter_rows]
+        p99_vals = [r["mean_p99_abs_us"] for r in jitter_rows]
+        x = list(range(len(conditions)))
+        width = 0.35
+        figure, ax = plt.subplots(figsize=(10, 6))
+        ax.bar([i - width/2 for i in x], p95_vals, width, label='P95 abs jitter (us)')
+        ax.bar([i + width/2 for i in x], p99_vals, width, label='P99 abs jitter (us)')
+        ax.set_xticks(x)
+        ax.set_xticklabels([c.replace("_", " ") for c in conditions], rotation=45, ha='right')
+        ax.set_ylabel('Absolute jitter (us)')
+        ax.set_title('P95 / P99 absolute jitter by condition')
+        ax.grid(axis='y', alpha=0.3)
+        ax.legend()
+        figure.tight_layout()
+        figure.savefig(os.path.join(output_dir, "jitter_comparison.png"), dpi=160)
+        plt.close(figure)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -343,7 +518,8 @@ def main():
         if not rows:
             print(f"No valid rows in {path}", file=sys.stderr)
             continue
-        name = label(path)
+        # Prefer condition label from CSV metadata when present, otherwise fall back to filename
+        name = rows[0].get("condition") if rows and rows[0].get("condition") else label(path)
         if name in datasets:
             name = os.path.basename(path)
         groups, summary = summarize(rows, args.settle, args.late_limit_us, args.settling_band)

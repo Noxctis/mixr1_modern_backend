@@ -103,7 +103,14 @@ int run_test(const TestOptions& options) {
         return 1;
     }
 
-    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm\n";
+    // canonical runtime metadata for downstream analysis
+    const std::string intended_mode = options.use_pi ? "PI" : "OpenLoop";
+    const std::string intended_fifo = options.fifo ? "FIFO" : "NoFIFO";
+    const std::string condition = intended_mode + "_" + intended_fifo;
+
+    // CSV header includes explicit metadata fields: intended mode, intended FIFO flag,
+    // whether FIFO was actually activated (fifo_active), and a combined condition label.
+    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition\n";
     kinematics.reset(encoder.get_count());
     controller.reset();
     int current_pwm = options.use_pi ? 0 : options.fixed_pwm;
@@ -160,7 +167,8 @@ int run_test(const TestOptions& options) {
         log << std::fixed << std::setprecision(6) << elapsed << ',' << step_index << ',' << pwm_percent << ','
             << period << ',' << lateness << ','
             << state.exact_rpm << ',' << state.ema_filtered_rpm << ',' << current_target << ','
-            << current_pwm << ',' << error << '\n';
+            << current_pwm << ',' << error << ','
+            << intended_mode << ',' << intended_fifo << ',' << (fifo_active ? "true" : "false") << ',' << condition << '\n';
         periods_us.push_back(period);
         late_us.push_back(lateness);
         rpm_samples.push_back(state.exact_rpm);

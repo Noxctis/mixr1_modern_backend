@@ -161,7 +161,9 @@ int main() {
     log_file << "FIFO_Enabled," << (fifo_enabled ? 1 : 0) << "\n";
     log_file << "Baseline_PWM_pct," << base_pct << "\n";
     log_file << "Step_PWM_pct," << step_pct << "\n";
-    log_file << "Time_s,LoopPeriod_ms,Raw_RPM,Filtered_RPM,Target_RPM,Command_PWM,Revolutions,Controller_Mode,FIFO_Enabled,Baseline_PWM_pct,Step_PWM_pct,Run_Label\n";
+    // Primary (legacy) header retained for backward compatibility. Added canonical metadata columns
+    // for downstream analysis: intended_mode,intended_fifo,fifo_active,condition
+    log_file << "Time_s,LoopPeriod_ms,Raw_RPM,Filtered_RPM,Target_RPM,Command_PWM,Revolutions,Controller_Mode,FIFO_Enabled,Baseline_PWM_pct,Step_PWM_pct,Run_Label,intended_mode,intended_fifo,fifo_active,condition\n";
 
     std::cout << "\n[SYSTEM] Spinning up to " << base_pct << "% PWM baseline...\n";
     hardware_PWM(pi, PIN_PWM, PWM_FREQ, (static_cast<long long>(baseline_pwm) * 1000000LL) / 4095LL);
@@ -185,7 +187,8 @@ int main() {
         last_count = current_count;
 
         double rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * 6000.0 * -1.0;
-        log_file << elapsed.count() << "," << loop_period_ms << "," << rpm << "," << rpm << ",0.0," << baseline_pwm << "," << encoder.get_revolutions() << "," << controller_mode << "," << (fifo_enabled ? 1 : 0) << "," << base_pct << "," << step_pct << "," << run_label << "\n";
+        // Append canonical metadata columns: intended_mode, intended_fifo, fifo_active, condition
+        log_file << elapsed.count() << "," << loop_period_ms << "," << rpm << "," << rpm << ",0.0," << baseline_pwm << "," << encoder.get_revolutions() << "," << controller_mode << "," << (fifo_enabled ? 1 : 0) << "," << base_pct << "," << step_pct << "," << run_label << "," << controller_mode << "," << fifo_label << "," << (fifo_enabled ? "true" : "false") << "," << run_label << "\n";
 
         next_wake += std::chrono::microseconds(LOOP_DELAY_US);
         std::this_thread::sleep_until(next_wake);
@@ -208,7 +211,8 @@ int main() {
         last_count = current_count;
 
         double rpm = (static_cast<double>(delta_ticks) / ENCODER_CPR) * 6000.0 * -1.0;
-        log_file << elapsed.count() << "," << loop_period_ms << "," << rpm << "," << rpm << ",0.0," << step_pwm << "," << encoder.get_revolutions() << "," << controller_mode << "," << (fifo_enabled ? 1 : 0) << "," << base_pct << "," << step_pct << "," << run_label << "\n";
+        // Append canonical metadata columns: intended_mode, intended_fifo, fifo_active, condition
+        log_file << elapsed.count() << "," << loop_period_ms << "," << rpm << "," << rpm << ",0.0," << step_pwm << "," << encoder.get_revolutions() << "," << controller_mode << "," << (fifo_enabled ? 1 : 0) << "," << base_pct << "," << step_pct << "," << run_label << "," << controller_mode << "," << fifo_label << "," << (fifo_enabled ? "true" : "false") << "," << run_label << "\n";
 
         next_wake += std::chrono::microseconds(LOOP_DELAY_US);
         std::this_thread::sleep_until(next_wake);
