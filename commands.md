@@ -1,21 +1,21 @@
 # Without FIFO (normal scheduler)
 sudo ./mixr1_daemon --test --sweep --no-fifo --no-pi \
-  --duration=10 --target=0 --csv=raw_no_fifo.csv
+  --duration=10 --target=0 --csv=raw_no_fifo.csv //did this
 
 # With FIFO (real-time scheduler)
 sudo ./mixr1_daemon --test --sweep --fifo --no-pi \
-  --duration=10 --target=0 --csv=raw_fifo.csv
+  --duration=10 --target=0 --csv=raw_fifo.csv //did this
 
 
 
 
 # Without FIFO (normal scheduler)
 sudo ./mixr1_daemon --test --sweep --no-fifo --pi \
-  --target=2500 --duration=10 --csv=pi_no_fifo.csv
+  --target=2500 --duration=10 --csv=pi_no_fifo.csv //did this
 
 # With FIFO (real-time scheduler)
 sudo ./mixr1_daemon --test --sweep --fifo --pi \
-  --target=2500 --duration=10 --csv=pi_fifo.csv
+  --target=2500 --duration=10 --csv=pi_fifo.csv //did this
 
 
 
