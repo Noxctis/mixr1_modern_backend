@@ -321,6 +321,14 @@ def write_report(path, datasets, settling_band, late_limit_us):
         handle.write("- Overshoot: maximum amount above target, expressed as a percentage.\n")
         handle.write("- Steady-state error: mean absolute target error in the final fifth of a step.\n\n")
 
+        handle.write("## Thesis interpretation of the plots\n\n")
+        handle.write("The RPM-versus-PWM plot characterizes the motor plant in open loop. Each point is the mean measured raw speed after the settling interval; error bars show the standard deviation of the measured speed. A higher standard deviation means that the motor speed is less repeatable at that operating point.\n\n")
+        handle.write("The RPM-variability plot separates motor-speed variation from execution timing. Clean RPM standard deviation excludes samples whose measured lateness exceeds the configured timing-outlier limit, while the full standard deviation retains them. Comparing both values shows whether unusual speed readings are associated with scheduler interruptions.\n\n")
+        handle.write("The loop-period plot shows the actual time between successive control-loop executions. Its reference value is the configured loop delay, 10,000 us in this experiment. The loop-period jitter plot shows the spread of those measured periods: RMS jitter is the root-mean-square deviation from the mean period, and P95/P99 show the deviation below which 95%/99% of samples fall. Lower values indicate more deterministic scheduling.\n\n")
+        handle.write("The lateness plot measures delay relative to the absolute scheduled wake time, rather than speed error. P95 lateness describes typical worst-case behavior, whereas maximum lateness exposes rare severe interruptions. The timing-outlier-rate plot reports the percentage of samples with lateness above the configured threshold.\n\n")
+        handle.write("The RPM histograms show the frequency distribution of individual speed samples at each PWM level. A narrow distribution indicates repeatable speed; a broad or multi-peaked distribution indicates variation, changing load, encoder quantization, or transient effects. Histograms should be interpreted together with the numerical standard deviation and timing plots, not as a replacement for them.\n\n")
+        handle.write("For the scheduling comparison, the principal thesis measures are RMS or standard-deviation jitter, P95 and P99 jitter, maximum lateness, timing-outlier rate, and RPM standard deviation. Report FIFO and non-FIFO using identical PWM levels, duration, settling time, and outlier threshold. Timing jitter describes when the controller runs; RPM variation describes how the motor responds. These are related but distinct outcomes.\n\n")
+
         # Jitter metrics summary across each dataset (averaged over PWM/step points)
         handle.write("### Jitter metrics\n\n")
         for name, (_, summary) in datasets.items():
@@ -409,13 +417,74 @@ def make_plots(datasets, output_dir):
             display_name = name
         display_label = display_name.replace("_", " ")
         pwm = [row["target_rpm"] if ("PI" in display_label or display_label.startswith("PI")) else row["pwm_percent"] for row in summary]
-        jitter = [row.get("std_period_us", float("nan")) for row in summary]
-        axis.plot(pwm, jitter, marker="o", label=display_label, color=color_map.get(display_name, None))
-    axis.set(title="Loop-period jitter", xlabel="PWM (%)", ylabel="Period standard deviation (us)")
+        rms = [row.get("rms_period_us", float("nan")) for row in summary]
+        p95 = [row.get("p95_abs_jitter_us", float("nan")) for row in summary]
+        p99 = [row.get("p99_abs_jitter_us", float("nan")) for row in summary]
+        color = color_map.get(display_name, None)
+        axis.plot(pwm, rms, marker="o", label=f"{display_label} RMS", color=color)
+        axis.plot(pwm, p95, marker="^", linestyle="--", label=f"{display_label} P95", color=color, alpha=0.75)
+        axis.plot(pwm, p99, marker="s", linestyle=":", label=f"{display_label} P99", color=color, alpha=0.75)
+    axis.set(title="Loop-period jitter percentiles", xlabel="PWM (%) or target RPM", ylabel="Absolute period deviation (us)")
     axis.grid(alpha=0.3)
     axis.legend()
     figure.tight_layout()
     figure.savefig(os.path.join(output_dir, "jitter_vs_pwm.png"), dpi=160)
+    plt.close(figure)
+
+    figure, axis = plt.subplots(figsize=(10, 6))
+    for name, (_, summary) in datasets.items():
+        display_name = summary[0].get("condition") if summary and summary[0].get("condition") else name
+        display_label = display_name.replace("_", " ")
+        pwm = [row["pwm_percent"] for row in summary]
+        axis.plot(pwm, [row["std_raw_rpm"] for row in summary], marker="o", label=f"{display_label} full")
+        axis.plot(pwm, [row["clean_std_raw_rpm"] for row in summary], marker="^", linestyle="--", label=f"{display_label} clean")
+    axis.set(title="Motor-speed variability", xlabel="PWM (%)", ylabel="RPM standard deviation")
+    axis.grid(alpha=0.3)
+    axis.legend()
+    figure.tight_layout()
+    figure.savefig(os.path.join(output_dir, "rpm_variability_vs_pwm.png"), dpi=160)
+    plt.close(figure)
+
+    figure, axis = plt.subplots(figsize=(10, 6))
+    for name, (_, summary) in datasets.items():
+        display_name = summary[0].get("condition") if summary and summary[0].get("condition") else name
+        display_label = display_name.replace("_", " ")
+        pwm = [row["pwm_percent"] for row in summary]
+        axis.plot(pwm, [row["mean_period_us"] for row in summary], marker="o", label=display_label)
+    axis.axhline(10000.0, color="black", linestyle="--", linewidth=1, label="10,000 us target")
+    axis.set(title="Measured control-loop period", xlabel="PWM (%)", ylabel="Mean loop period (us)")
+    axis.grid(alpha=0.3)
+    axis.legend()
+    figure.tight_layout()
+    figure.savefig(os.path.join(output_dir, "loop_period_vs_pwm.png"), dpi=160)
+    plt.close(figure)
+
+    figure, axis = plt.subplots(figsize=(10, 6))
+    for name, (_, summary) in datasets.items():
+        display_name = summary[0].get("condition") if summary and summary[0].get("condition") else name
+        display_label = display_name.replace("_", " ")
+        pwm = [row["pwm_percent"] for row in summary]
+        axis.plot(pwm, [row["p95_late_us"] for row in summary], marker="o", label=f"{display_label} P95")
+        axis.plot(pwm, [row["max_late_us"] for row in summary], marker="s", linestyle=":", label=f"{display_label} maximum")
+    axis.set(title="Control-loop lateness", xlabel="PWM (%)", ylabel="Lateness (us)")
+    axis.grid(alpha=0.3)
+    axis.legend()
+    figure.tight_layout()
+    figure.savefig(os.path.join(output_dir, "lateness_vs_pwm.png"), dpi=160)
+    plt.close(figure)
+
+    figure, axis = plt.subplots(figsize=(10, 6))
+    for name, (_, summary) in datasets.items():
+        display_name = summary[0].get("condition") if summary and summary[0].get("condition") else name
+        display_label = display_name.replace("_", " ")
+        pwm = [row["pwm_percent"] for row in summary]
+        rates = [100.0 * row["timing_outliers"] / row["samples"] if row["samples"] else float("nan") for row in summary]
+        axis.plot(pwm, rates, marker="o", label=display_label)
+    axis.set(title="Timing-outlier rate", xlabel="PWM (%)", ylabel="Samples above lateness limit (%)")
+    axis.grid(alpha=0.3)
+    axis.legend()
+    figure.tight_layout()
+    figure.savefig(os.path.join(output_dir, "timing_outlier_rate_vs_pwm.png"), dpi=160)
     plt.close(figure)
 
     for pwm in sorted({pwm for _, (groups, _) in datasets.items() for pwm in groups}):
@@ -450,7 +519,8 @@ def make_plots(datasets, output_dir):
             axis.plot(x_values, y_values, marker="o", label=name, color=color_map.get(name))
         axis.set_title(title)
         axis.grid(alpha=0.3)
-    axes[0, 0].legend()
+    if any("PI" in name for name in datasets):
+        axes[0, 0].legend()
     axes[1, 0].set_xlabel("Target RPM")
     axes[1, 1].set_xlabel("Target RPM")
     figure.suptitle("PI controller performance")
