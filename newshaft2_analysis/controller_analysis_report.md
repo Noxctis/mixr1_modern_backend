@@ -22,7 +22,7 @@ Steady-state statistics discard the first configured settling interval and remov
 ### Jitter metrics
 
 - Open loop FIFO: mean RMS jitter = 5.43 us, mean P95 abs jitter = 10.30 us, mean P99 abs jitter = 18.79 us, mean CV = 0.05%
-- newshaft2 raw fifo.csv: mean RMS jitter = 5.43 us, mean P95 abs jitter = 10.30 us, mean P99 abs jitter = 18.79 us, mean CV = 0.05%
+- PI FIFO: mean RMS jitter = 5.21 us, mean P95 abs jitter = 10.76 us, mean P99 abs jitter = 18.00 us, mean CV = 0.05%
 
 ## First-order model
 
@@ -50,3 +50,4 @@ where e is mean absolute steady-state RPM error. Use the generated comparison CS
 
 The current open-loop settled data has an approximate linear steady-state fit of RPM = 25.17 * PWM(%) + -28.64. This is a static characterization, not the dynamic first-order model by itself.
 
+PI FIFO: mean PI steady-state error across valid targets = 12.95 RPM.
