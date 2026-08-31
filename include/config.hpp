@@ -5,8 +5,8 @@
 
 namespace Config {
     // --- Kinematics & DSP ---
-    constexpr double ENCODER_CPR = 192;               
-    constexpr double RPM_ALPHA = 0.15;                   
+    constexpr double ENCODER_CPR = 2048;               
+    constexpr double RPM_ALPHA = 0.15;
     constexpr size_t SMA_WINDOW_SIZE = 8;                
     constexpr int DEADBAND_TICK_THRESHOLD = 2;           
 
