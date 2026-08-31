@@ -63,7 +63,8 @@ bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long
     return send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0;
 }
 
-bool TelemetryServer::receive_command(double& target_rpm) {
+// Updated to parse both RPM (Closed Loop) and PWM (Open Loop) commands[cite: 5]
+bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, bool& pi_mode) {
     if (client_socket < 0) return false;
     bool updated = false;
     char chunk[1024];
@@ -83,11 +84,21 @@ bool TelemetryServer::receive_command(double& target_rpm) {
         std::string line = rx_buffer.substr(0, pos);
         rx_buffer.erase(0, pos + 1);
 
-        size_t cmd_pos = line.find("CMD:RPM,");
-        if (cmd_pos != std::string::npos) {
+        size_t rpm_pos = line.find("CMD:RPM,");
+        size_t pwm_pos = line.find("CMD:PWM,");
+
+        if (rpm_pos != std::string::npos) {
             try {
-                target_rpm = std::stod(line.substr(cmd_pos + 8));
-                std::cout << "[MIXR-1] RPM target received from dashboard: " << target_rpm << '\n';
+                target_rpm = std::stod(line.substr(rpm_pos + 8));
+                pi_mode = true;
+                std::cout << "[MIXR-1] Closed-Loop PI Target: " << target_rpm << " RPM\n";
+                updated = true;
+            } catch (...) {}
+        } else if (pwm_pos != std::string::npos) {
+            try {
+                target_pwm_pct = std::stoi(line.substr(pwm_pos + 8));
+                pi_mode = false;
+                std::cout << "[MIXR-1] Open-Loop PWM Target: " << target_pwm_pct << "%\n";
                 updated = true;
             } catch (...) {}
         }

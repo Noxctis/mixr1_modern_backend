@@ -77,8 +77,8 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             return false;
         }
     }
-        return options.duration_sec > 0.0 && options.target_rpm >= 0.0 &&
-            options.fixed_pwm >= 0 && options.fixed_pwm <= 4095;
+    return options.duration_sec > 0.0 && options.target_rpm >= 0.0 &&
+           options.fixed_pwm >= 0 && options.fixed_pwm <= 4095;
 }
 
 int run_test(const TestOptions& options) {
@@ -103,13 +103,10 @@ int run_test(const TestOptions& options) {
         return 1;
     }
 
-    // canonical runtime metadata for downstream analysis
     const std::string intended_mode = options.use_pi ? "PI" : "OpenLoop";
     const std::string intended_fifo = options.fifo ? "FIFO" : "NoFIFO";
     const std::string condition = intended_mode + "_" + intended_fifo;
 
-    // CSV header includes explicit metadata fields: intended mode, intended FIFO flag,
-    // whether FIFO was actually activated (fifo_active), and a combined condition label.
     log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition\n";
     kinematics.reset(encoder.get_count());
     controller.reset();
@@ -245,17 +242,19 @@ int main(int argc, char** argv) {
             std::unique_ptr<MotorController> motor = nullptr;
             std::unique_ptr<LCD1602> lcd = nullptr;
             
-            // Controller now loads parameters safely from the configuration file
             PIController pi_control;
             
             bool mode3_notified = false;
-            double target_rpm = 0.0;
-            int current_pwm = 0;
-            int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL; 
             
+            // New state variables to support live dashboard switching[cite: 3]
+            double target_rpm = 0.0;
+            int target_pwm_pct = 0;
+            bool pi_mode = true; 
+            int current_pwm = 0;
+            
+            int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL; 
             int network_prescaler = 0;
             int lcd_prescaler = 0;
-            
             bool simulink_is_active = false;
 
             auto next_wake = std::chrono::steady_clock::now();
@@ -309,8 +308,9 @@ int main(int argc, char** argv) {
                     }
                 }
 
-                if (network->receive_command(target_rpm)) {
-                    if (target_rpm <= 0.0) pi_control.reset();
+                // Capture either RPM or PWM targets via updated network interface[cite: 3]
+                if (network->receive_command(target_rpm, target_pwm_pct, pi_mode)) {
+                    if (pi_mode && target_rpm <= 0.0) pi_control.reset();
                 }
 
                 bool update_net = (++network_prescaler >= Config::NETWORK_PRESCALER);
@@ -322,12 +322,19 @@ int main(int argc, char** argv) {
                 auto state = kinematics.process(encoder->get_count(), current_pwm, update_lcd);
 
                 if (motor && !simulink_is_active) {
-                    if (target_rpm > 0.0) {
-                        current_pwm = pi_control.compute(target_rpm, state.exact_rpm, dt.count());
-                        motor->set_pwm(current_pwm);
+                    if (pi_mode) {
+                        // Closed-loop PI control active
+                        if (target_rpm > 0.0) {
+                            current_pwm = pi_control.compute(target_rpm, state.exact_rpm, dt.count());
+                            motor->set_pwm(current_pwm);
+                        } else {
+                            current_pwm = 0;
+                            motor->set_pwm(0);
+                        }
                     } else {
-                        current_pwm = 0;
-                        motor->set_pwm(0);
+                        // Open-loop raw PWM injection
+                        current_pwm = (target_pwm_pct * 4095) / 100;
+                        motor->set_pwm(current_pwm);
                     }
                 }
 
