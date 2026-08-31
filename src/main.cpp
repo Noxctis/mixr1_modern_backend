@@ -44,6 +44,12 @@ struct TestOptions {
 };
 
 bool set_fifo_priority() {
+    // Lock test execution and background threads to CPU Core 3
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(3, &cpuset); 
+    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+
     sched_param sch{};
     sch.sched_priority = 90;
     return pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch) == 0;
@@ -212,6 +218,14 @@ int main(int argc, char** argv) {
         return run_test(options);
     }
 
+    // Lock daemon execution and background threads to CPU Core 3
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(3, &cpuset);
+    if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
+        std::cerr << "[WARNING] Failed to set CPU affinity to Core 3.\n";
+    }
+
     sched_param sch;
     int policy;
     pthread_getschedparam(pthread_self(), &policy, &sch);
@@ -246,7 +260,6 @@ int main(int argc, char** argv) {
             
             bool mode3_notified = false;
             
-            // New state variables to support live dashboard switching[cite: 3]
             double target_rpm = 0.0;
             int target_pwm_pct = 0;
             bool pi_mode = true; 
@@ -308,7 +321,6 @@ int main(int argc, char** argv) {
                     }
                 }
 
-                // Capture either RPM or PWM targets via updated network interface[cite: 3]
                 if (network->receive_command(target_rpm, target_pwm_pct, pi_mode)) {
                     if (pi_mode && target_rpm <= 0.0) pi_control.reset();
                 }
@@ -323,7 +335,6 @@ int main(int argc, char** argv) {
 
                 if (motor && !simulink_is_active) {
                     if (pi_mode) {
-                        // Closed-loop PI control active
                         if (target_rpm > 0.0) {
                             current_pwm = pi_control.compute(target_rpm, state.exact_rpm, dt.count());
                             motor->set_pwm(current_pwm);
@@ -332,7 +343,6 @@ int main(int argc, char** argv) {
                             motor->set_pwm(0);
                         }
                     } else {
-                        // Open-loop raw PWM injection
                         current_pwm = (target_pwm_pct * 4095) / 100;
                         motor->set_pwm(current_pwm);
                     }
