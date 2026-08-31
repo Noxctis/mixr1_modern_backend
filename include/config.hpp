@@ -5,7 +5,7 @@
 
 namespace Config {
     // --- Kinematics & DSP ---
-    constexpr double ENCODER_CPR = 2048;               
+    constexpr double ENCODER_CPR = 800.0;               
     constexpr double RPM_ALPHA = 0.15;
     constexpr size_t SMA_WINDOW_SIZE = 8;                
     constexpr int DEADBAND_TICK_THRESHOLD = 2;           
@@ -26,7 +26,7 @@ namespace Config {
     }};
 
     // --- Execution Pacing Matrix ---
-    constexpr int RPM_SAMPLE_WINDOW_US = 10000;
+    constexpr int RPM_SAMPLE_WINDOW_US = 20000;
     constexpr int LOOP_DELAY_US = 10000; 
     constexpr int NETWORK_PRESCALER = 1;
     constexpr int LCD_PRESCALER = 10;
