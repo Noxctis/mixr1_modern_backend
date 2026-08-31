@@ -98,7 +98,11 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
             try {
                 target_pwm_pct = std::stoi(line.substr(pwm_pos + 8));
                 pi_mode = false;
-                std::cout << "[MIXR-1] Open-Loop PWM Target: " << target_pwm_pct << "%\n";
+                
+                int scaled_pwm = (target_pwm_pct * 4095) / 100;
+                std::cout << "[MIXR-1] Open-Loop PWM Target: " << target_pwm_pct 
+                        << "% (Scaled: " << scaled_pwm << "/4095)\n";
+                        
                 updated = true;
             } catch (...) {}
         }
