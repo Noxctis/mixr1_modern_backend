@@ -63,7 +63,6 @@ bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long
     return send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0;
 }
 
-// Updated to parse both RPM (Closed Loop) and PWM (Open Loop) commands[cite: 5]
 bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, bool& pi_mode) {
     if (client_socket < 0) return false;
     bool updated = false;
@@ -86,6 +85,8 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
 
         size_t rpm_pos = line.find("CMD:RPM,");
         size_t pwm_pos = line.find("CMD:PWM,");
+        size_t cpr_pos = line.find("CMD:CPR,");
+        size_t win_pos = line.find("CMD:WIN,");
 
         if (rpm_pos != std::string::npos) {
             try {
@@ -98,12 +99,20 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
             try {
                 target_pwm_pct = std::stoi(line.substr(pwm_pos + 8));
                 pi_mode = false;
-                
                 int scaled_pwm = (target_pwm_pct * 4095) / 100;
                 std::cout << "[MIXR-1] Open-Loop PWM Target: " << target_pwm_pct 
-                        << "% (Scaled: " << scaled_pwm << "/4095)\n";
-                        
+                          << "% (Scaled: " << scaled_pwm << "/4095)\n";
                 updated = true;
+            } catch (...) {}
+        } else if (cpr_pos != std::string::npos) {
+            try {
+                Config::ENCODER_CPR = std::stod(line.substr(cpr_pos + 8));
+                std::cout << "[MIXR-1] Live Config Update: ENCODER_CPR = " << Config::ENCODER_CPR << '\n';
+            } catch (...) {}
+        } else if (win_pos != std::string::npos) {
+            try {
+                Config::RPM_SAMPLE_WINDOW_US = std::stoi(line.substr(win_pos + 8));
+                std::cout << "[MIXR-1] Live Config Update: RPM_SAMPLE_WINDOW_US = " << Config::RPM_SAMPLE_WINDOW_US << "us\n";
             } catch (...) {}
         }
     }

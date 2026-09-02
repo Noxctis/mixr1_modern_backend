@@ -44,7 +44,6 @@ struct TestOptions {
 };
 
 bool set_fifo_priority() {
-    // Lock test execution and background threads to CPU Core 3
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(3, &cpuset); 
@@ -59,6 +58,9 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
     for (int i = 1; i < argc; ++i) {
         std::string argument = argv[i];
         if (argument == "--test") continue;
+        if (argument.rfind("--cpr=", 0) == 0) continue;    
+        if (argument.rfind("--window=", 0) == 0) continue; 
+        
         if (argument == "--sweep") {
             options.sweep = true;
         } else if (argument == "--fixed") {
@@ -206,10 +208,21 @@ int run_test(const TestOptions& options) {
 }
 
 int main(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg.rfind("--cpr=", 0) == 0) {
+            Config::ENCODER_CPR = std::stod(arg.substr(6));
+            std::cout << "[CONFIG] Set ENCODER_CPR to " << Config::ENCODER_CPR << '\n';
+        } else if (arg.rfind("--window=", 0) == 0) {
+            Config::RPM_SAMPLE_WINDOW_US = std::stoi(arg.substr(9));
+            std::cout << "[CONFIG] Set RPM_SAMPLE_WINDOW_US to " << Config::RPM_SAMPLE_WINDOW_US << "us\n";
+        }
+    }
+
     if (argc > 1 && std::string(argv[1]) == "--test") {
         TestOptions options;
         if (!parse_test_options(argc, argv, options)) {
-            std::cerr << "Usage: ./mixr1_daemon --test [--sweep|--fixed] [--fifo|--no-fifo] [--pi|--no-pi] "
+            std::cerr << "Usage: ./mixr1_daemon --test [--cpr=X] [--window=Y] [--sweep|--fixed] [--fifo|--no-fifo] [--pi|--no-pi] "
                          "[--target=RPM] [--pwm=0..4095] [--duration=SECONDS] [--csv=FILE]\n";
             return 2;
         }
@@ -218,7 +231,6 @@ int main(int argc, char** argv) {
         return run_test(options);
     }
 
-    // Lock daemon execution and background threads to CPU Core 3
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(3, &cpuset);
