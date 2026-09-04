@@ -116,8 +116,11 @@ int run_test(const TestOptions& options) {
     const std::string condition = intended_mode + "_" + intended_fifo;
 
     log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition\n";
-    kinematics.reset(encoder.get_count());
+    
+    // UPDATED: Pass the snapshot to initialize the CET tracker
+    kinematics.reset(encoder.get_snapshot());
     controller.reset();
+    
     int current_pwm = options.use_pi ? 0 : options.fixed_pwm;
     double current_target = options.use_pi ? 0.0 : options.target_rpm;
     motor.set_pwm(current_pwm);
@@ -160,7 +163,9 @@ int run_test(const TestOptions& options) {
         const double period = std::chrono::duration<double, std::micro>(now - previous_tick).count();
         const double lateness = std::max(0.0, std::chrono::duration<double, std::micro>(now - next_wake).count());
         previous_tick = now;
-        auto state = kinematics.process(encoder.get_count(), current_pwm, false);
+        
+        // UPDATED: Process kinematics using the snapshot
+        auto state = kinematics.process(encoder.get_snapshot(), current_pwm, false);
 
         if (options.use_pi) {
             current_pwm = controller.compute(current_target, state.exact_rpm, period / 1000000.0);
@@ -325,7 +330,8 @@ int main(int argc, char** argv) {
                         motor = std::make_unique<MotorController>(pi);
                         lcd = std::make_unique<LCD1602>(pi);
                         
-                        kinematics.reset(encoder->get_count());
+                        // UPDATED: Pass snapshot
+                        kinematics.reset(encoder->get_snapshot());
                         last_time = std::chrono::steady_clock::now();
                         next_wake = last_time;
                     } else {
@@ -343,7 +349,8 @@ int main(int argc, char** argv) {
                 bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
                 if (update_lcd) lcd_prescaler = 0;
 
-                auto state = kinematics.process(encoder->get_count(), current_pwm, update_lcd);
+                // UPDATED: Process kinematics using snapshot
+                auto state = kinematics.process(encoder->get_snapshot(), current_pwm, update_lcd);
 
                 if (motor && !simulink_is_active) {
                     if (pi_mode) {

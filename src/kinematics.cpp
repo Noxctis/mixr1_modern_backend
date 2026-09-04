@@ -1,60 +1,44 @@
 // src/kinematics.cpp
 #include "kinematics.hpp"
-#include <cmath>
+#include "config.hpp"
 
-void KinematicsEngine::reset(long long current_encoder_count) {
-    last_time = std::chrono::high_resolution_clock::now();
-    last_count = current_encoder_count;
-    sample_time = std::chrono::duration<double>::zero();
-    sample_ticks = 0;
-    last_sampled_rpm = 0.0;
-    ema_rpm = 0.0;
-    sma_sum = 0.0;
-    sma_index = 0;
-    sma_count = 0;
-    sma_history.fill(0.0);
+void KinematicsEngine::reset(EncoderSnapshot initial_snapshot) {
+    prev_snapshot = initial_snapshot;
+    last_pulse_time = std::chrono::steady_clock::now();
+    ema_filtered_rpm = 0.0;
+    last_calculated_rpm = 0.0;
+    first_run = true;
 }
 
-KinematicsEngine::TelemetryState KinematicsEngine::process(long long current_count, int current_pwm, bool update_sma) {
-    TelemetryState state{0.0, 0.0, 0.0};
+KinematicsState KinematicsEngine::process(EncoderSnapshot current_snapshot, int current_pwm, bool update_lcd) {
+    uint32_t delta_tick = current_snapshot.tick - prev_snapshot.tick;
+    long long delta_count = current_snapshot.count - prev_snapshot.count;
+    auto now = std::chrono::steady_clock::now();
 
-    auto current_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> dt_sec = current_time - last_time;
-    last_time = current_time;
-
-    long long delta_ticks = current_count - last_count;
-    last_count = current_count;
-
-    delta_ticks *= Config::ENCODER_DIRECTION;
-    sample_ticks += delta_ticks;
-    sample_time += dt_sec;
-
-    if (sample_time.count() >= static_cast<double>(Config::RPM_SAMPLE_WINDOW_US) / 1000000.0) {
-        if (current_pwm == 0 && std::abs(sample_ticks) <= Config::DEADBAND_TICK_THRESHOLD) {
-            last_sampled_rpm = 0.0; 
-            ema_rpm = 0.0;
-            sma_history.fill(0.0);
-            sma_sum = 0.0;
-        } else {
-            last_sampled_rpm = std::abs((static_cast<double>(sample_ticks) / Config::ENCODER_CPR) * (60.0 / sample_time.count()));
-        }
-        sample_ticks = 0;
-        sample_time = std::chrono::duration<double>::zero();
-    }
-
-    state.exact_rpm = last_sampled_rpm;
-    ema_rpm = (Config::RPM_ALPHA * state.exact_rpm) + ((1.0 - Config::RPM_ALPHA) * ema_rpm);
-    state.ema_filtered_rpm = ema_rpm;
-
-    if (update_sma) {
-        sma_sum -= sma_history[sma_index];
-        sma_history[sma_index] = ema_rpm;
-        sma_sum += sma_history[sma_index];
+    // CET Velocity Calculation (Only executes if actual physical rotation occurred)
+    if (delta_count != 0 && delta_tick != 0) {
+        // Unsigned 32-bit math safely handles pigpio's 71-minute tick wrap-around
+        last_calculated_rpm = (static_cast<double>(delta_count) / Config::ENCODER_CPR) * (60000000.0 / static_cast<double>(delta_tick));
+        last_calculated_rpm *= Config::ENCODER_DIRECTION; 
         
-        sma_index = (sma_index + 1) % Config::SMA_WINDOW_SIZE;
-        if (sma_count < Config::SMA_WINDOW_SIZE) sma_count++;
+        // Update baseline ONLY when movement occurs to solve low-speed quantization
+        prev_snapshot = current_snapshot; 
+        last_pulse_time = now;
+    } else {
+        // Zero-velocity timeout: If the motor stalls, hardware pulses stop arriving.
+        auto ms_since_pulse = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_pulse_time).count();
+        if (ms_since_pulse > 100) { // 100ms without a hardware pulse = 0 RPM
+            last_calculated_rpm = 0.0;
+        }
     }
-    
-    state.sma_ui_rpm = (sma_count == 0) ? 0.0 : (sma_sum / static_cast<double>(sma_count));
-    return state;
+
+    // Apply EMA filter
+    if (first_run) {
+        ema_filtered_rpm = last_calculated_rpm;
+        first_run = false;
+    } else {
+        ema_filtered_rpm = (Config::RPM_ALPHA * last_calculated_rpm) + ((1.0 - Config::RPM_ALPHA) * ema_filtered_rpm);
+    }
+
+    return {last_calculated_rpm, ema_filtered_rpm};
 }

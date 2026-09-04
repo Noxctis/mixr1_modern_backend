@@ -6,7 +6,8 @@ constexpr int AMT102Encoder::QUAD_STATES[16];
 
 void AMT102Encoder::isr_router(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
     if (level > 1) return; 
-    static_cast<AMT102Encoder*>(user)->update_state(gpio, level);
+    // Pass the hardware DMA tick directly into the state machine
+    static_cast<AMT102Encoder*>(user)->update_state(gpio, level, tick);
 }
 
 void AMT102Encoder::isr_index(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
@@ -15,7 +16,7 @@ void AMT102Encoder::isr_index(int pi, unsigned gpio, unsigned level, uint32_t ti
     }
 }
 
-void AMT102Encoder::update_state(unsigned gpio, unsigned level) {
+void AMT102Encoder::update_state(unsigned gpio, unsigned level, uint32_t tick) {
     if (gpio == pin_a) val_a = level;
     else if (gpio == pin_b) val_b = level;
 
@@ -23,6 +24,7 @@ void AMT102Encoder::update_state(unsigned gpio, unsigned level) {
     state |= (val_a << 1) | val_b;
     
     count.fetch_add(QUAD_STATES[state], std::memory_order_relaxed);
+    last_tick.store(tick, std::memory_order_relaxed); // Store exact time of this pulse
 }
 
 AMT102Encoder::AMT102Encoder(int pi, unsigned int a, unsigned int b, unsigned int x) : pi_handle(pi), pin_a(a), pin_b(b), pin_x(x) {
@@ -48,8 +50,12 @@ AMT102Encoder::~AMT102Encoder() {
     callback_cancel(cb_x);
 }
 
-long long AMT102Encoder::get_count() const {
-    return count.load(std::memory_order_relaxed);
+// Atomically return both the count and the exact time it occurred
+EncoderSnapshot AMT102Encoder::get_snapshot() const {
+    return {
+        count.load(std::memory_order_relaxed),
+        last_tick.load(std::memory_order_relaxed)
+    };
 }
 
 long long AMT102Encoder::get_revolutions() const {

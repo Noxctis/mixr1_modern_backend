@@ -3,6 +3,12 @@
 #include <atomic>
 #include <cstdint>
 
+// Pairs the hardware pulse count with its exact microsecond DMA timestamp
+struct EncoderSnapshot {
+    long long count;
+    uint32_t tick;
+};
+
 class AMT102Encoder {
 private:
     int pi_handle;
@@ -10,6 +16,7 @@ private:
     int cb_a, cb_b, cb_x;
     
     std::atomic<long long> count{0};
+    std::atomic<uint32_t> last_tick{0}; // NEW: Stores hardware DMA timestamp
     std::atomic<long long> revolutions{0};
     
     uint8_t state = 0;
@@ -20,11 +27,11 @@ private:
 
     static void isr_router(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user);
     static void isr_index(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user);
-    void update_state(unsigned gpio, unsigned level);
+    void update_state(unsigned gpio, unsigned level, uint32_t tick); // NEW: Accepts hardware tick
 
 public:
     AMT102Encoder(int pi, unsigned int a, unsigned int b, unsigned int x);
     ~AMT102Encoder();
-    [[nodiscard]] long long get_count() const;
+    [[nodiscard]] EncoderSnapshot get_snapshot() const; // NEW: Replaces get_count()
     [[nodiscard]] long long get_revolutions() const;
 };

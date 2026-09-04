@@ -50,7 +50,7 @@ void stopPump() {
 void runPump() {
     digitalWrite(MOTOR_INA, HIGH);
     digitalWrite(MOTOR_INB, LOW);
-    pwmWrite(MOTOR_PWM, 256);
+    pwmWrite(MOTOR_PWM, 1024);
 }
 
 std::string generateSessionID() {
