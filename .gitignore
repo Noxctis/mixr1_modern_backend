@@ -9,6 +9,7 @@ mixr1_daemon
 encoder_gpiod
 mixr1_backend
 stage_and_deploy.sh
+mixr1_water_suite
 
 # --- Generic Executables & Debugger Artifacts ---
 *.exe
