@@ -6,7 +6,6 @@ constexpr int AMT102Encoder::QUAD_STATES[16];
 
 void AMT102Encoder::isr_router(int pi, unsigned gpio, unsigned level, uint32_t tick, void *user) {
     if (level > 1) return; 
-    // Pass the hardware DMA tick directly into the state machine
     static_cast<AMT102Encoder*>(user)->update_state(gpio, level, tick);
 }
 
@@ -24,7 +23,17 @@ void AMT102Encoder::update_state(unsigned gpio, unsigned level, uint32_t tick) {
     state |= (val_a << 1) | val_b;
     
     count.fetch_add(QUAD_STATES[state], std::memory_order_relaxed);
-    last_tick.store(tick, std::memory_order_relaxed); // Store exact time of this pulse
+    last_tick.store(tick, std::memory_order_relaxed); 
+    
+    long long current_count = count.load(std::memory_order_relaxed);
+    
+    // SYNCHRONOUS CET FILTER: 
+    // Only capture timestamps on full physical slot alignments (multiples of 4)
+    // This perfectly eliminates quadrature asymmetry jitter.
+    if (current_count % 4 == 0) {
+        sync_count.store(current_count, std::memory_order_relaxed);
+        sync_tick.store(tick, std::memory_order_relaxed);
+    }
 }
 
 AMT102Encoder::AMT102Encoder(int pi, unsigned int a, unsigned int b, unsigned int x) : pi_handle(pi), pin_a(a), pin_b(b), pin_x(x) {
@@ -50,11 +59,11 @@ AMT102Encoder::~AMT102Encoder() {
     callback_cancel(cb_x);
 }
 
-// Atomically return both the count and the exact time it occurred
-EncoderSnapshot AMT102Encoder::get_snapshot() const {
+// Atomically return the aligned snapshot
+EncoderSnapshot AMT102Encoder::get_sync_snapshot() const {
     return {
-        count.load(std::memory_order_relaxed),
-        last_tick.load(std::memory_order_relaxed)
+        sync_count.load(std::memory_order_relaxed),
+        sync_tick.load(std::memory_order_relaxed)
     };
 }
 

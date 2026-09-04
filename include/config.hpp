@@ -6,7 +6,7 @@
 namespace Config {
     // --- Kinematics & DSP ---
     // Hardware Live Config Variables (Overwritten by Dashboard)
-    inline double ENCODER_CPR = 800.0;               
+    inline double ENCODER_CPR = 1024.0;               
     constexpr double RPM_ALPHA = 0.15;
     constexpr size_t SMA_WINDOW_SIZE = 8;                
     constexpr int DEADBAND_TICK_THRESHOLD = 2;           

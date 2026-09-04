@@ -15,17 +15,15 @@ KinematicsState KinematicsEngine::process(EncoderSnapshot current_snapshot, int 
     long long delta_count = current_snapshot.count - prev_snapshot.count;
     auto now = std::chrono::steady_clock::now();
 
-    // CET Velocity Calculation (Only executes if actual physical rotation occurred)
+    // The snapshot passed here is guaranteed to be a multiple of 4,
+    // so delta_count will always be physically symmetric.
     if (delta_count != 0 && delta_tick != 0) {
-        // Unsigned 32-bit math safely handles pigpio's 71-minute tick wrap-around
         last_calculated_rpm = (static_cast<double>(delta_count) / Config::ENCODER_CPR) * (60000000.0 / static_cast<double>(delta_tick));
         last_calculated_rpm *= Config::ENCODER_DIRECTION; 
         
-        // Update baseline ONLY when movement occurs to solve low-speed quantization
         prev_snapshot = current_snapshot; 
         last_pulse_time = now;
     } else {
-        // Zero-velocity timeout: If the motor stalls, hardware pulses stop arriving.
         auto ms_since_pulse = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_pulse_time).count();
         if (ms_since_pulse > 100) { // 100ms without a hardware pulse = 0 RPM
             last_calculated_rpm = 0.0;
