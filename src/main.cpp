@@ -54,6 +54,7 @@ bool set_fifo_priority() {
     return pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch) == 0;
 }
 
+// ... [parse_test_options function remains exactly the same] ...
 bool parse_test_options(int argc, char** argv, TestOptions& options) {
     for (int i = 1; i < argc; ++i) {
         std::string argument = argv[i];
@@ -90,14 +91,15 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
 }
 
 int run_test(const TestOptions& options) {
+    // FIX: Start pigpio BEFORE elevating thread priority so callback threads stay on Cores 0-2
+    int pi = pigpio_start(nullptr, nullptr);
+    if (pi < 0) return 1;
+
     bool fifo_active = false;
     if (options.fifo) {
         fifo_active = set_fifo_priority();
         if (!fifo_active) std::cerr << "[TEST] SCHED_FIFO request failed; continuing without it.\n";
     }
-
-    int pi = pigpio_start(nullptr, nullptr);
-    if (pi < 0) return 1;
 
     AMT102Encoder encoder(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
     MotorController motor(pi);
@@ -117,7 +119,6 @@ int run_test(const TestOptions& options) {
 
     log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition\n";
     
-    // UPDATED: Feed the aligned snapshot
     kinematics.reset(encoder.get_sync_snapshot());
     controller.reset();
     
@@ -164,7 +165,6 @@ int run_test(const TestOptions& options) {
         const double lateness = std::max(0.0, std::chrono::duration<double, std::micro>(now - next_wake).count());
         previous_tick = now;
         
-        // UPDATED: Process kinematics using the aligned snapshot
         auto state = kinematics.process(encoder.get_sync_snapshot(), current_pwm, false);
 
         if (options.use_pi) {
@@ -187,6 +187,8 @@ int run_test(const TestOptions& options) {
 
     motor.stop_motor();
     pigpio_stop(pi);
+    
+    // ... [Metrics calculation remains exactly the same] ...
     if (periods_us.empty()) return 1;
 
     const auto mean = [](const std::vector<double>& values) {
@@ -227,8 +229,7 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--test") {
         TestOptions options;
         if (!parse_test_options(argc, argv, options)) {
-            std::cerr << "Usage: ./mixr1_daemon --test [--cpr=X] [--window=Y] [--sweep|--fixed] [--fifo|--no-fifo] [--pi|--no-pi] "
-                         "[--target=RPM] [--pwm=0..4095] [--duration=SECONDS] [--csv=FILE]\n";
+            std::cerr << "Usage: ./mixr1_daemon --test ...\n";
             return 2;
         }
         std::signal(SIGINT, signal_handler);
@@ -236,6 +237,15 @@ int main(int argc, char** argv) {
         return run_test(options);
     }
 
+    // FIX: Start pigpio globally before any OS prioritization.
+    // The background socket threads will remain on Cores 0-2 as standard priority.
+    int pi = pigpio_start(nullptr, nullptr);
+    if (pi < 0) {
+        std::cerr << "[CRITICAL] Failed to connect to pigpiod.\n";
+        return 1;
+    }
+
+    // NOW isolate ONLY the main control loop thread to Core 3
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(3, &cpuset);
@@ -248,7 +258,7 @@ int main(int argc, char** argv) {
     pthread_getschedparam(pthread_self(), &policy, &sch);
     sch.sched_priority = 90;
     if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch) != 0) {
-        std::cerr << "[WARNING] Failed to set SCHED_FIFO. Must run with sudo for deterministic PI control.\n";
+        std::cerr << "[WARNING] Failed to set SCHED_FIFO. Must run with sudo.\n";
     }
 
     std::signal(SIGINT, signal_handler);
@@ -268,15 +278,13 @@ int main(int argc, char** argv) {
         if (network->wait_for_client()) {
             std::cout << "[MIXR-1] Dashboard Connected.\n";
             
-            int pi = -1;
-            std::unique_ptr<AMT102Encoder> encoder = nullptr;
-            std::unique_ptr<MotorController> motor = nullptr;
-            std::unique_ptr<LCD1602> lcd = nullptr;
+            // Re-instantiate hardware handlers using the persistent 'pi' connection
+            auto encoder = std::make_unique<AMT102Encoder>(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
+            auto motor = std::make_unique<MotorController>(pi);
+            auto lcd = std::make_unique<LCD1602>(pi);
             
             PIController pi_control;
-            
             bool mode3_notified = false;
-            
             double target_rpm = 0.0;
             int target_pwm_pct = 0;
             bool pi_mode = true; 
@@ -286,6 +294,8 @@ int main(int argc, char** argv) {
             int network_prescaler = 0;
             int lcd_prescaler = 0;
             bool simulink_is_active = false;
+
+            kinematics.reset(encoder->get_sync_snapshot());
 
             auto next_wake = std::chrono::steady_clock::now();
             auto last_time = next_wake;
@@ -311,7 +321,6 @@ int main(int argc, char** argv) {
                         lcd.reset();
                         pi_control.reset(); 
                         target_rpm = 0.0;
-                        if (pi >= 0) { pigpio_stop(pi); pi = -1; } 
                         mode3_notified = true;
                     }
                     if (!network->send_packet(-2.0, -2.0, -2)) break; 
@@ -321,22 +330,11 @@ int main(int argc, char** argv) {
                 if (mode3_notified) {
                     std::cout << "[MIXR-1] MATLAB teardown complete.\n";
                     mode3_notified = false;
-                }
-
-                if (pi < 0) {
-                    pi = pigpio_start(nullptr, nullptr);
-                    if (pi >= 0) {
-                        encoder = std::make_unique<AMT102Encoder>(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
-                        motor = std::make_unique<MotorController>(pi);
-                        lcd = std::make_unique<LCD1602>(pi);
-                        
-                        // UPDATED: Feed the aligned snapshot
-                        kinematics.reset(encoder->get_sync_snapshot());
-                        last_time = std::chrono::steady_clock::now();
-                        next_wake = last_time;
-                    } else {
-                        continue;
-                    }
+                    // Reclaim hardware immediately
+                    encoder = std::make_unique<AMT102Encoder>(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
+                    motor = std::make_unique<MotorController>(pi);
+                    lcd = std::make_unique<LCD1602>(pi);
+                    kinematics.reset(encoder->get_sync_snapshot());
                 }
 
                 if (network->receive_command(target_rpm, target_pwm_pct, pi_mode)) {
@@ -349,7 +347,7 @@ int main(int argc, char** argv) {
                 bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
                 if (update_lcd) lcd_prescaler = 0;
 
-                // UPDATED: Process kinematics using the aligned snapshot
+                // Process kinematics using the aligned snapshot
                 auto state = kinematics.process(encoder->get_sync_snapshot(), current_pwm, update_lcd);
 
                 if (motor && !simulink_is_active) {
@@ -382,14 +380,15 @@ int main(int argc, char** argv) {
                 }
             }
 
+            // Client disconnected, safely destroy pointers without killing the global 'pi' daemon connection
             motor.reset();
             encoder.reset();
             lcd.reset();
-            if (pi >= 0) { pigpio_stop(pi); pi = -1; }
         }
         network->stop_server();
     }
 
+    pigpio_stop(pi);
     std::cout << "\n[MIXR-1] Daemon safely offline.\n";
     return 0;
 }
