@@ -43,20 +43,6 @@ struct TestOptions {
     std::string csv_path = "timing_test.csv";
 };
 
-// Struct to hold high-speed telemetry in RAM
-struct LogEntry {
-    double elapsed;
-    int step_index;
-    int pwm_percent;
-    double period;
-    double lateness;
-    double raw_rpm;
-    double filtered_rpm;
-    double target_rpm;
-    int current_pwm;
-    double error;
-};
-
 bool set_fifo_priority() {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
@@ -68,6 +54,7 @@ bool set_fifo_priority() {
     return pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch) == 0;
 }
 
+// ... [parse_test_options function remains exactly the same] ...
 bool parse_test_options(int argc, char** argv, TestOptions& options) {
     for (int i = 1; i < argc; ++i) {
         std::string argument = argv[i];
@@ -103,7 +90,11 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
            options.fixed_pwm >= 0 && options.fixed_pwm <= 4095;
 }
 
-int run_test(const TestOptions& options, int pi) {
+int run_test(const TestOptions& options) {
+    // FIX: Start pigpio BEFORE elevating thread priority so callback threads stay on Cores 0-2
+    int pi = pigpio_start(nullptr, nullptr);
+    if (pi < 0) return 1;
+
     bool fifo_active = false;
     if (options.fifo) {
         fifo_active = set_fifo_priority();
@@ -114,11 +105,20 @@ int run_test(const TestOptions& options, int pi) {
     MotorController motor(pi);
     KinematicsEngine kinematics;
     PIController controller;
-    
+    std::ofstream log(options.csv_path);
+    if (!log) {
+        std::cerr << "[TEST] Cannot open CSV: " << options.csv_path << '\n';
+        motor.stop_motor();
+        pigpio_stop(pi);
+        return 1;
+    }
+
     const std::string intended_mode = options.use_pi ? "PI" : "OpenLoop";
     const std::string intended_fifo = options.fifo ? "FIFO" : "NoFIFO";
     const std::string condition = intended_mode + "_" + intended_fifo;
 
+    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition\n";
+    
     kinematics.reset(encoder.get_sync_snapshot());
     controller.reset();
     
@@ -126,28 +126,16 @@ int run_test(const TestOptions& options, int pi) {
     double current_target = options.use_pi ? 0.0 : options.target_rpm;
     motor.set_pwm(current_pwm);
 
-    const double total_duration = options.sweep ? options.duration_sec * 11.0 : options.duration_sec;
-    
-    // PRE-ALLOCATE RAM BUFFER: Ensures zero memory reallocations or SD card writes during the test
-    size_t expected_samples = static_cast<size_t>(total_duration * (1000000.0 / Config::LOOP_DELAY_US)) + 500;
-    std::vector<LogEntry> ram_buffer;
-    ram_buffer.reserve(expected_samples);
-    
-    std::vector<double> periods_us;
-    std::vector<double> late_us;
-    std::vector<double> rpm_samples;
-    std::vector<double> errors;
-    periods_us.reserve(expected_samples);
-    late_us.reserve(expected_samples);
-    rpm_samples.reserve(expected_samples);
-    errors.reserve(expected_samples);
-
     const auto start = std::chrono::steady_clock::now();
     auto next_wake = start;
     auto previous_tick = start;
     int step_index = -1;
+    std::vector<double> periods_us;
+    std::vector<double> late_us;
+    std::vector<double> rpm_samples;
+    std::vector<double> errors;
 
-    // HIGH-SPEED REAL-TIME LOOP
+    const double total_duration = options.sweep ? options.duration_sec * 11.0 : options.duration_sec;
     while (run_loop) {
         next_wake += std::chrono::microseconds(Config::LOOP_DELAY_US);
         std::this_thread::sleep_until(next_wake);
@@ -166,10 +154,10 @@ int run_test(const TestOptions& options, int pi) {
                     current_pwm = (step_index * 10 * 4095) / 100;
                     motor.set_pwm(current_pwm);
                 }
-                std::cout << "\r[TEST] " << (options.use_pi ? "RPM target " : "PWM step ")
+                std::cout << "[TEST] " << (options.use_pi ? "RPM target " : "PWM step ")
                           << (options.use_pi ? current_target : step_index * 10)
                           << (options.use_pi ? " RPM" : "%") << " for "
-                          << options.duration_sec << " seconds     " << std::flush;
+                          << options.duration_sec << " seconds\n";
             }
         }
 
@@ -186,43 +174,21 @@ int run_test(const TestOptions& options, int pi) {
 
         const double error = current_target - state.exact_rpm;
         const int pwm_percent = options.sweep ? step_index * 10 : (current_pwm * 100) / 4095;
-        
-        // Push directly to RAM, no disk I/O
-        ram_buffer.push_back({
-            elapsed, step_index, pwm_percent, period, lateness,
-            state.exact_rpm, state.ema_filtered_rpm, current_target,
-            current_pwm, error
-        });
-        
+        log << std::fixed << std::setprecision(6) << elapsed << ',' << step_index << ',' << pwm_percent << ','
+            << period << ',' << lateness << ','
+            << state.exact_rpm << ',' << state.ema_filtered_rpm << ',' << current_target << ','
+            << current_pwm << ',' << error << ','
+            << intended_mode << ',' << intended_fifo << ',' << (fifo_active ? "true" : "false") << ',' << condition << '\n';
         periods_us.push_back(period);
         late_us.push_back(lateness);
         rpm_samples.push_back(state.exact_rpm);
         errors.push_back(std::abs(error));
     }
-    std::cout << '\n';
 
-    // TEST COMPLETE: Safe to shut down hardware and perform blocking I/O
     motor.stop_motor();
-
-    std::cout << "[TEST] Writing " << ram_buffer.size() << " samples to SD Card...\n";
-    std::ofstream log(options.csv_path);
-    if (!log) {
-        std::cerr << "[CRITICAL] Cannot open CSV: " << options.csv_path << ". Data lost!\n";
-        return 1;
-    }
-
-    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition\n";
-    for (const auto& entry : ram_buffer) {
-        log << std::fixed << std::setprecision(6) << entry.elapsed << ',' 
-            << entry.step_index << ',' << entry.pwm_percent << ','
-            << entry.period << ',' << entry.lateness << ','
-            << entry.raw_rpm << ',' << entry.filtered_rpm << ',' 
-            << entry.target_rpm << ',' << entry.current_pwm << ',' 
-            << entry.error << ','
-            << intended_mode << ',' << intended_fifo << ',' 
-            << (fifo_active ? "true" : "false") << ',' << condition << '\n';
-    }
-
+    pigpio_stop(pi);
+    
+    // ... [Metrics calculation remains exactly the same] ...
     if (periods_us.empty()) return 1;
 
     const auto mean = [](const std::vector<double>& values) {
@@ -260,30 +226,26 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Initialize hardware connection globally BEFORE elevating thread priority
-    // This pins the pigpio socket background threads to standard CFS Cores 0-2
+    if (argc > 1 && std::string(argv[1]) == "--test") {
+        TestOptions options;
+        if (!parse_test_options(argc, argv, options)) {
+            std::cerr << "Usage: ./mixr1_daemon --test ...\n";
+            return 2;
+        }
+        std::signal(SIGINT, signal_handler);
+        std::signal(SIGTERM, signal_handler);
+        return run_test(options);
+    }
+
+    // FIX: Start pigpio globally before any OS prioritization.
+    // The background socket threads will remain on Cores 0-2 as standard priority.
     int pi = pigpio_start(nullptr, nullptr);
     if (pi < 0) {
         std::cerr << "[CRITICAL] Failed to connect to pigpiod.\n";
         return 1;
     }
 
-    if (argc > 1 && std::string(argv[1]) == "--test") {
-        TestOptions options;
-        if (!parse_test_options(argc, argv, options)) {
-            std::cerr << "Usage: ./mixr1_daemon --test [--cpr=X] [--window=Y] [--sweep|--fixed] [--fifo|--no-fifo] [--pi|--no-pi] "
-                         "[--target=RPM] [--pwm=0..4095] [--duration=SECONDS] [--csv=FILE]\n";
-            pigpio_stop(pi);
-            return 2;
-        }
-        std::signal(SIGINT, signal_handler);
-        std::signal(SIGTERM, signal_handler);
-        int ret = run_test(options, pi);
-        pigpio_stop(pi);
-        return ret;
-    }
-
-    // DAEMON MODE: Isolate the main control math thread to Core 3
+    // NOW isolate ONLY the main control loop thread to Core 3
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(3, &cpuset);
@@ -296,7 +258,7 @@ int main(int argc, char** argv) {
     pthread_getschedparam(pthread_self(), &policy, &sch);
     sch.sched_priority = 90;
     if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch) != 0) {
-        std::cerr << "[WARNING] Failed to set SCHED_FIFO. Must run with sudo for deterministic PI control.\n";
+        std::cerr << "[WARNING] Failed to set SCHED_FIFO. Must run with sudo.\n";
     }
 
     std::signal(SIGINT, signal_handler);
@@ -316,6 +278,7 @@ int main(int argc, char** argv) {
         if (network->wait_for_client()) {
             std::cout << "[MIXR-1] Dashboard Connected.\n";
             
+            // Re-instantiate hardware handlers using the persistent 'pi' connection
             auto encoder = std::make_unique<AMT102Encoder>(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
             auto motor = std::make_unique<MotorController>(pi);
             auto lcd = std::make_unique<LCD1602>(pi);
@@ -367,7 +330,7 @@ int main(int argc, char** argv) {
                 if (mode3_notified) {
                     std::cout << "[MIXR-1] MATLAB teardown complete.\n";
                     mode3_notified = false;
-                    
+                    // Reclaim hardware immediately
                     encoder = std::make_unique<AMT102Encoder>(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
                     motor = std::make_unique<MotorController>(pi);
                     lcd = std::make_unique<LCD1602>(pi);
@@ -384,6 +347,7 @@ int main(int argc, char** argv) {
                 bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
                 if (update_lcd) lcd_prescaler = 0;
 
+                // Process kinematics using the aligned snapshot
                 auto state = kinematics.process(encoder->get_sync_snapshot(), current_pwm, update_lcd);
 
                 if (motor && !simulink_is_active) {
@@ -416,6 +380,7 @@ int main(int argc, char** argv) {
                 }
             }
 
+            // Client disconnected, safely destroy pointers without killing the global 'pi' daemon connection
             motor.reset();
             encoder.reset();
             lcd.reset();
