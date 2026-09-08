@@ -25,10 +25,13 @@ KinematicsState KinematicsEngine::process(EncoderSnapshot current_snapshot, int 
             hardware_synced = true;
             last_calculated_rpm = 0.0;
         } else if (delta_tick != 0) {
-            // Live baseline established. Safe to calculate velocity.
-            last_calculated_rpm = (static_cast<double>(delta_count) / Config::ENCODER_CPR) * (60000000.0 / static_cast<double>(delta_tick));
-            last_calculated_rpm *= Config::ENCODER_DIRECTION; 
-            
+            // Reject massive delta_tick values caused by uptime initialization wrapping
+            if (delta_tick > 100000) { 
+                last_calculated_rpm = 0.0;
+            } else {
+                last_calculated_rpm = (static_cast<double>(delta_count) / Config::ENCODER_CPR) * (60000000.0 / static_cast<double>(delta_tick));
+                last_calculated_rpm *= Config::ENCODER_DIRECTION; 
+            }
             prev_snapshot = current_snapshot; 
             last_pulse_time = now;
         }
@@ -40,6 +43,7 @@ KinematicsState KinematicsEngine::process(EncoderSnapshot current_snapshot, int 
         }
     }
 
+    // Apply EMA filter
     if (first_run) {
         ema_filtered_rpm = last_calculated_rpm;
         first_run = false;

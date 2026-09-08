@@ -16,7 +16,7 @@ private:
     double last_calculated_rpm = 0.0;
     bool first_run = true;
     
-    // NEW: Tracks if the engine has established a live hardware timestamp
+    // Tracks if the engine has established a live hardware timestamp
     bool hardware_synced = false; 
 
 public:

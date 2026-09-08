@@ -54,7 +54,6 @@ bool set_fifo_priority() {
     return pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch) == 0;
 }
 
-// ... [parse_test_options function remains exactly the same] ...
 bool parse_test_options(int argc, char** argv, TestOptions& options) {
     for (int i = 1; i < argc; ++i) {
         std::string argument = argv[i];
@@ -91,7 +90,6 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
 }
 
 int run_test(const TestOptions& options) {
-    // FIX: Start pigpio BEFORE elevating thread priority so callback threads stay on Cores 0-2
     int pi = pigpio_start(nullptr, nullptr);
     if (pi < 0) return 1;
 
@@ -119,12 +117,16 @@ int run_test(const TestOptions& options) {
 
     log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition\n";
     
-    kinematics.reset(encoder.get_sync_snapshot());
-    controller.reset();
-    
-    int current_pwm = options.use_pi ? 0 : options.fixed_pwm;
+    // FIX: Force startup PWM to 0 if sweeping to prevent 10ms hardware jolt
+    int current_pwm = options.use_pi ? 0 : (options.sweep ? 0 : options.fixed_pwm);
     double current_target = options.use_pi ? 0.0 : options.target_rpm;
     motor.set_pwm(current_pwm);
+
+    // FIX: Drain the pigpio ghost buffer before capturing the reset snapshot
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+    kinematics.reset(encoder.get_sync_snapshot());
+    controller.reset();
 
     const auto start = std::chrono::steady_clock::now();
     auto next_wake = start;
@@ -188,7 +190,6 @@ int run_test(const TestOptions& options) {
     motor.stop_motor();
     pigpio_stop(pi);
     
-    // ... [Metrics calculation remains exactly the same] ...
     if (periods_us.empty()) return 1;
 
     const auto mean = [](const std::vector<double>& values) {
@@ -237,15 +238,12 @@ int main(int argc, char** argv) {
         return run_test(options);
     }
 
-    // FIX: Start pigpio globally before any OS prioritization.
-    // The background socket threads will remain on Cores 0-2 as standard priority.
     int pi = pigpio_start(nullptr, nullptr);
     if (pi < 0) {
         std::cerr << "[CRITICAL] Failed to connect to pigpiod.\n";
         return 1;
     }
 
-    // NOW isolate ONLY the main control loop thread to Core 3
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(3, &cpuset);
@@ -278,7 +276,6 @@ int main(int argc, char** argv) {
         if (network->wait_for_client()) {
             std::cout << "[MIXR-1] Dashboard Connected.\n";
             
-            // Re-instantiate hardware handlers using the persistent 'pi' connection
             auto encoder = std::make_unique<AMT102Encoder>(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
             auto motor = std::make_unique<MotorController>(pi);
             auto lcd = std::make_unique<LCD1602>(pi);
@@ -295,6 +292,7 @@ int main(int argc, char** argv) {
             int lcd_prescaler = 0;
             bool simulink_is_active = false;
 
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
             kinematics.reset(encoder->get_sync_snapshot());
 
             auto next_wake = std::chrono::steady_clock::now();
@@ -330,7 +328,6 @@ int main(int argc, char** argv) {
                 if (mode3_notified) {
                     std::cout << "[MIXR-1] MATLAB teardown complete.\n";
                     mode3_notified = false;
-                    // Reclaim hardware immediately
                     encoder = std::make_unique<AMT102Encoder>(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
                     motor = std::make_unique<MotorController>(pi);
                     lcd = std::make_unique<LCD1602>(pi);
@@ -347,7 +344,6 @@ int main(int argc, char** argv) {
                 bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
                 if (update_lcd) lcd_prescaler = 0;
 
-                // Process kinematics using the aligned snapshot
                 auto state = kinematics.process(encoder->get_sync_snapshot(), current_pwm, update_lcd);
 
                 if (motor && !simulink_is_active) {
@@ -380,7 +376,6 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Client disconnected, safely destroy pointers without killing the global 'pi' daemon connection
             motor.reset();
             encoder.reset();
             lcd.reset();
