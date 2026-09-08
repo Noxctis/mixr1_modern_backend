@@ -5,13 +5,12 @@
 
 namespace Config {
     // --- Kinematics & DSP ---
-    // Hardware Live Config Variables (Overwritten by Dashboard)
     inline double ENCODER_CPR = 1024.0;               
     constexpr double RPM_ALPHA = 0.15;
     constexpr size_t SMA_WINDOW_SIZE = 8;                
     constexpr int DEADBAND_TICK_THRESHOLD = 2;           
 
-    // --- GLOBAL PI GAINS ---
+    // --- GLOBAL PI GAINS (Median across 0-1500 RPM envelope) ---
     constexpr double GLOBAL_KP = 1.5641;
     constexpr double GLOBAL_KI = 41.2359;
 

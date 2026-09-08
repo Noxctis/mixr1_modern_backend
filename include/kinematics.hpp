@@ -15,9 +15,6 @@ private:
     double ema_filtered_rpm = 0.0;
     double last_calculated_rpm = 0.0;
     bool first_run = true;
-    
-    // Tracks if the engine has established a live hardware timestamp
-    bool hardware_synced = false; 
 
 public:
     void reset(EncoderSnapshot initial_snapshot);
