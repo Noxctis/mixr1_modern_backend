@@ -36,10 +36,13 @@ void signal_handler(int signum) {
 struct TestOptions {
     bool fifo = false;
     bool use_pi = false;
-    bool sweep = true;
-    double target_rpm = 1000.0;
+    bool sweep = false;
+    bool sine_mode = false;
+    double sine_amplitude = 100.0;
+    double sine_freq_hz = 0.1;
+    double target_rpm = 460.0; 
     int fixed_pwm = 1000;
-    double duration_sec = 10.0;
+    double duration_sec = 30.0; 
     std::string csv_path = "timing_test.csv";
 };
 
@@ -63,7 +66,12 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
         
         if (argument == "--sweep") {
             options.sweep = true;
+            options.sine_mode = false;
         } else if (argument == "--fixed") {
+            options.sweep = false;
+            options.sine_mode = false;
+        } else if (argument == "--sine") {
+            options.sine_mode = true;
             options.sweep = false;
         } else if (argument == "--fifo") {
             options.fifo = true;
@@ -81,6 +89,10 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.duration_sec = std::stod(argument.substr(11));
         } else if (argument.rfind("--csv=", 0) == 0) {
             options.csv_path = argument.substr(6);
+        } else if (argument.rfind("--sine-amp=", 0) == 0) {
+            options.sine_amplitude = std::stod(argument.substr(11));
+        } else if (argument.rfind("--sine-freq=", 0) == 0) {
+            options.sine_freq_hz = std::stod(argument.substr(12));
         } else {
             return false;
         }
@@ -117,12 +129,10 @@ int run_test(const TestOptions& options) {
 
     log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition\n";
     
-    // FIX: Force startup PWM to 0 if sweeping to prevent 10ms hardware jolt
     int current_pwm = options.use_pi ? 0 : (options.sweep ? 0 : options.fixed_pwm);
     double current_target = options.use_pi ? 0.0 : options.target_rpm;
     motor.set_pwm(current_pwm);
 
-    // FIX: Drain the pigpio ghost buffer before capturing the reset snapshot
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
     kinematics.reset(encoder.get_sync_snapshot());
@@ -138,6 +148,12 @@ int run_test(const TestOptions& options) {
     std::vector<double> errors;
 
     const double total_duration = options.sweep ? options.duration_sec * 11.0 : options.duration_sec;
+    
+    if (options.sine_mode) {
+        std::cout << "[TEST] Sine Wave Mode | Target: " << options.target_rpm << " RPM +/- " 
+                  << options.sine_amplitude << " | Freq: " << options.sine_freq_hz << " Hz\n";
+    }
+
     while (run_loop) {
         next_wake += std::chrono::microseconds(Config::LOOP_DELAY_US);
         std::this_thread::sleep_until(next_wake);
@@ -145,7 +161,9 @@ int run_test(const TestOptions& options) {
         const double elapsed = std::chrono::duration<double>(now - start).count();
         if (elapsed >= total_duration) break;
 
-        if (options.sweep) {
+        if (options.sine_mode && options.use_pi) {
+            current_target = options.target_rpm + (options.sine_amplitude * std::sin(2.0 * M_PI * options.sine_freq_hz * elapsed));
+        } else if (options.sweep) {
             const int new_step_index = std::min(10, static_cast<int>(elapsed / options.duration_sec));
             if (new_step_index != step_index) {
                 step_index = new_step_index;
@@ -238,6 +256,7 @@ int main(int argc, char** argv) {
         return run_test(options);
     }
 
+    // ... [Rest of standard daemon execution remains identical]
     int pi = pigpio_start(nullptr, nullptr);
     if (pi < 0) {
         std::cerr << "[CRITICAL] Failed to connect to pigpiod.\n";
