@@ -1,18 +1,18 @@
 // mixr1_fluid_controller.cpp
 #include "VL53L0X.hpp"
-#include 
-#include 
-#include 
-#include 
-#include 
-#include 
-#include 
-#include 
-#include 
-#include 
-#include 
-#include 
-#include 
+#include <wiringPi.h>
+#include <iostream>
+#include <fstream>
+#include <csignal>
+#include <unistd.h>
+#include <vector>
+#include <numeric>
+#include <termios.h>
+#include <fcntl.h>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
+#include <cmath>
 
 // BCM Pin Definitions - PUMP (VNH5019 #1)
 constexpr int PUMP_INA = 17;
@@ -111,7 +111,7 @@ bool saveCalibration(uint16_t containerZero, int floaterThickness) {
     std::ofstream file(CALIBRATION_FILE, std::ios::trunc);
     if (!file.is_open()) return false;
     file << containerZero << " " << floaterThickness;
-    return static_cast(file);
+    return static_cast<bool>(file);
 }
 
 bool loadCalibration(uint16_t& containerZero, int& floaterThickness) {
@@ -125,7 +125,7 @@ bool loadCalibration(uint16_t& containerZero, int& floaterThickness) {
 }
 
 SensorMetrics getSensorMetrics(VL53L0X& sensor, int samples, int delay_us = 10000) {
-    std::vector validReadings;
+    std::vector<uint16_t> validReadings;
     SensorMetrics metrics = {0, 65535, 0, 0, samples};
     
     for (int i = 0; i < samples; ++i) {
@@ -147,7 +147,7 @@ SensorMetrics getSensorMetrics(VL53L0X& sensor, int samples, int delay_us = 1000
     }
 
     long sum = std::accumulate(validReadings.begin(), validReadings.end(), 0);
-    metrics.average = static_cast(sum / metrics.validSamples);
+    metrics.average = static_cast<uint16_t>(sum / metrics.validSamples);
     
     return metrics;
 }
@@ -179,7 +179,7 @@ void runCalibration(VL53L0X& sensor, uint16_t& containerZero, int& floaterThickn
         return;
     }
     
-    floaterThickness = static_cast(containerZero) - static_cast(floaterMetrics.average);
+    floaterThickness = static_cast<int>(containerZero) - static_cast<int>(floaterMetrics.average);
     std::cout << ">> Floater Thickness: " << floaterThickness << " mm\n";
     saveCalibration(containerZero, floaterThickness);
 }
@@ -217,7 +217,7 @@ void runSolenoidAndToF(VL53L0X& sensor, uint16_t containerZero, int floaterThick
     while (!emergencyStop && !kbhit()) {
         SensorMetrics metrics = getSensorMetrics(sensor, 3, 10000);
         if (metrics.validSamples > 0) {
-            int rawLevel = static_cast(containerZero) - (static_cast(metrics.average) + floaterThickness);
+            int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
             if (rawLevel < 0) rawLevel = 0;
             std::cout << "\rLvl: " << rawLevel << " mm | Yield: " << metrics.validSamples << "/3    " << std::flush;
             
@@ -256,7 +256,7 @@ void runFullFluidCycle(VL53L0X& sensor, uint16_t containerZero, int floaterThick
     while (!emergencyStop) {
         SensorMetrics metrics = getSensorMetrics(sensor, 5, 5000);
         if (metrics.validSamples > 0) {
-            int rawLevel = static_cast(containerZero) - (static_cast(metrics.average) + floaterThickness);
+            int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
             std::cout << "\rLvl: " << std::max(0, rawLevel) << "/" << targetLevel << " mm    " << std::flush;
             
             if (rawLevel >= targetLevel) break;
@@ -276,7 +276,7 @@ void runFullFluidCycle(VL53L0X& sensor, uint16_t containerZero, int floaterThick
     while (!emergencyStop) {
         SensorMetrics metrics = getSensorMetrics(sensor, 5, 5000);
         if (metrics.validSamples > 0) {
-            int rawLevel = static_cast(containerZero) - (static_cast(metrics.average) + floaterThickness);
+            int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
             std::cout << "\rLvl: " << std::max(0, rawLevel) << " mm    " << std::flush;
             
             if (rawLevel <= 2) break;
@@ -295,7 +295,7 @@ void runContinuousRead(VL53L0X& sensor, uint16_t containerZero, int floaterThick
     while (!systemOffline && !kbhit()) {
         SensorMetrics metrics = getSensorMetrics(sensor, 3, 10000);
         if (metrics.validSamples > 0) {
-            int rawLevel = static_cast(containerZero) - (static_cast(metrics.average) + floaterThickness);
+            int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
             std::cout << "\rLvl: " << std::max(0, rawLevel) << " mm | Yield: " << metrics.validSamples << "/3    " << std::flush;
         }
     }
