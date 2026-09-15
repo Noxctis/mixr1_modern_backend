@@ -13,15 +13,17 @@
 #include <iomanip>
 #include <sstream>
 #include <cmath>
+#include <algorithm>
 
 // BCM Pin Definitions - PUMP (VNH5019 #1)
 constexpr int PUMP_INA = 17;
 constexpr int PUMP_INB = 27;
 constexpr int PUMP_PWM = 13; // Hardware PWM1
+constexpr int PUMP_EN  = 15; // BCM 15 - VNH5019 Enable
 
 // BCM Pin Definitions - SOLENOID (VNH5019 #2)
-constexpr int SOLENOID_INA = 5;  // Reassigned from 23
-constexpr int SOLENOID_INB = 6;  // Reassigned from 24
+constexpr int SOLENOID_INA = 5;  
+constexpr int SOLENOID_INB = 6;  
 constexpr int SOLENOID_PWM = 12; // Hardware PWM0
 
 volatile sig_atomic_t systemOffline = 0;
@@ -29,6 +31,7 @@ volatile sig_atomic_t emergencyStop = 0;
 
 const char* CALIBRATION_FILE = "container_zero.txt";
 const char* DATA_FILE = "fluid_dynamics_data.csv";
+const char* RAW_DATA_FILE = "raw_sensor_data.csv";
 
 std::string currentSessionID;
 
@@ -54,10 +57,12 @@ void setSolenoid(bool open) {
 
 void setPump(bool active) {
     if (active) {
+        digitalWrite(PUMP_EN, HIGH);
         digitalWrite(PUMP_INA, HIGH);
         digitalWrite(PUMP_INB, LOW);
         pwmWrite(PUMP_PWM, 1024);
     } else {
+        digitalWrite(PUMP_EN, LOW);
         digitalWrite(PUMP_INA, LOW);
         digitalWrite(PUMP_INB, LOW);
         pwmWrite(PUMP_PWM, 0);
@@ -124,6 +129,60 @@ bool loadCalibration(uint16_t& containerZero, int& floaterThickness) {
     return false;
 }
 
+void logCycleData(const std::string& sessionID, int targetLevel, int calculatedLevel, double actualMeasured, uint16_t rawSensorAvg) {
+    bool exists = fileExists(DATA_FILE);
+    std::ofstream file(DATA_FILE, std::ios::app);
+    if (!file.is_open()) {
+        std::cerr << "\n[!] Error opening CSV log file.\n";
+        return;
+    }
+
+    if (!exists) {
+        file << "SessionID,Timestamp,TargetLevel_mm,ToFCalculated_mm,ActualMeasured_mm,ToFRawAvg_mm,Error_mm\n";
+    }
+
+    std::time_t t = std::time(nullptr);
+    char timeBuf[20];
+    std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+
+    double error = actualMeasured - calculatedLevel;
+
+    file << sessionID << ","
+         << timeBuf << ","
+         << targetLevel << ","
+         << calculatedLevel << ","
+         << actualMeasured << ","
+         << rawSensorAvg << ","
+         << error << "\n";
+}
+
+void capture100Readings(VL53L0X& sensor, const std::string& eventName) {
+    std::cout << "\n[DATA LOG] Fluid settling complete. Capturing 100 raw ToF readings (~20 seconds)...\n";
+    bool exists = fileExists(RAW_DATA_FILE);
+    std::ofstream rawFile(RAW_DATA_FILE, std::ios::app);
+    
+    if (!exists) {
+        rawFile << "SessionID,Timestamp,Event,SampleIndex,RawDistance_mm\n";
+    }
+
+    for (int i = 1; i <= 100; i++) {
+        if (emergencyStop) break;
+        uint16_t dist = 0;
+        try {
+            // In High Accuracy mode (200ms budget), this call inherently blocks for ~200ms.
+            dist = sensor.readRangeSingleMillimeters();
+        } catch (...) {}
+
+        std::time_t t = std::time(nullptr);
+        char timeBuf[20];
+        std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+
+        std::cout << "\rSample " << i << "/100: " << dist << " mm    " << std::flush;
+        rawFile << currentSessionID << "," << timeBuf << "," << eventName << "," << i << "," << dist << "\n";
+    }
+    std::cout << "\n[DATA LOG] Capture complete.\n";
+}
+
 SensorMetrics getSensorMetrics(VL53L0X& sensor, int samples, int delay_us = 10000) {
     std::vector<uint16_t> validReadings;
     SensorMetrics metrics = {0, 65535, 0, 0, samples};
@@ -146,8 +205,8 @@ SensorMetrics getSensorMetrics(VL53L0X& sensor, int samples, int delay_us = 1000
         return metrics;
     }
 
-    long sum = std::accumulate(validReadings.begin(), validReadings.end(), 0);
-    metrics.average = static_cast<uint16_t>(sum / metrics.validSamples);
+    unsigned long sum = std::accumulate(validReadings.begin(), validReadings.end(), 0UL);
+    metrics.average = static_cast<uint16_t>(sum / static_cast<unsigned long>(metrics.validSamples));
     
     return metrics;
 }
@@ -157,9 +216,12 @@ void runCalibration(VL53L0X& sensor, uint16_t& containerZero, int& floaterThickn
     std::cout << "\n--- [ MODE 1: DUAL CALIBRATION ] ---\n";
     std::cout << "[!] Ensure tank is completely EMPTY and FLOATER is REMOVED.\n";
     std::cout << "Press ENTER to measure tank bottom...";
-    std::getline(std::cin, dummy);
     
-    SensorMetrics bottomMetrics = getSensorMetrics(sensor, 20, 50000); 
+    std::cin.clear();
+    std::getline(std::cin, dummy);
+    capture100Readings(sensor, "Calibration_TankBottom"); 
+    
+    SensorMetrics bottomMetrics = getSensorMetrics(sensor, 20, 10000); 
     if (bottomMetrics.validSamples == 0) {
         std::cout << "[!] Calibration failed. Check sensor wiring.\n";
         return;
@@ -169,9 +231,12 @@ void runCalibration(VL53L0X& sensor, uint16_t& containerZero, int& floaterThickn
     std::cout << ">> Raw Container Bottom: " << containerZero << " mm\n";
     std::cout << "[!] Place FLOATER into the empty tank.\n";
     std::cout << "Press ENTER to measure floater thickness...";
-    std::getline(std::cin, dummy);
     
-    SensorMetrics floaterMetrics = getSensorMetrics(sensor, 20, 50000);
+    std::cin.clear();
+    std::getline(std::cin, dummy);
+    capture100Readings(sensor, "Calibration_FloaterThickness"); 
+    
+    SensorMetrics floaterMetrics = getSensorMetrics(sensor, 20, 10000);
     if (floaterMetrics.validSamples == 0) {
         std::cout << "[!] Calibration failed. Resetting.\n";
         containerZero = 0;
@@ -180,11 +245,18 @@ void runCalibration(VL53L0X& sensor, uint16_t& containerZero, int& floaterThickn
     }
     
     floaterThickness = static_cast<int>(containerZero) - static_cast<int>(floaterMetrics.average);
+    
+    if (floaterThickness < 0) {
+        std::cout << "[!] Warning: Calculated thickness is negative (" << floaterThickness << " mm).\n";
+        std::cout << "[!] The sensor may be reading through the floater. Ensure it is opaque.\n";
+        floaterThickness = 0; 
+    }
+    
     std::cout << ">> Floater Thickness: " << floaterThickness << " mm\n";
     saveCalibration(containerZero, floaterThickness);
 }
 
-void runSolenoidTestOnly() {
+void runSolenoidTestOnly(VL53L0X& sensor) {
     std::string dummy;
     std::cout << "\n--- [ MODE 2: SOLENOID TOGGLE (DRY TEST) ] ---\n";
     std::cout << "Press ENTER to OPEN valve, ENTER again to CLOSE. Type 'q' and ENTER to quit.\n";
@@ -239,12 +311,17 @@ void runFullFluidCycle(VL53L0X& sensor, uint16_t containerZero, int floaterThick
     }
     
     int targetLevel;
-    std::cout << "\n--- [ MODE 4: FULL CYCLE (PUMP FILL -> SETTLE -> SOLENOID DRAIN) ] ---\n";
+    std::cout << "\n--- [ MODE 4: FULL CYCLE (PUMP FILL -> SETTLE -> STEPPED DRAIN) ] ---\n";
     std::cout << "Enter target fill level (mm): ";
     if (!(std::cin >> targetLevel)) {
-        std::cin.clear();
-        std::cin.ignore(10000, '\n');
-        return;
+        std::cin.clear(); std::cin.ignore(10000, '\n'); return;
+    }
+
+    int drainInterval;
+    std::cout << "Enter drain step interval (mm): ";
+    if (!(std::cin >> drainInterval) || drainInterval <= 0) {
+        std::cout << "[!] Invalid drain interval.\n";
+        std::cin.clear(); std::cin.ignore(10000, '\n'); return;
     }
     std::cin.ignore(10000, '\n');
 
@@ -254,11 +331,10 @@ void runFullFluidCycle(VL53L0X& sensor, uint16_t containerZero, int floaterThick
     std::cout << "\n[PHASE 1] FILLING\n";
     
     while (!emergencyStop) {
-        SensorMetrics metrics = getSensorMetrics(sensor, 5, 5000);
+        SensorMetrics metrics = getSensorMetrics(sensor, 3, 5000);
         if (metrics.validSamples > 0) {
             int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
             std::cout << "\rLvl: " << std::max(0, rawLevel) << "/" << targetLevel << " mm    " << std::flush;
-            
             if (rawLevel >= targetLevel) break;
         }
     }
@@ -266,30 +342,167 @@ void runFullFluidCycle(VL53L0X& sensor, uint16_t containerZero, int floaterThick
     setPump(false);
     if (emergencyStop) return;
 
-    std::cout << "\n[PHASE 2] SETTLED. Press ENTER to open solenoid and drain...\n";
-    std::string dummy;
-    std::getline(std::cin, dummy);
+    // WAIT FOR FLUID TO SETTLE
+    usleep(1000000); // 1 second settling time before capturing Data
     
-    std::cout << "[PHASE 3] DRAINING\n";
-    setSolenoid(true);
+    // CAPTURE RAW DATA WHILE SETTLED
+    capture100Readings(sensor, "FullCycle_SettledMeasurement"); 
+    SensorMetrics settleMetrics = getSensorMetrics(sensor, 5, 10000);
+    int calculatedLevel = static_cast<int>(containerZero) - (static_cast<int>(settleMetrics.average) + floaterThickness);
+
+    std::cout << "\n\n[PHASE 2] SETTLED (ToF Calculated: " << std::max(0, calculatedLevel) << " mm)\n";
+    std::cout << "Enter actual measured fluid level (mm): ";
+    
+    double actualMeasured = 0.0;
+    if (std::cin >> actualMeasured) {
+        std::cin.ignore(10000, '\n');
+        logCycleData(currentSessionID, targetLevel, std::max(0, calculatedLevel), actualMeasured, settleMetrics.average);
+    } else {
+        std::cin.clear(); std::cin.ignore(10000, '\n');
+    }
+
+    std::cout << "\n[PHASE 3] STEPPED DRAINING (Step Size: " << drainInterval << " mm)\n";
     
     while (!emergencyStop) {
-        SensorMetrics metrics = getSensorMetrics(sensor, 5, 5000);
-        if (metrics.validSamples > 0) {
-            int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
-            std::cout << "\rLvl: " << std::max(0, rawLevel) << " mm    " << std::flush;
-            
-            if (rawLevel <= 2) break;
+        SensorMetrics currentMetrics = getSensorMetrics(sensor, 3, 5000);
+        int currentLevel = 0;
+        if (currentMetrics.validSamples > 0) {
+            currentLevel = std::max(0, static_cast<int>(containerZero) - (static_cast<int>(currentMetrics.average) + floaterThickness));
         }
+        if (currentLevel <= 2) break;
+
+        std::cout << "Current Level: " << currentLevel << " mm. Press ENTER to drain " << drainInterval << " mm (or 'q' to stop)... ";
+        std::string input;
+        std::getline(std::cin, input);
+        if (input == "q" || input == "Q") break;
+        
+        int stepTarget = std::max(0, currentLevel - drainInterval);
+        
+        setSolenoid(true);
+        while (!emergencyStop) {
+            SensorMetrics metrics = getSensorMetrics(sensor, 2, 5000);
+            if (metrics.validSamples > 0) {
+                int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
+                std::cout << "\rDraining... Current: " << std::max(0, rawLevel) << " mm | Target: " << stepTarget << " mm    " << std::flush;
+                if (rawLevel <= stepTarget || rawLevel <= 2) break;
+            }
+        }
+        setSolenoid(false);
+        std::cout << "\n[STEP COMPLETE] Solenoid closed.\n";
+        
+        // WAIT FOR FLUID TO SETTLE
+        usleep(1000000); // 1 second settling time before capturing Data
+        capture100Readings(sensor, "FullCycle_PostDrainStep");
+        std::cout << "\n";
     }
-    
     setSolenoid(false);
     std::cout << "\n[SYSTEM] Cycle complete. Hardware parked.\n";
 }
 
+void runExperimentDrainFlow(VL53L0X& sensor, uint16_t containerZero, int floaterThickness) {
+    if (containerZero == 0) {
+        std::cout << "[!] Run calibration first.\n";
+        return;
+    }
+
+    int targetLevel;
+    std::cout << "\n--- [ MODE 5: EXPERIMENT DRAIN FLOW (ITERATIVE) ] ---\n";
+    std::cout << "Enter initial fill set point (mm): ";
+    if (!(std::cin >> targetLevel)) {
+        std::cin.clear(); std::cin.ignore(10000, '\n'); return;
+    }
+    std::cin.ignore(10000, '\n');
+
+    emergencyStop = 0;
+    setSolenoid(false);
+    setPump(true);
+    std::cout << "\n[PHASE 1] FILLING TO " << targetLevel << " mm\n";
+
+    while (!emergencyStop) {
+        SensorMetrics metrics = getSensorMetrics(sensor, 3, 5000);
+        if (metrics.validSamples > 0) {
+            int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
+            std::cout << "\rLvl: " << std::max(0, rawLevel) << "/" << targetLevel << " mm    " << std::flush;
+            if (rawLevel >= targetLevel) break;
+        }
+    }
+    setPump(false);
+    if (emergencyStop) return;
+
+    // WAIT FOR FLUID TO SETTLE
+    usleep(1000000); 
+
+    // CAPTURE RAW DATA WHILE SETTLED
+    capture100Readings(sensor, "DrainExp_InitialMeasurement"); 
+    SensorMetrics settleMetrics = getSensorMetrics(sensor, 5, 10000);
+    int calculatedLevel = static_cast<int>(containerZero) - (static_cast<int>(settleMetrics.average) + floaterThickness);
+
+    std::cout << "\n\n[PHASE 2] MEASUREMENT\n";
+    std::cout << "[!] REMOVE the floater and measure the water level manually.\n";
+    std::cout << "Enter actual measured fluid level (mm): ";
+    
+    double actualMeasured = 0.0;
+    if (std::cin >> actualMeasured) {
+        std::cin.ignore(10000, '\n');
+        logCycleData(currentSessionID, targetLevel, std::max(0, calculatedLevel), actualMeasured, settleMetrics.average);
+    } else {
+        std::cin.clear(); std::cin.ignore(10000, '\n');
+    }
+
+    std::cout << "\n[PHASE 3] ITERATIVE DRAIN\n";
+    
+    while (!emergencyStop) {
+        int newSetPoint;
+        std::cout << "\n[!] REPLACE the floater in the tank so the sensor can track the fluid.\n";
+        std::cout << "Enter new lower set point to drain to (mm), or '0' to empty entirely: ";
+        if (!(std::cin >> newSetPoint)) {
+            std::cin.clear(); std::cin.ignore(10000, '\n'); break;
+        }
+        std::cin.ignore(10000, '\n');
+
+        setSolenoid(true);
+        while (!emergencyStop) {
+            SensorMetrics metrics = getSensorMetrics(sensor, 2, 5000);
+            if (metrics.validSamples > 0) {
+                int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
+                std::cout << "\rDraining... Current Lvl: " << std::max(0, rawLevel) << " mm | Target: " << newSetPoint << " mm    " << std::flush;
+                if (rawLevel <= newSetPoint || rawLevel <= 2) break;
+            }
+        }
+        setSolenoid(false);
+        if (emergencyStop) break;
+
+        // WAIT FOR FLUID TO SETTLE
+        usleep(1000000); 
+
+        // CAPTURE RAW DATA WHILE SETTLED
+        capture100Readings(sensor, "DrainExp_PostDrainMeasurement"); 
+        SensorMetrics drainSettleMetrics = getSensorMetrics(sensor, 5, 10000);
+        int drainCalculated = static_cast<int>(containerZero) - (static_cast<int>(drainSettleMetrics.average) + floaterThickness);
+
+        std::cout << "\n\n[!] DRAIN COMPLETE. REMOVE the floater again and measure manually.\n";
+        std::cout << "Enter actual measured fluid level (mm): ";
+        double drainMeasured = 0.0;
+        if (std::cin >> drainMeasured) {
+            std::cin.ignore(10000, '\n');
+            logCycleData(currentSessionID, newSetPoint, std::max(0, drainCalculated), drainMeasured, drainSettleMetrics.average);
+        } else {
+            std::cin.clear(); std::cin.ignore(10000, '\n');
+        }
+
+        if (newSetPoint <= 2) {
+            std::cout << "\n[SYSTEM] Tank reached bottom target.\n";
+            break;
+        }
+    }
+    
+    setSolenoid(false);
+    std::cout << "\n[SYSTEM] Experiment sequence complete. Hardware parked.\n";
+}
+
 void runContinuousRead(VL53L0X& sensor, uint16_t containerZero, int floaterThickness) {
     if (containerZero == 0) return;
-    std::cout << "\n--- [ MODE 5: CONTINUOUS SENSOR STREAM ] ---\nPress ANY KEY to stop.\n\n";
+    std::cout << "\n--- [ MODE 6: CONTINUOUS SENSOR STREAM ] ---\nPress ANY KEY to stop.\n\n";
     while (kbhit()) getchar();
 
     while (!systemOffline && !kbhit()) {
@@ -310,6 +523,7 @@ int main() {
         return 1;
     }
 
+    pinMode(PUMP_EN, OUTPUT);
     pinMode(PUMP_INA, OUTPUT);
     pinMode(PUMP_INB, OUTPUT);
     pinMode(PUMP_PWM, PWM_OUTPUT);
@@ -326,7 +540,12 @@ int main() {
     try {
         sensor.initialize();
         sensor.setTimeout(500);
-        sensor.setMeasurementTimingBudget(50000); 
+        
+        // ==============================================================
+        // HIGH ACCURACY PROFILE
+        // Set timing budget to 200ms per measurement for highest accuracy 
+        // ==============================================================
+        sensor.setMeasurementTimingBudget(200000); 
     } catch (...) {
         std::cerr << "Error initializing ToF sensor.\n";
         return 2;
@@ -344,9 +563,10 @@ int main() {
         std::cout << " [1] Set Container & Floater (Calibration)\n";
         std::cout << " [2] Solenoid Toggle (Dry Test)\n";
         std::cout << " [3] Gravity Drain & Monitor (Solenoid + ToF)\n";
-        std::cout << " [4] Full Cycle (Pump Fill -> Settle -> Solenoid Drain)\n";
-        std::cout << " [5] Continuous Sensor Stream\n";
-        std::cout << " [6] Exit System\nSelection: ";
+        std::cout << " [4] Full Cycle (Pump Fill -> Settle -> Stepped Drain)\n";
+        std::cout << " [5] Experiment Drain Flow (Fill -> Iterative Drain)\n";
+        std::cout << " [6] Continuous Sensor Stream\n";
+        std::cout << " [7] Exit System\nSelection: ";
         
         if (!(std::cin >> choice)) {
             std::cin.clear();
@@ -357,11 +577,12 @@ int main() {
 
         switch (choice) {
             case 1: runCalibration(sensor, containerZero, floaterThickness); break;
-            case 2: runSolenoidTestOnly(); break;
+            case 2: runSolenoidTestOnly(sensor); break;
             case 3: runSolenoidAndToF(sensor, containerZero, floaterThickness); break;
             case 4: runFullFluidCycle(sensor, containerZero, floaterThickness); break;
-            case 5: runContinuousRead(sensor, containerZero, floaterThickness); break;
-            case 6: systemOffline = 1; break;
+            case 5: runExperimentDrainFlow(sensor, containerZero, floaterThickness); break;
+            case 6: runContinuousRead(sensor, containerZero, floaterThickness); break;
+            case 7: systemOffline = 1; break;
         }
     }
 
