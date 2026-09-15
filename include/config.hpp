@@ -10,9 +10,9 @@ namespace Config {
     constexpr size_t SMA_WINDOW_SIZE = 8;                
     constexpr int DEADBAND_TICK_THRESHOLD = 2;           
 
-// --- GLOBAL PI GAINS (Median across 0-1500 RPM envelope @ 0.5 rad/s) ---
-    constexpr double GLOBAL_KP = 0.7821;
-    constexpr double GLOBAL_KI = 20.6124;
+// --- GLOBAL PI GAINS (1.0 rad/s Bandwidth) ---
+    constexpr double GLOBAL_KP = 1.5641;
+    constexpr double GLOBAL_KI = 41.2249;
 
     // --- Execution Pacing Matrix ---
     inline int RPM_SAMPLE_WINDOW_US = 20000;
