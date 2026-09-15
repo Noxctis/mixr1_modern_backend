@@ -163,6 +163,11 @@ int run_test(const TestOptions& options) {
 
         if (options.sine_mode && options.use_pi) {
             current_target = options.target_rpm + (options.sine_amplitude * std::sin(2.0 * M_PI * options.sine_freq_hz * elapsed));
+        } else if (options.sine_mode && !options.use_pi) {
+            // FIX: Directly modulate PWM for open-loop sine wave
+            current_pwm = options.fixed_pwm + static_cast<int>(options.sine_amplitude * std::sin(2.0 * M_PI * options.sine_freq_hz * elapsed));
+            current_pwm = std::clamp(current_pwm, 0, 4095);
+            motor.set_pwm(current_pwm);
         } else if (options.sweep) {
             const int new_step_index = std::min(10, static_cast<int>(elapsed / options.duration_sec));
             if (new_step_index != step_index) {
@@ -256,7 +261,6 @@ int main(int argc, char** argv) {
         return run_test(options);
     }
 
-    // ... [Rest of standard daemon execution remains identical]
     int pi = pigpio_start(nullptr, nullptr);
     if (pi < 0) {
         std::cerr << "[CRITICAL] Failed to connect to pigpiod.\n";
