@@ -220,47 +220,57 @@ SensorMetrics getSensorMetrics(VL53L0X& sensor, int samples, int delay_us = 1000
 
 void runCalibration(VL53L0X& sensor, uint16_t& containerZero, int& floaterThickness) {
     std::string dummy;
-    std::cout << "\n--- [ MODE 1: DUAL CALIBRATION ] ---\n";
-    std::cout << "[!] Ensure tank is completely EMPTY and FLOATER is REMOVED.\n";
-    std::cout << "Press ENTER to measure tank bottom...";
+    std::cout << "\n--- [ MODE 1: SINGLE-POINT RELATIVE CALIBRATION ] ---\n";
+    std::cout << "[!] Ensure the tank is completely DRAINED.\n";
+    std::cout << "[!] Place the FLOATER inside (let it rest naturally on the gasket).\n";
+    std::cout << "Press ENTER to set system zero...";
     
     std::cin.clear();
     std::getline(std::cin, dummy);
-    capture100Readings(sensor, "Calibration_TankBottom", containerZero, floaterThickness); 
     
-    SensorMetrics bottomMetrics = getSensorMetrics(sensor, 20, 10000); 
-    if (bottomMetrics.validSamples == 0) {
+    // Pass 0 for containerZero and floaterThickness so it only logs raw distance during calibration
+    capture100Readings(sensor, "Calibration_SystemZero", 0, 0); 
+    
+    SensorMetrics zeroMetrics = getSensorMetrics(sensor, 20, 10000); 
+    if (zeroMetrics.validSamples == 0) {
         std::cout << "[!] Calibration failed. Check sensor wiring.\n";
         return;
     }
-    containerZero = bottomMetrics.average;
     
-    std::cout << ">> Raw Container Bottom: " << containerZero << " mm\n";
-    std::cout << "[!] Place FLOATER into the empty tank.\n";
-    std::cout << "Press ENTER to measure floater thickness...";
+    // The resting distance of the floater is our new absolute zero.
+    containerZero = zeroMetrics.average;
     
-    std::cin.clear();
-    std::getline(std::cin, dummy);
-    capture100Readings(sensor, "Calibration_FloaterThickness", containerZero, floaterThickness); 
+    // We set thickness to 0 because the gasket height and floater thickness 
+    // are now mathematically irrelevant to tracking the fluid level.
+    floaterThickness = 0; 
     
-    SensorMetrics floaterMetrics = getSensorMetrics(sensor, 20, 10000);
-    if (floaterMetrics.validSamples == 0) {
-        std::cout << "[!] Calibration failed. Resetting.\n";
-        containerZero = 0;
-        floaterThickness = 0;
+    std::cout << ">> System Zero (Distance to resting floater): " << containerZero << " mm\n";
+    saveCalibration(containerZero, floaterThickness);
+}
+
+void runContinuousRead(VL53L0X& sensor, uint16_t containerZero, int floaterThickness) {
+    if (containerZero == 0) {
+        // Added the missing warning so it doesn't fail silently
+        std::cout << "[!] Run calibration first.\n";
         return;
     }
+    std::cout << "\n--- [ MODE 6: CONTINUOUS SENSOR STREAM ] ---\nPress ANY KEY to stop.\n\n";
     
-    floaterThickness = static_cast<int>(containerZero) - static_cast<int>(floaterMetrics.average);
-    
-    if (floaterThickness < 0) {
-        std::cout << "[!] Warning: Calculated thickness is negative (" << floaterThickness << " mm).\n";
-        std::cout << "[!] The sensor may be reading through the floater. Ensure it is opaque.\n";
-        floaterThickness = 0; 
+    // Flush any pending terminal keys before starting the loop
+    while (kbhit()) getchar(); 
+
+    while (!systemOffline && !kbhit()) {
+        // Reduced to 1 sample per loop. Because High Accuracy budget takes 200ms per sample, 
+        // 1 sample ensures the terminal updates at 5 FPS instead of freezing for 600ms.
+        SensorMetrics metrics = getSensorMetrics(sensor, 1, 0); 
+        if (metrics.validSamples > 0) {
+            int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
+            std::cout << "\rLvl: " << std::max(0, rawLevel) << " mm | Raw ToF: " << metrics.average << " mm    " << std::flush;
+        }
     }
     
-    std::cout << ">> Floater Thickness: " << floaterThickness << " mm\n";
-    saveCalibration(containerZero, floaterThickness);
+    // Consume the key that stopped the loop so it doesn't bleed into the menu
+    if (kbhit()) getchar(); 
 }
 
 void runSolenoidTestOnly() {
@@ -505,21 +515,6 @@ void runExperimentDrainFlow(VL53L0X& sensor, uint16_t containerZero, int floater
     
     setSolenoid(false);
     std::cout << "\n[SYSTEM] Experiment sequence complete. Hardware parked.\n";
-}
-
-void runContinuousRead(VL53L0X& sensor, uint16_t containerZero, int floaterThickness) {
-    if (containerZero == 0) return;
-    std::cout << "\n--- [ MODE 6: CONTINUOUS SENSOR STREAM ] ---\nPress ANY KEY to stop.\n\n";
-    while (kbhit()) getchar();
-
-    while (!systemOffline && !kbhit()) {
-        SensorMetrics metrics = getSensorMetrics(sensor, 3, 10000);
-        if (metrics.validSamples > 0) {
-            int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
-            std::cout << "\rLvl: " << std::max(0, rawLevel) << " mm | Yield: " << metrics.validSamples << "/3    " << std::flush;
-        }
-    }
-    if (kbhit()) getchar();
 }
 
 int main() {
