@@ -43,15 +43,6 @@ struct SensorMetrics {
     int targetSamples;
 };
 
-// ==========================================
-// REGRESSION DRIFT CORRECTION
-// ==========================================
-double applyDriftCorrection(double rawDistance) {
-    // True_Measurement_Error = -6.995 + 0.06838 * Actual_Water_Dist
-    double predictedError = -6.995 + (0.06838 * rawDistance);
-    return rawDistance - predictedError;
-}
-
 void setSolenoid(bool open) {
     if (open) {
         digitalWrite(SOLENOID_INA, HIGH);
@@ -121,24 +112,24 @@ bool fileExists(const char* filename) {
     return f.good();
 }
 
-bool saveCalibration(double containerZero, int floaterThickness) {
+bool saveCalibration(uint16_t containerZero, int floaterThickness) {
     std::ofstream file(CALIBRATION_FILE, std::ios::trunc);
     if (!file.is_open()) return false;
-    file << std::fixed << std::setprecision(4) << containerZero << " " << floaterThickness;
+    file << containerZero << " " << floaterThickness;
     return static_cast<bool>(file);
 }
 
-bool loadCalibration(double& containerZero, int& floaterThickness) {
+bool loadCalibration(uint16_t& containerZero, int& floaterThickness) {
     std::ifstream file(CALIBRATION_FILE);
     if (file.is_open() && (file >> containerZero >> floaterThickness)) {
         return true;
     }
-    containerZero = 0.0;
+    containerZero = 0;
     floaterThickness = 0;
     return false;
 }
 
-void logCycleData(const std::string& sessionID, int targetLevel, double calculatedLevel, double actualMeasured, uint16_t rawSensorAvg) {
+void logCycleData(const std::string& sessionID, int targetLevel, int calculatedLevel, double actualMeasured, uint16_t rawSensorAvg) {
     bool exists = fileExists(DATA_FILE);
     std::ofstream file(DATA_FILE, std::ios::app);
     if (!file.is_open()) {
@@ -159,43 +150,42 @@ void logCycleData(const std::string& sessionID, int targetLevel, double calculat
     file << sessionID << ","
          << timeBuf << ","
          << targetLevel << ","
-         << std::fixed << std::setprecision(2) << calculatedLevel << ","
+         << calculatedLevel << ","
          << actualMeasured << ","
          << rawSensorAvg << ","
          << error << "\n";
 }
 
-void capture100Readings(VL53L0X& sensor, const std::string& eventName, double containerZero, int floaterThickness) {
+void capture100Readings(VL53L0X& sensor, const std::string& eventName, uint16_t containerZero, int floaterThickness) {
     std::cout << "\n[DATA LOG] Fluid settling complete. Capturing 100 raw ToF readings (~20 seconds)...\n";
     bool exists = fileExists(RAW_DATA_FILE);
     std::ofstream rawFile(RAW_DATA_FILE, std::ios::app);
     
     if (!exists) {
-        rawFile << "SessionID,Timestamp,Event,SampleIndex,RawDistance_mm,CorrectedDistance_mm,CalculatedLevel_mm\n";
+        rawFile << "SessionID,Timestamp,Event,SampleIndex,RawDistance_mm,CalculatedLevel_mm\n";
     }
 
     for (int i = 1; i <= 100; i++) {
         if (emergencyStop) break;
         uint16_t rawDist = 0;
         try {
+            // In High Accuracy mode (200ms budget), this call inherently blocks for ~200ms.
             rawDist = sensor.readRangeSingleMillimeters();
         } catch (...) {}
 
-        double correctedDist = applyDriftCorrection(static_cast<double>(rawDist));
-        double calculatedLevel = 0.0;
-        
-        if (containerZero > 0.0) {
-            calculatedLevel = containerZero - (correctedDist + floaterThickness);
-            calculatedLevel = std::max(0.0, calculatedLevel); 
+        // Calculate actual fluid level from the bottom
+        int calculatedLevel = 0;
+        if (containerZero > 0) {
+            calculatedLevel = static_cast<int>(containerZero) - (static_cast<int>(rawDist) + floaterThickness);
+            calculatedLevel = std::max(0, calculatedLevel); // Prevent negative outputs
         }
 
         std::time_t t = std::time(nullptr);
         char timeBuf[20];
         std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
 
-        std::cout << "\rSample " << i << "/100: Raw " << rawDist << " mm | Corrected: " << std::fixed << std::setprecision(1) << correctedDist << " mm | Lvl " << calculatedLevel << " mm    " << std::flush;
-        rawFile << currentSessionID << "," << timeBuf << "," << eventName << "," << i << "," << rawDist << "," 
-                << std::fixed << std::setprecision(2) << correctedDist << "," << calculatedLevel << "\n";
+        std::cout << "\rSample " << i << "/100: Raw " << rawDist << " mm | Lvl " << calculatedLevel << " mm    " << std::flush;
+        rawFile << currentSessionID << "," << timeBuf << "," << eventName << "," << i << "," << rawDist << "," << calculatedLevel << "\n";
     }
     std::cout << "\n[DATA LOG] Capture complete.\n";
 }
@@ -228,7 +218,7 @@ SensorMetrics getSensorMetrics(VL53L0X& sensor, int samples, int delay_us = 1000
     return metrics;
 }
 
-void runCalibration(VL53L0X& sensor, double& containerZero, int& floaterThickness) {
+void runCalibration(VL53L0X& sensor, uint16_t& containerZero, int& floaterThickness) {
     std::string dummy;
     std::cout << "\n--- [ MODE 1: SINGLE-POINT RELATIVE CALIBRATION ] ---\n";
     std::cout << "[!] Ensure the tank is completely DRAINED.\n";
@@ -238,7 +228,8 @@ void runCalibration(VL53L0X& sensor, double& containerZero, int& floaterThicknes
     std::cin.clear();
     std::getline(std::cin, dummy);
     
-    capture100Readings(sensor, "Calibration_SystemZero", 0.0, 0); 
+    // Pass 0 for containerZero and floaterThickness so it only logs raw distance during calibration
+    capture100Readings(sensor, "Calibration_SystemZero", 0, 0); 
     
     SensorMetrics zeroMetrics = getSensorMetrics(sensor, 20, 10000); 
     if (zeroMetrics.validSamples == 0) {
@@ -246,34 +237,39 @@ void runCalibration(VL53L0X& sensor, double& containerZero, int& floaterThicknes
         return;
     }
     
-    // Apply regression correction to the absolute zero establishing point
-    containerZero = applyDriftCorrection(static_cast<double>(zeroMetrics.average));
+    // The resting distance of the floater is our new absolute zero.
+    containerZero = zeroMetrics.average;
+    
+    // We set thickness to 0 because the gasket height and floater thickness 
+    // are now mathematically irrelevant to tracking the fluid level.
     floaterThickness = 0; 
     
-    std::cout << ">> System Zero (Corrected distance to resting floater): " << std::fixed << std::setprecision(2) << containerZero << " mm\n";
+    std::cout << ">> System Zero (Distance to resting floater): " << containerZero << " mm\n";
     saveCalibration(containerZero, floaterThickness);
 }
 
-void runContinuousRead(VL53L0X& sensor, double containerZero, int floaterThickness) {
-    if (containerZero == 0.0) {
+void runContinuousRead(VL53L0X& sensor, uint16_t containerZero, int floaterThickness) {
+    if (containerZero == 0) {
+        // Added the missing warning so it doesn't fail silently
         std::cout << "[!] Run calibration first.\n";
         return;
     }
     std::cout << "\n--- [ MODE 6: CONTINUOUS SENSOR STREAM ] ---\nPress ANY KEY to stop.\n\n";
     
+    // Flush any pending terminal keys before starting the loop
     while (kbhit()) getchar(); 
 
     while (!systemOffline && !kbhit()) {
+        // Reduced to 1 sample per loop. Because High Accuracy budget takes 200ms per sample, 
+        // 1 sample ensures the terminal updates at 5 FPS instead of freezing for 600ms.
         SensorMetrics metrics = getSensorMetrics(sensor, 1, 0); 
         if (metrics.validSamples > 0) {
-            double correctedAvg = applyDriftCorrection(static_cast<double>(metrics.average));
-            double rawLevel = std::max(0.0, containerZero - (correctedAvg + floaterThickness));
-            
-            std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << rawLevel 
-                      << " mm | Raw ToF: " << metrics.average << " mm | Corrected: " << correctedAvg << " mm    " << std::flush;
+            int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
+            std::cout << "\rLvl: " << std::max(0, rawLevel) << " mm | Raw ToF: " << metrics.average << " mm    " << std::flush;
         }
     }
     
+    // Consume the key that stopped the loop so it doesn't bleed into the menu
     if (kbhit()) getchar(); 
 }
 
@@ -294,8 +290,8 @@ void runSolenoidTestOnly() {
     setSolenoid(false);
 }
 
-void runSolenoidAndToF(VL53L0X& sensor, double containerZero, int floaterThickness) {
-    if (containerZero == 0.0) {
+void runSolenoidAndToF(VL53L0X& sensor, uint16_t containerZero, int floaterThickness) {
+    if (containerZero == 0) {
         std::cout << "[!] Run calibration first.\n";
         return;
     }
@@ -310,12 +306,11 @@ void runSolenoidAndToF(VL53L0X& sensor, double containerZero, int floaterThickne
     while (!emergencyStop && !kbhit()) {
         SensorMetrics metrics = getSensorMetrics(sensor, 3, 10000);
         if (metrics.validSamples > 0) {
-            double correctedAvg = applyDriftCorrection(static_cast<double>(metrics.average));
-            double rawLevel = std::max(0.0, containerZero - (correctedAvg + floaterThickness));
+            int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
+            if (rawLevel < 0) rawLevel = 0;
+            std::cout << "\rLvl: " << rawLevel << " mm | Yield: " << metrics.validSamples << "/3    " << std::flush;
             
-            std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << rawLevel << " mm | Yield: " << metrics.validSamples << "/3    " << std::flush;
-            
-            if (rawLevel <= 2.0) {
+            if (rawLevel <= 2) {
                 std::cout << "\n[SYSTEM] Tank empty. Closing solenoid.\n";
                 break;
             }
@@ -326,8 +321,8 @@ void runSolenoidAndToF(VL53L0X& sensor, double containerZero, int floaterThickne
     setSolenoid(false);
 }
 
-void runFullFluidCycle(VL53L0X& sensor, double containerZero, int floaterThickness) {
-    if (containerZero == 0.0) {
+void runFullFluidCycle(VL53L0X& sensor, uint16_t containerZero, int floaterThickness) {
+    if (containerZero == 0) {
         std::cout << "[!] Run calibration first.\n";
         return;
     }
@@ -355,10 +350,8 @@ void runFullFluidCycle(VL53L0X& sensor, double containerZero, int floaterThickne
     while (!emergencyStop) {
         SensorMetrics metrics = getSensorMetrics(sensor, 3, 5000);
         if (metrics.validSamples > 0) {
-            double correctedAvg = applyDriftCorrection(static_cast<double>(metrics.average));
-            double rawLevel = std::max(0.0, containerZero - (correctedAvg + floaterThickness));
-            
-            std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << rawLevel << "/" << targetLevel << " mm    " << std::flush;
+            int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
+            std::cout << "\rLvl: " << std::max(0, rawLevel) << "/" << targetLevel << " mm    " << std::flush;
             if (rawLevel >= targetLevel) break;
         }
     }
@@ -366,20 +359,21 @@ void runFullFluidCycle(VL53L0X& sensor, double containerZero, int floaterThickne
     setPump(false);
     if (emergencyStop) return;
 
-    usleep(1000000); 
+    // WAIT FOR FLUID TO SETTLE
+    usleep(1000000); // 1 second settling time before capturing Data
     
+    // CAPTURE RAW DATA WHILE SETTLED
     capture100Readings(sensor, "FullCycle_SettledMeasurement", containerZero, floaterThickness); 
     SensorMetrics settleMetrics = getSensorMetrics(sensor, 5, 10000);
-    double correctedSettle = applyDriftCorrection(static_cast<double>(settleMetrics.average));
-    double calculatedLevel = std::max(0.0, containerZero - (correctedSettle + floaterThickness));
+    int calculatedLevel = static_cast<int>(containerZero) - (static_cast<int>(settleMetrics.average) + floaterThickness);
 
-    std::cout << "\n\n[PHASE 2] SETTLED (ToF Calculated: " << std::fixed << std::setprecision(2) << calculatedLevel << " mm)\n";
+    std::cout << "\n\n[PHASE 2] SETTLED (ToF Calculated: " << std::max(0, calculatedLevel) << " mm)\n";
     std::cout << "Enter actual measured fluid level (mm): ";
     
     double actualMeasured = 0.0;
     if (std::cin >> actualMeasured) {
         std::cin.ignore(10000, '\n');
-        logCycleData(currentSessionID, targetLevel, calculatedLevel, actualMeasured, settleMetrics.average);
+        logCycleData(currentSessionID, targetLevel, std::max(0, calculatedLevel), actualMeasured, settleMetrics.average);
     } else {
         std::cin.clear(); std::cin.ignore(10000, '\n');
     }
@@ -388,37 +382,33 @@ void runFullFluidCycle(VL53L0X& sensor, double containerZero, int floaterThickne
     
     while (!emergencyStop) {
         SensorMetrics currentMetrics = getSensorMetrics(sensor, 3, 5000);
-        double currentLevel = 0.0;
+        int currentLevel = 0;
         if (currentMetrics.validSamples > 0) {
-            double correctedCurrent = applyDriftCorrection(static_cast<double>(currentMetrics.average));
-            currentLevel = std::max(0.0, containerZero - (correctedCurrent + floaterThickness));
+            currentLevel = std::max(0, static_cast<int>(containerZero) - (static_cast<int>(currentMetrics.average) + floaterThickness));
         }
-        if (currentLevel <= 2.0) break;
+        if (currentLevel <= 2) break;
 
-        std::cout << "Current Level: " << std::fixed << std::setprecision(1) << currentLevel 
-                  << " mm. Press ENTER to drain " << drainInterval << " mm (or 'q' to stop)... ";
+        std::cout << "Current Level: " << currentLevel << " mm. Press ENTER to drain " << drainInterval << " mm (or 'q' to stop)... ";
         std::string input;
         std::getline(std::cin, input);
         if (input == "q" || input == "Q") break;
         
-        double stepTarget = std::max(0.0, currentLevel - drainInterval);
+        int stepTarget = std::max(0, currentLevel - drainInterval);
         
         setSolenoid(true);
         while (!emergencyStop) {
             SensorMetrics metrics = getSensorMetrics(sensor, 2, 5000);
             if (metrics.validSamples > 0) {
-                double correctedAvg = applyDriftCorrection(static_cast<double>(metrics.average));
-                double rawLevel = std::max(0.0, containerZero - (correctedAvg + floaterThickness));
-                
-                std::cout << "\rDraining... Current: " << std::fixed << std::setprecision(1) << rawLevel 
-                          << " mm | Target: " << stepTarget << " mm    " << std::flush;
-                if (rawLevel <= stepTarget || rawLevel <= 2.0) break;
+                int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
+                std::cout << "\rDraining... Current: " << std::max(0, rawLevel) << " mm | Target: " << stepTarget << " mm    " << std::flush;
+                if (rawLevel <= stepTarget || rawLevel <= 2) break;
             }
         }
         setSolenoid(false);
         std::cout << "\n[STEP COMPLETE] Solenoid closed.\n";
         
-        usleep(1000000); 
+        // WAIT FOR FLUID TO SETTLE
+        usleep(1000000); // 1 second settling time before capturing Data
         capture100Readings(sensor, "FullCycle_PostDrainStep", containerZero, floaterThickness);
         std::cout << "\n";
     }
@@ -426,8 +416,8 @@ void runFullFluidCycle(VL53L0X& sensor, double containerZero, int floaterThickne
     std::cout << "\n[SYSTEM] Cycle complete. Hardware parked.\n";
 }
 
-void runExperimentDrainFlow(VL53L0X& sensor, double containerZero, int floaterThickness) {
-    if (containerZero == 0.0) {
+void runExperimentDrainFlow(VL53L0X& sensor, uint16_t containerZero, int floaterThickness) {
+    if (containerZero == 0) {
         std::cout << "[!] Run calibration first.\n";
         return;
     }
@@ -448,22 +438,21 @@ void runExperimentDrainFlow(VL53L0X& sensor, double containerZero, int floaterTh
     while (!emergencyStop) {
         SensorMetrics metrics = getSensorMetrics(sensor, 3, 5000);
         if (metrics.validSamples > 0) {
-            double correctedAvg = applyDriftCorrection(static_cast<double>(metrics.average));
-            double rawLevel = std::max(0.0, containerZero - (correctedAvg + floaterThickness));
-            
-            std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << rawLevel << "/" << targetLevel << " mm    " << std::flush;
+            int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
+            std::cout << "\rLvl: " << std::max(0, rawLevel) << "/" << targetLevel << " mm    " << std::flush;
             if (rawLevel >= targetLevel) break;
         }
     }
     setPump(false);
     if (emergencyStop) return;
 
+    // WAIT FOR FLUID TO SETTLE
     usleep(1000000); 
 
+    // CAPTURE RAW DATA WHILE SETTLED
     capture100Readings(sensor, "DrainExp_InitialMeasurement", containerZero, floaterThickness); 
     SensorMetrics settleMetrics = getSensorMetrics(sensor, 5, 10000);
-    double correctedSettle = applyDriftCorrection(static_cast<double>(settleMetrics.average));
-    double calculatedLevel = std::max(0.0, containerZero - (correctedSettle + floaterThickness));
+    int calculatedLevel = static_cast<int>(containerZero) - (static_cast<int>(settleMetrics.average) + floaterThickness);
 
     std::cout << "\n\n[PHASE 2] MEASUREMENT\n";
     std::cout << "[!] REMOVE the floater and measure the water level manually.\n";
@@ -472,7 +461,7 @@ void runExperimentDrainFlow(VL53L0X& sensor, double containerZero, int floaterTh
     double actualMeasured = 0.0;
     if (std::cin >> actualMeasured) {
         std::cin.ignore(10000, '\n');
-        logCycleData(currentSessionID, targetLevel, calculatedLevel, actualMeasured, settleMetrics.average);
+        logCycleData(currentSessionID, targetLevel, std::max(0, calculatedLevel), actualMeasured, settleMetrics.average);
     } else {
         std::cin.clear(); std::cin.ignore(10000, '\n');
     }
@@ -492,30 +481,28 @@ void runExperimentDrainFlow(VL53L0X& sensor, double containerZero, int floaterTh
         while (!emergencyStop) {
             SensorMetrics metrics = getSensorMetrics(sensor, 2, 5000);
             if (metrics.validSamples > 0) {
-                double correctedAvg = applyDriftCorrection(static_cast<double>(metrics.average));
-                double rawLevel = std::max(0.0, containerZero - (correctedAvg + floaterThickness));
-                
-                std::cout << "\rDraining... Current Lvl: " << std::fixed << std::setprecision(1) << rawLevel 
-                          << " mm | Target: " << newSetPoint << " mm    " << std::flush;
-                if (rawLevel <= newSetPoint || rawLevel <= 2.0) break;
+                int rawLevel = static_cast<int>(containerZero) - (static_cast<int>(metrics.average) + floaterThickness);
+                std::cout << "\rDraining... Current Lvl: " << std::max(0, rawLevel) << " mm | Target: " << newSetPoint << " mm    " << std::flush;
+                if (rawLevel <= newSetPoint || rawLevel <= 2) break;
             }
         }
         setSolenoid(false);
         if (emergencyStop) break;
 
+        // WAIT FOR FLUID TO SETTLE
         usleep(1000000); 
 
+        // CAPTURE RAW DATA WHILE SETTLED
         capture100Readings(sensor, "DrainExp_PostDrainMeasurement", containerZero, floaterThickness); 
         SensorMetrics drainSettleMetrics = getSensorMetrics(sensor, 5, 10000);
-        double correctedDrainSettle = applyDriftCorrection(static_cast<double>(drainSettleMetrics.average));
-        double drainCalculated = std::max(0.0, containerZero - (correctedDrainSettle + floaterThickness));
+        int drainCalculated = static_cast<int>(containerZero) - (static_cast<int>(drainSettleMetrics.average) + floaterThickness);
 
         std::cout << "\n\n[!] DRAIN COMPLETE. REMOVE the floater again and measure manually.\n";
         std::cout << "Enter actual measured fluid level (mm): ";
         double drainMeasured = 0.0;
         if (std::cin >> drainMeasured) {
             std::cin.ignore(10000, '\n');
-            logCycleData(currentSessionID, newSetPoint, drainCalculated, drainMeasured, drainSettleMetrics.average);
+            logCycleData(currentSessionID, newSetPoint, std::max(0, drainCalculated), drainMeasured, drainSettleMetrics.average);
         } else {
             std::cin.clear(); std::cin.ignore(10000, '\n');
         }
@@ -555,13 +542,18 @@ int main() {
     try {
         sensor.initialize();
         sensor.setTimeout(500);
+        
+        // ==============================================================
+        // HIGH ACCURACY PROFILE
+        // Set timing budget to 200ms per measurement for highest accuracy 
+        // ==============================================================
         sensor.setMeasurementTimingBudget(200000); 
     } catch (...) {
         std::cerr << "Error initializing ToF sensor.\n";
         return 2;
     }
 
-    double containerZero = 0.0; // Upgraded to double for precise tracking
+    uint16_t containerZero = 0;
     int floaterThickness = 0;
     loadCalibration(containerZero, floaterThickness);
 
