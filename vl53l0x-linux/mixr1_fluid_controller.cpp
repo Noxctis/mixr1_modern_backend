@@ -43,11 +43,11 @@ struct SensorMetrics {
     int targetSamples;
 };
 
-void setSolenoid(bool open) {
+void setSolenoid(bool open, int pwm_val = 1024) {
     if (open) {
         digitalWrite(SOLENOID_INA, HIGH);
         digitalWrite(SOLENOID_INB, LOW);
-        pwmWrite(SOLENOID_PWM, 1024);
+        pwmWrite(SOLENOID_PWM, pwm_val);
     } else {
         digitalWrite(SOLENOID_INA, LOW);
         digitalWrite(SOLENOID_INB, LOW);
@@ -55,12 +55,12 @@ void setSolenoid(bool open) {
     }
 }
 
-void setPump(bool active) {
+void setPump(bool active, int pwm_val = 1024) {
     if (active) {
         digitalWrite(PUMP_EN, HIGH);
         digitalWrite(PUMP_INA, HIGH);
         digitalWrite(PUMP_INB, LOW);
-        pwmWrite(PUMP_PWM, 1024);
+        pwmWrite(PUMP_PWM, pwm_val);
     } else {
         digitalWrite(PUMP_EN, LOW);
         digitalWrite(PUMP_INA, LOW);
@@ -218,6 +218,22 @@ SensorMetrics getSensorMetrics(VL53L0X& sensor, int samples, int delay_us = 1000
     return metrics;
 }
 
+int getPWMFromVoltage(const std::string& hwName) {
+    double targetVoltage;
+    std::cout << "Enter " << hwName << " operating voltage (6.0 - 12.0 V): ";
+    if (!(std::cin >> targetVoltage) || targetVoltage < 6.0 || targetVoltage > 12.0) {
+        std::cout << "[!] Invalid voltage. Defaulting to 12.0V.\n";
+        std::cin.clear(); std::cin.ignore(10000, '\n');
+        return 1024;
+    }
+    std::cin.ignore(10000, '\n');
+    
+    int pwm_val = static_cast<int>((targetVoltage / 12.0) * 1024.0);
+    if (pwm_val > 1024) pwm_val = 1024;
+    if (pwm_val < 0) pwm_val = 0;
+    return pwm_val;
+}
+
 void runCalibration(VL53L0X& sensor, uint16_t& containerZero, int& floaterThickness) {
     std::string dummy;
     std::cout << "\n--- [ MODE 1: SINGLE-POINT RELATIVE CALIBRATION ] ---\n";
@@ -250,7 +266,6 @@ void runCalibration(VL53L0X& sensor, uint16_t& containerZero, int& floaterThickn
 
 void runContinuousRead(VL53L0X& sensor, uint16_t containerZero, int floaterThickness) {
     if (containerZero == 0) {
-        // Added the missing warning so it doesn't fail silently
         std::cout << "[!] Run calibration first.\n";
         return;
     }
@@ -274,8 +289,10 @@ void runContinuousRead(VL53L0X& sensor, uint16_t containerZero, int floaterThick
 }
 
 void runSolenoidTestOnly() {
-    std::string dummy;
     std::cout << "\n--- [ MODE 2: SOLENOID TOGGLE (DRY TEST) ] ---\n";
+    int sol_pwm = getPWMFromVoltage("Solenoid");
+
+    std::string dummy;
     std::cout << "Press ENTER to OPEN valve, ENTER again to CLOSE. Type 'q' and ENTER to quit.\n";
     
     bool isOpen = false;
@@ -284,7 +301,7 @@ void runSolenoidTestOnly() {
         if (dummy == "q") break;
         
         isOpen = !isOpen;
-        setSolenoid(isOpen);
+        setSolenoid(isOpen, sol_pwm);
         std::cout << "[SYSTEM] Solenoid is now " << (isOpen ? "OPEN" : "CLOSED") << ".\n";
     }
     setSolenoid(false);
@@ -297,11 +314,13 @@ void runSolenoidAndToF(VL53L0X& sensor, uint16_t containerZero, int floaterThick
     }
     
     std::cout << "\n--- [ MODE 3: GRAVITY DRAIN & MONITOR ] ---\n";
+    int sol_pwm = getPWMFromVoltage("Solenoid");
+
     std::cout << "Opening solenoid and monitoring ToF drop. Press any key to abort.\n";
     
     while (kbhit()) getchar();
     emergencyStop = 0;
-    setSolenoid(true);
+    setSolenoid(true, sol_pwm);
     
     while (!emergencyStop && !kbhit()) {
         SensorMetrics metrics = getSensorMetrics(sensor, 3, 10000);
@@ -327,8 +346,11 @@ void runFullFluidCycle(VL53L0X& sensor, uint16_t containerZero, int floaterThick
         return;
     }
     
-    int targetLevel;
     std::cout << "\n--- [ MODE 4: FULL CYCLE (PUMP FILL -> SETTLE -> STEPPED DRAIN) ] ---\n";
+    int pump_pwm = getPWMFromVoltage("Pump");
+    int sol_pwm = getPWMFromVoltage("Solenoid");
+
+    int targetLevel;
     std::cout << "Enter target fill level (mm): ";
     if (!(std::cin >> targetLevel)) {
         std::cin.clear(); std::cin.ignore(10000, '\n'); return;
@@ -344,7 +366,7 @@ void runFullFluidCycle(VL53L0X& sensor, uint16_t containerZero, int floaterThick
 
     emergencyStop = 0;
     setSolenoid(false);
-    setPump(true);
+    setPump(true, pump_pwm);
     std::cout << "\n[PHASE 1] FILLING\n";
     
     while (!emergencyStop) {
@@ -395,7 +417,7 @@ void runFullFluidCycle(VL53L0X& sensor, uint16_t containerZero, int floaterThick
         
         int stepTarget = std::max(0, currentLevel - drainInterval);
         
-        setSolenoid(true);
+        setSolenoid(true, sol_pwm);
         while (!emergencyStop) {
             SensorMetrics metrics = getSensorMetrics(sensor, 2, 5000);
             if (metrics.validSamples > 0) {
@@ -422,8 +444,11 @@ void runExperimentDrainFlow(VL53L0X& sensor, uint16_t containerZero, int floater
         return;
     }
 
-    int targetLevel;
     std::cout << "\n--- [ MODE 5: EXPERIMENT DRAIN FLOW (ITERATIVE) ] ---\n";
+    int pump_pwm = getPWMFromVoltage("Pump");
+    int sol_pwm = getPWMFromVoltage("Solenoid");
+
+    int targetLevel;
     std::cout << "Enter initial fill set point (mm): ";
     if (!(std::cin >> targetLevel)) {
         std::cin.clear(); std::cin.ignore(10000, '\n'); return;
@@ -432,7 +457,7 @@ void runExperimentDrainFlow(VL53L0X& sensor, uint16_t containerZero, int floater
 
     emergencyStop = 0;
     setSolenoid(false);
-    setPump(true);
+    setPump(true, pump_pwm);
     std::cout << "\n[PHASE 1] FILLING TO " << targetLevel << " mm\n";
 
     while (!emergencyStop) {
@@ -477,7 +502,7 @@ void runExperimentDrainFlow(VL53L0X& sensor, uint16_t containerZero, int floater
         }
         std::cin.ignore(10000, '\n');
 
-        setSolenoid(true);
+        setSolenoid(true, sol_pwm);
         while (!emergencyStop) {
             SensorMetrics metrics = getSensorMetrics(sensor, 2, 5000);
             if (metrics.validSamples > 0) {
@@ -515,6 +540,85 @@ void runExperimentDrainFlow(VL53L0X& sensor, uint16_t containerZero, int floater
     
     setSolenoid(false);
     std::cout << "\n[SYSTEM] Experiment sequence complete. Hardware parked.\n";
+}
+
+void runManualHardwareControl() {
+    std::cout << "\n--- [ MODE 7: MANUAL HARDWARE CONTROL ] ---\n";
+    std::cout << "Select Hardware:\n";
+    std::cout << " [1] Water Pump\n";
+    std::cout << " [2] Solenoid Valve\n";
+    std::cout << "Selection: ";
+    
+    int hwChoice;
+    if (!(std::cin >> hwChoice) || (hwChoice != 1 && hwChoice != 2)) {
+        std::cout << "[!] Invalid selection.\n";
+        std::cin.clear(); std::cin.ignore(10000, '\n'); return;
+    }
+
+    std::string hwName = (hwChoice == 1) ? "Pump" : "Solenoid";
+    int pwm_val = getPWMFromVoltage(hwName);
+
+    std::cout << "\nSelect Control Mode:\n";
+    std::cout << " [1] Toggle (Press Enter to start, Enter to stop)\n";
+    std::cout << " [2] Timer (Run for X seconds)\n";
+    std::cout << "Selection: ";
+    
+    int modeChoice;
+    if (!(std::cin >> modeChoice) || (modeChoice != 1 && modeChoice != 2)) {
+        std::cout << "[!] Invalid selection.\n";
+        std::cin.clear(); std::cin.ignore(10000, '\n'); return;
+    }
+    std::cin.ignore(10000, '\n'); // Clear newline buffer
+
+    if (modeChoice == 1) {
+        std::cout << "\nPress ENTER to turn ON the " << hwName << "...";
+        std::string dummy;
+        std::getline(std::cin, dummy);
+
+        if (hwChoice == 1) setPump(true, pwm_val);
+        else setSolenoid(true, pwm_val);
+
+        std::cout << "[" << hwName << " ON] Press ENTER to turn OFF...\n";
+        std::getline(std::cin, dummy);
+
+        if (hwChoice == 1) setPump(false);
+        else setSolenoid(false);
+        
+        std::cout << "[" << hwName << " OFF]\n";
+    } 
+    else {
+        std::cout << "\nEnter duration in seconds: ";
+        int seconds;
+        if (!(std::cin >> seconds) || seconds <= 0) {
+            std::cout << "[!] Invalid duration.\n";
+            std::cin.clear(); std::cin.ignore(10000, '\n'); return;
+        }
+        std::cin.ignore(10000, '\n'); // Clear newline buffer
+
+        if (hwChoice == 1) setPump(true, pwm_val);
+        else setSolenoid(true, pwm_val);
+
+        std::cout << "[" << hwName << " ON] Running for " << seconds << " seconds. Press ANY KEY to abort.\n";
+        
+        // Flush any pending terminal keys before starting the loop
+        while (kbhit()) getchar();
+
+        auto start_time = std::time(nullptr);
+        while (std::time(nullptr) - start_time < seconds && !emergencyStop) {
+            if (kbhit()) {
+                getchar(); // Consume the key
+                std::cout << "\n[ABORTED] Manual interruption.\n";
+                break;
+            }
+            std::cout << "\rRemaining: " << seconds - (std::time(nullptr) - start_time) << " s   " << std::flush;
+            usleep(100000); // 100ms sleep to prevent CPU hogging
+        }
+
+        if (hwChoice == 1) setPump(false);
+        else setSolenoid(false);
+        
+        std::cout << "\n[" << hwName << " OFF]\n";
+    }
 }
 
 int main() {
@@ -568,7 +672,8 @@ int main() {
         std::cout << " [4] Full Cycle (Pump Fill -> Settle -> Stepped Drain)\n";
         std::cout << " [5] Experiment Drain Flow (Fill -> Iterative Drain)\n";
         std::cout << " [6] Continuous Sensor Stream\n";
-        std::cout << " [7] Exit System\nSelection: ";
+        std::cout << " [7] Manual Hardware Control (Toggle / Timer)\n";
+        std::cout << " [8] Exit System\nSelection: ";
         
         if (!(std::cin >> choice)) {
             std::cin.clear();
@@ -584,7 +689,8 @@ int main() {
             case 4: runFullFluidCycle(sensor, containerZero, floaterThickness); break;
             case 5: runExperimentDrainFlow(sensor, containerZero, floaterThickness); break;
             case 6: runContinuousRead(sensor, containerZero, floaterThickness); break;
-            case 7: systemOffline = 1; break;
+            case 7: runManualHardwareControl(); break;
+            case 8: systemOffline = 1; break;
         }
     }
 
