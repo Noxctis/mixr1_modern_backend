@@ -108,7 +108,7 @@ int run_test(const TestOptions& options) {
     bool fifo_active = false;
     if (options.fifo) {
         fifo_active = set_fifo_priority();
-        if (!fifo_active) std::cerr << "[TEST] SCHED_FIFO request failed.\n";
+        if (!fifo_active) std::cerr << "[TEST] SCHED_FIFO request failed; continuing without it.\n";
     }
 
     AMT102Encoder encoder(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
@@ -117,7 +117,7 @@ int run_test(const TestOptions& options) {
     PIController controller;
     std::ofstream log(options.csv_path);
     if (!log) {
-        std::cerr << "[TEST] Cannot open CSV.\n";
+        std::cerr << "[TEST] Cannot open CSV: " << options.csv_path << '\n';
         motor.stop_motor();
         pigpio_stop(pi);
         return 1;
@@ -127,7 +127,7 @@ int run_test(const TestOptions& options) {
     const std::string intended_fifo = options.fifo ? "FIFO" : "NoFIFO";
     const std::string condition = intended_mode + "_" + intended_fifo;
 
-    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,current_a,power_w,intended_mode,intended_fifo,fifo_active,condition\n";
+    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition\n";
     
     int current_pwm = options.use_pi ? 0 : (options.sweep ? 0 : options.fixed_pwm);
     double current_target = options.use_pi ? 0.0 : options.target_rpm;
@@ -148,7 +148,11 @@ int run_test(const TestOptions& options) {
     std::vector<double> errors;
 
     const double total_duration = options.sweep ? options.duration_sec * 11.0 : options.duration_sec;
-    int terminal_print_prescaler = 0;
+    
+    if (options.sine_mode) {
+        std::cout << "[TEST] Sine Wave Mode | Target: " << options.target_rpm << " RPM +/- " 
+                  << options.sine_amplitude << " | Freq: " << options.sine_freq_hz << " Hz\n";
+    }
 
     while (run_loop) {
         next_wake += std::chrono::microseconds(Config::LOOP_DELAY_US);
@@ -160,6 +164,7 @@ int run_test(const TestOptions& options) {
         if (options.sine_mode && options.use_pi) {
             current_target = options.target_rpm + (options.sine_amplitude * std::sin(2.0 * M_PI * options.sine_freq_hz * elapsed));
         } else if (options.sine_mode && !options.use_pi) {
+            // FIX: Directly modulate PWM for open-loop sine wave
             current_pwm = options.fixed_pwm + static_cast<int>(options.sine_amplitude * std::sin(2.0 * M_PI * options.sine_freq_hz * elapsed));
             current_pwm = std::clamp(current_pwm, 0, 4095);
             motor.set_pwm(current_pwm);
@@ -174,7 +179,10 @@ int run_test(const TestOptions& options) {
                     current_pwm = (step_index * 10 * 4095) / 100;
                     motor.set_pwm(current_pwm);
                 }
-                std::cout << "\n[TEST] Sweep Step: " << (options.use_pi ? current_target : step_index * 10) << "\n";
+                std::cout << "[TEST] " << (options.use_pi ? "RPM target " : "PWM step ")
+                          << (options.use_pi ? current_target : step_index * 10)
+                          << (options.use_pi ? " RPM" : "%") << " for "
+                          << options.duration_sec << " seconds\n";
             }
         }
 
@@ -191,23 +199,11 @@ int run_test(const TestOptions& options) {
 
         const double error = current_target - state.exact_rpm;
         const int pwm_percent = options.sweep ? step_index * 10 : (current_pwm * 100) / 4095;
-
-        double current_a = motor.get_current_amps();
-        double power_w = motor.get_power_watts(current_pwm);
-
         log << std::fixed << std::setprecision(6) << elapsed << ',' << step_index << ',' << pwm_percent << ','
             << period << ',' << lateness << ','
             << state.exact_rpm << ',' << state.ema_filtered_rpm << ',' << current_target << ','
             << current_pwm << ',' << error << ','
-            << current_a << ',' << power_w << ','
             << intended_mode << ',' << intended_fifo << ',' << (fifo_active ? "true" : "false") << ',' << condition << '\n';
-
-        if (++terminal_print_prescaler >= 10) { 
-            terminal_print_prescaler = 0;
-            std::cout << "\r[TEST] RPM: " << std::fixed << std::setprecision(1) << state.ema_filtered_rpm 
-                      << " | Curr: " << std::setprecision(2) << current_a << "A | Pwr: " << power_w << "W     " << std::flush;
-        }
-
         periods_us.push_back(period);
         late_us.push_back(lateness);
         rpm_samples.push_back(state.exact_rpm);
@@ -223,7 +219,22 @@ int run_test(const TestOptions& options) {
         return std::accumulate(values.begin(), values.end(), 0.0) / values.size();
     };
     const double period_mean = mean(periods_us);
-    std::cout << "\n[TEST] Complete. Saved to " << options.csv_path << '\n';
+    double variance = 0.0;
+    for (double period : periods_us) variance += (period - period_mean) * (period - period_mean);
+    variance /= periods_us.size();
+    const auto max_late = *std::max_element(late_us.begin(), late_us.end());
+    const auto late_cycles = std::count_if(late_us.begin(), late_us.end(), [](double value) { return value > 0.0; });
+
+    std::cout << "[TEST] fifo=" << (fifo_active ? "active" : "off")
+              << " pi=" << (options.use_pi ? "on" : "off")
+              << " samples=" << periods_us.size()
+              << " period_mean_us=" << period_mean
+              << " period_std_us=" << std::sqrt(variance)
+              << " max_late_us=" << max_late
+              << " late_cycles=" << late_cycles
+              << " mean_rpm=" << mean(rpm_samples)
+              << " mean_abs_error_rpm=" << mean(errors) << '\n';
+    std::cout << "[TEST] CSV saved to " << options.csv_path << '\n';
     return 0;
 }
 
@@ -235,30 +246,41 @@ int main(int argc, char** argv) {
             std::cout << "[CONFIG] Set ENCODER_CPR to " << Config::ENCODER_CPR << '\n';
         } else if (arg.rfind("--window=", 0) == 0) {
             Config::RPM_SAMPLE_WINDOW_US = std::stoi(arg.substr(9));
+            std::cout << "[CONFIG] Set RPM_SAMPLE_WINDOW_US to " << Config::RPM_SAMPLE_WINDOW_US << "us\n";
         }
     }
 
     if (argc > 1 && std::string(argv[1]) == "--test") {
         TestOptions options;
-        if (!parse_test_options(argc, argv, options)) return 2;
+        if (!parse_test_options(argc, argv, options)) {
+            std::cerr << "Usage: ./mixr1_daemon --test ...\n";
+            return 2;
+        }
         std::signal(SIGINT, signal_handler);
         std::signal(SIGTERM, signal_handler);
         return run_test(options);
     }
 
     int pi = pigpio_start(nullptr, nullptr);
-    if (pi < 0) return 1;
+    if (pi < 0) {
+        std::cerr << "[CRITICAL] Failed to connect to pigpiod.\n";
+        return 1;
+    }
 
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(3, &cpuset);
-    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+    if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
+        std::cerr << "[WARNING] Failed to set CPU affinity to Core 3.\n";
+    }
 
     sched_param sch;
     int policy;
     pthread_getschedparam(pthread_self(), &policy, &sch);
     sch.sched_priority = 90;
-    pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch);
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sch) != 0) {
+        std::cerr << "[WARNING] Failed to set SCHED_FIFO. Must run with sudo.\n";
+    }
 
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
@@ -314,15 +336,15 @@ int main(int argc, char** argv) {
 
                 if (simulink_is_active) {
                     if (!mode3_notified) {
-                        std::cout << "\n[MIXR-1] MATLAB detected. Releasing hardware...\n";
-                        motor->stop_motor(); 
+                        std::cout << "[MIXR-1] MATLAB detected. Releasing hardware...\n";
+                        motor.reset();
                         encoder.reset();
                         lcd.reset();
                         pi_control.reset(); 
                         target_rpm = 0.0;
                         mode3_notified = true;
                     }
-                    if (!network->send_packet(-2.0, -2.0, -2, -2.0, -2.0)) break; 
+                    if (!network->send_packet(-2.0, -2.0, -2)) break; 
                     continue;
                 }
 
@@ -362,25 +384,11 @@ int main(int argc, char** argv) {
                     }
                 }
 
-                double current_a = 0.0;
-                double power_w = 0.0;
-                if (motor && !simulink_is_active) {
-                    current_a = motor->get_current_amps();
-                    power_w = motor->get_power_watts(current_pwm);
-                }
-
                 if (update_net) {
-                    if (!network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder->get_revolutions(), current_a, power_w)) break; 
+                    if (!network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder->get_revolutions())) break; 
                 }
 
                 if (update_lcd) {
-                    if (motor && !simulink_is_active) {
-                        std::cout << "\r[MIXR-1] RPM: " << std::fixed << std::setprecision(1) << state.ema_filtered_rpm 
-                                  << " | Trg: " << (pi_mode ? target_rpm : target_pwm_pct)
-                                  << " | Curr: " << std::setprecision(2) << current_a << " A"
-                                  << " | Pwr: " << power_w << " W          " << std::flush;
-                    }
-
                     if (lcd) {
                         std::ostringstream raw_str, filtered_str;
                         raw_str << std::fixed << std::setprecision(1) << "R:" << state.exact_rpm << " X:" << encoder->get_revolutions() << "   ";

@@ -57,11 +57,9 @@ bool TelemetryServer::wait_for_client() {
     return false;
 }
 
-bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long revolutions, double current_a, double power_w) const {
+bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long revolutions) const {
     if (client_socket < 0) return false;
-    std::string packet = std::to_string(raw_rpm) + "," + std::to_string(filtered_rpm) + "," + 
-                         std::to_string(revolutions) + "," + std::to_string(current_a) + "," + 
-                         std::to_string(power_w) + "\n";
+    std::string packet = std::to_string(raw_rpm) + "," + std::to_string(filtered_rpm) + "," + std::to_string(revolutions) + "\n";
     return send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0;
 }
 

@@ -34,9 +34,4 @@ namespace Config {
     constexpr unsigned int PIN_M1_PWM = 13;              
     constexpr int I2C_LCD_ADDR = 0x27;                   
     constexpr int PWM_FREQUENCY = 20000;                 
-
-    // NEW: ADC and Current Sense Constants
-    constexpr unsigned int I2C_ADC_ADDR = 0x48;          
-    constexpr double VNH5019_CS_V_PER_AMP = 0.14;        
-    constexpr double MOTOR_SUPPLY_VOLTAGE = 24.0;                
 }
