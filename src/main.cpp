@@ -127,7 +127,6 @@ int run_test(const TestOptions& options) {
     const std::string intended_fifo = options.fifo ? "FIFO" : "NoFIFO";
     const std::string condition = intended_mode + "_" + intended_fifo;
 
-    // UPDATED: Added current_a and power_w to CSV header
     log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,current_a,power_w,intended_mode,intended_fifo,fifo_active,condition\n";
     
     int current_pwm = options.use_pi ? 0 : (options.sweep ? 0 : options.fixed_pwm);
@@ -200,11 +199,9 @@ int run_test(const TestOptions& options) {
         const double error = current_target - state.exact_rpm;
         const int pwm_percent = options.sweep ? step_index * 10 : (current_pwm * 100) / 4095;
 
-        // NEW: Read current and power
         double current_a = motor.get_current_amps();
         double power_w = motor.get_power_watts(current_pwm);
 
-        // UPDATED: Logging includes current_a and power_w
         log << std::fixed << std::setprecision(6) << elapsed << ',' << step_index << ',' << pwm_percent << ','
             << period << ',' << lateness << ','
             << state.exact_rpm << ',' << state.ema_filtered_rpm << ',' << current_target << ','
@@ -345,14 +342,15 @@ int main(int argc, char** argv) {
                 if (simulink_is_active) {
                     if (!mode3_notified) {
                         std::cout << "[MIXR-1] MATLAB detected. Releasing hardware...\n";
-                        motor->stop_motor(); // explicitly stop motor via pointer
+                        motor->stop_motor(); 
                         encoder.reset();
                         lcd.reset();
                         pi_control.reset(); 
                         target_rpm = 0.0;
                         mode3_notified = true;
                     }
-                    if (!network->send_packet(-2.0, -2.0, -2)) break; 
+                    // FIX: Pass 5 arguments (-2.0) for Mode 3 heartbeat
+                    if (!network->send_packet(-2.0, -2.0, -2, -2.0, -2.0)) break; 
                     continue;
                 }
 
@@ -392,15 +390,21 @@ int main(int argc, char** argv) {
                     }
                 }
 
+                // NEW: Calculate current and power for both networking and LCD updates
+                double current_a = 0.0;
+                double power_w = 0.0;
+                if (motor && !simulink_is_active) {
+                    current_a = motor->get_current_amps();
+                    power_w = motor->get_power_watts(current_pwm);
+                }
+
                 if (update_net) {
-                    if (!network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder->get_revolutions())) break; 
+                    // FIX: Pass 5 arguments for Mode 2 telemetry
+                    if (!network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder->get_revolutions(), current_a, power_w)) break; 
                 }
 
                 if (update_lcd) {
-                    // NEW: Print power stats to the terminal during live dashboard mode
                     if (motor && !simulink_is_active) {
-                        double current_a = motor->get_current_amps();
-                        double power_w = motor->get_power_watts(current_pwm);
                         std::cout << "[MIXR-1] RPM: " << std::fixed << std::setprecision(1) << state.ema_filtered_rpm 
                                   << " | PWM: " << current_pwm << "/4095 | "
                                   << "Current: " << std::setprecision(2) << current_a << " A | "
