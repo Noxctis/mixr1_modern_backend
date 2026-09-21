@@ -1,5 +1,4 @@
 // include/network.hpp
-// Update the receive_command signature to accept PWM and mode flags.
 #pragma once
 #include <string>
 
@@ -15,9 +14,10 @@ public:
     ~TelemetryServer();
     bool start_server(int port);
     bool wait_for_client();
-    bool send_packet(double raw_rpm, double filtered_rpm, long long revolutions) const;
     
-    // Updated signature for dual-mode control
+    // Updated signature to accept current and power
+    bool send_packet(double raw_rpm, double filtered_rpm, long long revolutions, double current_a, double power_w) const;
+    
     bool receive_command(double& target_rpm, int& target_pwm_pct, bool& pi_mode);
     
     void stop_server();
