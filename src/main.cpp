@@ -127,7 +127,8 @@ int run_test(const TestOptions& options) {
     const std::string intended_fifo = options.fifo ? "FIFO" : "NoFIFO";
     const std::string condition = intended_mode + "_" + intended_fifo;
 
-    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition\n";
+    // UPDATED: Added current_a and power_w to CSV header
+    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,current_a,power_w,intended_mode,intended_fifo,fifo_active,condition\n";
     
     int current_pwm = options.use_pi ? 0 : (options.sweep ? 0 : options.fixed_pwm);
     double current_target = options.use_pi ? 0.0 : options.target_rpm;
@@ -164,7 +165,6 @@ int run_test(const TestOptions& options) {
         if (options.sine_mode && options.use_pi) {
             current_target = options.target_rpm + (options.sine_amplitude * std::sin(2.0 * M_PI * options.sine_freq_hz * elapsed));
         } else if (options.sine_mode && !options.use_pi) {
-            // FIX: Directly modulate PWM for open-loop sine wave
             current_pwm = options.fixed_pwm + static_cast<int>(options.sine_amplitude * std::sin(2.0 * M_PI * options.sine_freq_hz * elapsed));
             current_pwm = std::clamp(current_pwm, 0, 4095);
             motor.set_pwm(current_pwm);
@@ -199,11 +199,19 @@ int run_test(const TestOptions& options) {
 
         const double error = current_target - state.exact_rpm;
         const int pwm_percent = options.sweep ? step_index * 10 : (current_pwm * 100) / 4095;
+
+        // NEW: Read current and power
+        double current_a = motor.get_current_amps();
+        double power_w = motor.get_power_watts(current_pwm);
+
+        // UPDATED: Logging includes current_a and power_w
         log << std::fixed << std::setprecision(6) << elapsed << ',' << step_index << ',' << pwm_percent << ','
             << period << ',' << lateness << ','
             << state.exact_rpm << ',' << state.ema_filtered_rpm << ',' << current_target << ','
             << current_pwm << ',' << error << ','
+            << current_a << ',' << power_w << ','
             << intended_mode << ',' << intended_fifo << ',' << (fifo_active ? "true" : "false") << ',' << condition << '\n';
+
         periods_us.push_back(period);
         late_us.push_back(lateness);
         rpm_samples.push_back(state.exact_rpm);
@@ -337,7 +345,7 @@ int main(int argc, char** argv) {
                 if (simulink_is_active) {
                     if (!mode3_notified) {
                         std::cout << "[MIXR-1] MATLAB detected. Releasing hardware...\n";
-                        motor.reset();
+                        motor->stop_motor(); // explicitly stop motor via pointer
                         encoder.reset();
                         lcd.reset();
                         pi_control.reset(); 
@@ -389,6 +397,16 @@ int main(int argc, char** argv) {
                 }
 
                 if (update_lcd) {
+                    // NEW: Print power stats to the terminal during live dashboard mode
+                    if (motor && !simulink_is_active) {
+                        double current_a = motor->get_current_amps();
+                        double power_w = motor->get_power_watts(current_pwm);
+                        std::cout << "[MIXR-1] RPM: " << std::fixed << std::setprecision(1) << state.ema_filtered_rpm 
+                                  << " | PWM: " << current_pwm << "/4095 | "
+                                  << "Current: " << std::setprecision(2) << current_a << " A | "
+                                  << "Power: " << power_w << " W\r" << std::flush;
+                    }
+
                     if (lcd) {
                         std::ostringstream raw_str, filtered_str;
                         raw_str << std::fixed << std::setprecision(1) << "R:" << state.exact_rpm << " X:" << encoder->get_revolutions() << "   ";
