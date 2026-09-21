@@ -1,10 +1,15 @@
 // include/motor.hpp
 #pragma once
+#include <chrono>
 
 class MotorController {
 private:
     int pi_handle;
-    int adc_handle; // NEW: Handle for ADS1115 I2C
+    int adc_handle; 
+    
+    // Cache variables to prevent I2C blocking
+    std::chrono::steady_clock::time_point last_adc_time;
+    double cached_current;
 
 public:
     explicit MotorController(int pi);
@@ -12,7 +17,6 @@ public:
     void set_pwm(int duty_cycle);
     void stop_motor();
 
-    // NEW: Current and Power sensing
     double get_current_amps();
     double get_power_watts(int current_pwm);
 };
