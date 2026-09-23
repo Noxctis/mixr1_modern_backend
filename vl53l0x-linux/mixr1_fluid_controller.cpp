@@ -1,4 +1,42 @@
 // mixr1_fluid_controller.cpp
+//
+// Revision notes (this pass):
+//   1. BUG FIX: two call sites computed a fluid level or floater thickness from
+//      getSensorMetrics() without checking validSamples first. If every sample in
+//      that batch failed (occlusion, glare, bad angle), the struct's average silently
+//      stayed at its default of 0, and the code used that 0 as if it were a real
+//      reading -- e.g. floaterThickness would become "tankBottom - 0" (garbage) with
+//      no warning at all. Fixed to match the pattern already used in runCalibration().
+//   2. REFACTOR: the "zero - (raw + floaterThickness)" formula was duplicated in ~9
+//      places (runContinuousRead, runSolenoidAndToF, runFullFluidCycle x4,
+//      runTankZeroExperiment x3, capture100Readings). Pulled into one
+//      computeFluidLevel() helper so there's one place to get it right and one place
+//      to apply a calibration correction.
+//   3. CALIBRATION: tank_zero_experiment_real_data.csv (26 fills, 50-250 mm targets)
+//      shows CalculatedFluid_mm reading consistently HIGH vs the physical ruler
+//      measurement, and the error scales with level rather than sitting at a fixed
+//      mm offset -- a linear fit of Calculated = m*Physical + b gives m ~= 1.066,
+//      b ~= -0.14 mm (intercept ~0), with residual stdev ~2.2 mm. A pure-offset model
+//      (Calculated = Physical + constant) fits much worse (~4.9 mm residual stdev).
+//      A near-zero-intercept, ~6.6% GAIN error is the signature of a geometric issue
+//      (most likely: the sensor's beam axis isn't perfectly perpendicular to the
+//      floater/fluid surface -- a slant range reads longer than the true vertical
+//      distance by 1/cos(theta); ~6.6% high corresponds to roughly a 20 deg tilt,
+//      well within the VL53L0X's 25 deg FoV, so it wouldn't necessarily be obvious
+//      from a quick look at the mount) rather than a per-sample electronics issue.
+//      See LEVEL_GAIN_CORRECTION below -- left at 1.0 (off) by default because this
+//      routine auto-stops a pump on the calculated level, and flipping a fill/drain
+//      cutoff based on a single regression without re-verifying it on your current
+//      mount is a safety call only you should make. Note the CURRENT (uncorrected)
+//      bias direction: calculated level reads HIGH, so fills currently stop a bit
+//      SHORT of the true physical target -- i.e. today's bug is "undershoot", not
+//      overflow. Enabling the correction below removes that margin.
+//   4. The datasheet's own manufacturing calibration flow (Section 3.3) also
+//      recommends an offset + crosstalk calibration via the API, done once and
+//      stored on the host; this file never calls anything like that today. It
+//      wasn't added here since VL53L0X.hpp isn't in front of me and I don't want to
+//      guess at function names that might not exist in your port -- but it's worth
+//      checking what your VL53L0X.hpp exposes.
 #include "VL53L0X.hpp"
 #include <wiringPi.h>
 #include <iostream>
@@ -35,6 +73,12 @@ const char* RAW_DATA_FILE = "raw_sensor_data.csv";
 
 std::string currentSessionID;
 
+// See revision note #3 above. 1.0 = no correction (today's behavior).
+// If you re-verify this on your current mount (a handful of known-volume fills,
+// compare CalculatedFluid_mm to a physical measurement, fit the slope), set this to
+// your measured 1/gain -- the dataset this was derived from gave ~0.938.
+constexpr double LEVEL_GAIN_CORRECTION = 1.0;
+
 struct SensorMetrics {
     uint16_t average;
     uint16_t min;
@@ -42,6 +86,14 @@ struct SensorMetrics {
     int validSamples;
     int targetSamples;
 };
+
+// Single source of truth for the "distance to zero-reference minus floater
+// thickness" fluid-level formula, with the calibration correction and the
+// non-negative clamp applied once, here, instead of at every call site.
+double computeFluidLevel(double zeroReference_mm, double rawDistance_mm, double floaterThickness_mm) {
+    double level = (zeroReference_mm - rawDistance_mm - floaterThickness_mm) * LEVEL_GAIN_CORRECTION;
+    return std::max(0.0, level);
+}
 
 void setSolenoid(bool open, int pwm_val = 1024) {
     if (open) {
@@ -174,8 +226,7 @@ void capture100Readings(VL53L0X& sensor, const std::string& eventName, double co
 
         double calculatedLevel = 0.0;
         if (containerZero > 0.0) {
-            calculatedLevel = containerZero - (static_cast<double>(rawDist) + floaterThickness);
-            calculatedLevel = std::max(0.0, calculatedLevel); 
+            calculatedLevel = computeFluidLevel(containerZero, static_cast<double>(rawDist), floaterThickness);
         }
 
         std::time_t t = std::time(nullptr);
@@ -275,8 +326,8 @@ void runContinuousRead(VL53L0X& sensor, double containerZero, double floaterThic
     while (!systemOffline && !kbhit()) {
         SensorMetrics metrics = getSensorMetrics(sensor, 1, 0); 
         if (metrics.validSamples > 0) {
-            double rawLevel = containerZero - (static_cast<double>(metrics.average) + floaterThickness);
-            std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << std::max(0.0, rawLevel) << " mm | Raw ToF: " << metrics.average << " mm    " << std::flush;
+            double rawLevel = computeFluidLevel(containerZero, static_cast<double>(metrics.average), floaterThickness);
+            std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << rawLevel << " mm | Raw ToF: " << metrics.average << " mm    " << std::flush;
         }
     }
     
@@ -432,6 +483,11 @@ void runTankZeroExperiment(VL53L0X& sensor) {
     std::getline(std::cin, dummy);
 
     SensorMetrics floaterMetrics = getSensorMetrics(sensor, 20, 10000);
+    if (floaterMetrics.validSamples == 0) {
+        std::cout << "[!] Floater resting-distance read failed (no valid ToF samples) -- "
+                      "check the floater is in the sensor's FoV and try again. Aborting experiment.\n";
+        return;
+    }
     double floaterThickness = tankBottom - static_cast<double>(floaterMetrics.average);
     std::cout << ">> Floater Resting Dist: " << floaterMetrics.average << " mm\n";
     std::cout << ">> Calculated Floater Thickness: " << std::fixed << std::setprecision(2) << floaterThickness << " mm\n\n";
@@ -488,8 +544,8 @@ void runTankZeroExperiment(VL53L0X& sensor) {
 
             SensorMetrics metrics = getSensorMetrics(sensor, 3, 5000);
             if (metrics.validSamples > 0) {
-                double rawLevel = tankBottom - (static_cast<double>(metrics.average) + floaterThickness);
-                std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << std::max(0.0, rawLevel) << "/" << targetLevel << " mm    " << std::flush;
+                double rawLevel = computeFluidLevel(tankBottom, static_cast<double>(metrics.average), floaterThickness);
+                std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << rawLevel << "/" << targetLevel << " mm    " << std::flush;
                 if (rawLevel >= targetLevel) break;
             }
         }
@@ -541,10 +597,10 @@ void runTankZeroExperiment(VL53L0X& sensor) {
         }
 
         double distFromZero = tankBottom - settledAvg;
-        double calcLevel = distFromZero - floaterThickness;
+        double calcLevel = computeFluidLevel(tankBottom, settledAvg, floaterThickness);
         
         std::cout << "\n>> ToF Average: " << std::fixed << std::setprecision(2) << settledAvg << " mm\n";
-        std::cout << ">> Calculated Level: " << std::fixed << std::setprecision(2) << std::max(0.0, calcLevel) << " mm\n\n";
+        std::cout << ">> Calculated Level: " << std::fixed << std::setprecision(2) << calcLevel << " mm\n\n";
 
         // 5. Physical Measurements (Only requested during the fill phase)
         std::cout << "[!] REMOVE the floater from the tank.\n";
@@ -565,7 +621,7 @@ void runTankZeroExperiment(VL53L0X& sensor) {
             
             expFile << currentSessionID << "," << iter << "," << targetLevel << "," 
                     << std::fixed << std::setprecision(2) << settledAvg << "," << distFromZero << "," 
-                    << std::max(0.0, calcLevel) << "," << p << "," << pMeasure << "\n";
+                    << calcLevel << "," << p << "," << pMeasure << "\n";
         }
         if (abortExp) break;
         std::cout << "[SYSTEM] Measurements saved.\n\n";
@@ -595,8 +651,8 @@ void runTankZeroExperiment(VL53L0X& sensor) {
 
             SensorMetrics metrics = getSensorMetrics(sensor, 2, 10000);
             if (metrics.validSamples > 0) {
-                double rawLevel = tankBottom - (static_cast<double>(metrics.average) + floaterThickness);
-                std::cout << "\rCurrent Lvl: " << std::fixed << std::setprecision(1) << std::max(0.0, rawLevel) << " mm    " << std::flush;
+                double rawLevel = computeFluidLevel(tankBottom, static_cast<double>(metrics.average), floaterThickness);
+                std::cout << "\rCurrent Lvl: " << std::fixed << std::setprecision(1) << rawLevel << " mm    " << std::flush;
                 
                 if (rawLevel <= 2.0) {
                     std::cout << "\n[SYSTEM] Tank empty. Auto-closing solenoid.\n";
@@ -644,8 +700,8 @@ void runSolenoidAndToF(VL53L0X& sensor, double containerZero, double floaterThic
     while (!emergencyStop && !kbhit()) {
         SensorMetrics metrics = getSensorMetrics(sensor, 3, 10000);
         if (metrics.validSamples > 0) {
-            double rawLevel = containerZero - (static_cast<double>(metrics.average) + floaterThickness);
-            std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << std::max(0.0, rawLevel) << " mm | Yield: " << metrics.validSamples << "/3    " << std::flush;
+            double rawLevel = computeFluidLevel(containerZero, static_cast<double>(metrics.average), floaterThickness);
+            std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << rawLevel << " mm | Yield: " << metrics.validSamples << "/3    " << std::flush;
             
             if (rawLevel <= 2.0) {
                 std::cout << "\n[SYSTEM] Tank empty. Closing solenoid.\n";
@@ -705,8 +761,8 @@ void runFullFluidCycle(VL53L0X& sensor, double containerZero, double floaterThic
 
         SensorMetrics metrics = getSensorMetrics(sensor, 3, 5000);
         if (metrics.validSamples > 0) {
-            double rawLevel = containerZero - (static_cast<double>(metrics.average) + floaterThickness);
-            std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << std::max(0.0, rawLevel) << "/" << targetLevel << " mm    " << std::flush;
+            double rawLevel = computeFluidLevel(containerZero, static_cast<double>(metrics.average), floaterThickness);
+            std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << rawLevel << "/" << targetLevel << " mm    " << std::flush;
             if (rawLevel >= targetLevel) break;
         }
     }
@@ -719,15 +775,21 @@ void runFullFluidCycle(VL53L0X& sensor, double containerZero, double floaterThic
     
     capture100Readings(sensor, "FullCycle_SettledMeasurement", containerZero, floaterThickness); 
     SensorMetrics settleMetrics = getSensorMetrics(sensor, 5, 10000);
-    double calculatedLevel = containerZero - (static_cast<double>(settleMetrics.average) + floaterThickness);
+    if (settleMetrics.validSamples == 0) {
+        std::cout << "\n[!] Settled-level read failed (no valid ToF samples) -- hardware parked, aborting cycle.\n";
+        setPump(false);
+        setSolenoid(false);
+        return;
+    }
+    double calculatedLevel = computeFluidLevel(containerZero, static_cast<double>(settleMetrics.average), floaterThickness);
 
-    std::cout << "\n\n[PHASE 2] SETTLED (ToF Calculated: " << std::fixed << std::setprecision(2) << std::max(0.0, calculatedLevel) << " mm)\n";
+    std::cout << "\n\n[PHASE 2] SETTLED (ToF Calculated: " << std::fixed << std::setprecision(2) << calculatedLevel << " mm)\n";
     std::cout << "Enter actual measured fluid level (mm): ";
     
     double actualMeasured = 0.0;
     if (std::cin >> actualMeasured) {
         std::cin.ignore(10000, '\n');
-        logCycleData(currentSessionID, targetLevel, std::max(0.0, calculatedLevel), actualMeasured, settleMetrics.average);
+        logCycleData(currentSessionID, targetLevel, calculatedLevel, actualMeasured, settleMetrics.average);
     } else {
         std::cin.clear(); std::cin.ignore(10000, '\n');
     }
@@ -738,7 +800,7 @@ void runFullFluidCycle(VL53L0X& sensor, double containerZero, double floaterThic
         SensorMetrics currentMetrics = getSensorMetrics(sensor, 3, 5000);
         double currentLevel = 0.0;
         if (currentMetrics.validSamples > 0) {
-            currentLevel = std::max(0.0, containerZero - (static_cast<double>(currentMetrics.average) + floaterThickness));
+            currentLevel = computeFluidLevel(containerZero, static_cast<double>(currentMetrics.average), floaterThickness);
         }
         if (currentLevel <= 2.0) break;
 
@@ -757,8 +819,8 @@ void runFullFluidCycle(VL53L0X& sensor, double containerZero, double floaterThic
 
             SensorMetrics metrics = getSensorMetrics(sensor, 2, 5000);
             if (metrics.validSamples > 0) {
-                double rawLevel = containerZero - (static_cast<double>(metrics.average) + floaterThickness);
-                std::cout << "\rCurrent: " << std::fixed << std::setprecision(1) << std::max(0.0, rawLevel) << " mm | Target: " << stepTarget << " mm    " << std::flush;
+                double rawLevel = computeFluidLevel(containerZero, static_cast<double>(metrics.average), floaterThickness);
+                std::cout << "\rCurrent: " << std::fixed << std::setprecision(1) << rawLevel << " mm | Target: " << stepTarget << " mm    " << std::flush;
                 if (rawLevel <= stepTarget || rawLevel <= 2.0) break;
             }
         }
