@@ -77,7 +77,7 @@ std::string currentSessionID;
 // If you re-verify this on your current mount (a handful of known-volume fills,
 // compare CalculatedFluid_mm to a physical measurement, fit the slope), set this to
 // your measured 1/gain -- the dataset this was derived from gave ~0.938.
-constexpr double LEVEL_GAIN_CORRECTION = 1.0;
+constexpr double LEVEL_GAIN_CORRECTION = 0.938;
 
 struct SensorMetrics {
     uint16_t average;
