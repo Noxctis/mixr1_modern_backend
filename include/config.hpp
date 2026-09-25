@@ -52,6 +52,6 @@ namespace Config {
 
     // --- Standalone Control ---
     constexpr double STANDALONE_MIN_RPM = 0.0;
-    constexpr double STANDALONE_MAX_RPM = 3000.0;
+    constexpr double STANDALONE_MAX_RPM = 2500.0;
     constexpr double TORQUE_ESTIMATE_MAX_NM = 1.0;
 } 
