@@ -57,6 +57,29 @@ bool TelemetryServer::wait_for_client() {
     return false;
 }
 
+bool TelemetryServer::poll_for_client() {
+    if (client_socket >= 0) return true;
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(server_fd, &readfds);
+    struct timeval tv{0, 0};
+    if (select(server_fd + 1, &readfds, nullptr, nullptr, &tv) > 0 && FD_ISSET(server_fd, &readfds)) {
+        client_socket = accept(server_fd, nullptr, nullptr);
+        if (client_socket >= 0) {
+            int flag = 1;
+            setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
+            rx_buffer.clear();
+            std::cout << "[MIXR-1] Dashboard Connected.\n";
+            return true;
+        }
+    }
+    return false;
+}
+
+bool TelemetryServer::has_client() const {
+    return client_socket >= 0;
+}
+
 bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long revolutions) const {
     if (client_socket < 0) return false;
     std::string packet = std::to_string(raw_rpm) + "," + std::to_string(filtered_rpm) + "," + std::to_string(revolutions) + "\n";
@@ -73,6 +96,9 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
         if (bytes > 0) {
             chunk[bytes] = '\0';
             rx_buffer += chunk;
+        } else if (bytes == 0) {
+            disconnect_client();
+            break;
         } else {
             break;
         }

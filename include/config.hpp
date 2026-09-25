@@ -4,6 +4,12 @@
 #include <array>
 
 namespace Config {
+    enum class DisplayType {
+        LCD1602,
+        LCD2004,
+        SSD1306_128x64
+    };
+
     // --- Kinematics & DSP ---
     inline double ENCODER_CPR = 1024.0;               
     constexpr double RPM_ALPHA = 0.15;
@@ -34,5 +40,18 @@ namespace Config {
     constexpr unsigned int PIN_M1_PWM = 13;              
     constexpr int I2C_LCD_ADDR = 0x27;
     constexpr int I2C_OLED_ADDR = 0x3C;                  
+    constexpr DisplayType DISPLAY_TYPE = DisplayType::SSD1306_128x64;
     constexpr int PWM_FREQUENCY = 20000;                 
-}
+
+    // --- EC11 (DFRobot Breakout) ---
+    // Avoided: 5, 6, 13, 22, 23, 24 (already reserved)
+    constexpr unsigned int PIN_EC11_A = 20;
+    constexpr unsigned int PIN_EC11_B = 21;
+    constexpr unsigned int PIN_EC11_SW = 26;
+    constexpr int EC11_RPM_STEP = 25;
+
+    // --- Standalone Control ---
+    constexpr double STANDALONE_MIN_RPM = 0.0;
+    constexpr double STANDALONE_MAX_RPM = 3000.0;
+    constexpr double TORQUE_ESTIMATE_MAX_NM = 1.0;
+} 
