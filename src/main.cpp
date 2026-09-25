@@ -26,6 +26,7 @@
 #include "motor.hpp"
 #include "lcd.hpp"
 #include "network.hpp"
+#include "ec11.hpp"
 
 std::atomic<bool> run_loop{true};
 
@@ -287,124 +288,151 @@ int main(int argc, char** argv) {
     std::signal(SIGPIPE, SIG_IGN); 
 
     auto network = std::make_unique<TelemetryServer>();
+    if (!network->start_server(Config::TCP_PORT)) {
+        std::cerr << "CRITICAL: Port locked.\n";
+        pigpio_stop(pi);
+        return 1;
+    }
+
+    std::cout << "[MIXR-1] Waiting for Dashboard (Port " << Config::TCP_PORT << ")...\n";
+
     KinematicsEngine kinematics;
+    AMT102Encoder encoder(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
+    MotorController motor(pi);
+    LCD1602 lcd(pi, Config::DISPLAY_TYPE);
+    EC11Input ec11(pi, Config::PIN_EC11_A, Config::PIN_EC11_B, Config::PIN_EC11_SW);
+    PIController pi_control;
+
+    bool standalone_mode = true;
+    bool simulink_is_active = false;
+    bool mode3_notified = false;
+    double standalone_target_rpm = 0.0;
+    double dashboard_target_rpm = 0.0;
+    int dashboard_target_pwm_pct = 0;
+    bool dashboard_pi_mode = true;
+    int current_pwm = 0;
+    int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL;
+    int network_prescaler = 0;
+    int lcd_prescaler = 0;
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    kinematics.reset(encoder.get_sync_snapshot());
+    auto next_wake = std::chrono::steady_clock::now();
+    auto last_time = next_wake;
 
     while (run_loop) {
-        if (!network->start_server(Config::TCP_PORT)) {
-            std::cerr << "CRITICAL: Port locked. Retrying...\n";
-            usleep(2000000);
+        next_wake += std::chrono::microseconds(Config::LOOP_DELAY_US);
+        std::this_thread::sleep_until(next_wake);
+
+        const auto current_time = std::chrono::steady_clock::now();
+        std::chrono::duration<double> dt = current_time - last_time;
+        last_time = current_time;
+
+        network->poll_for_client();
+
+        if (++simulink_check_counter >= Config::SIMULINK_CHECK_INTERVAL) {
+            simulink_check_counter = 0;
+            simulink_is_active = ProcessMonitor::is_simulink_running();
+        }
+
+        if (simulink_is_active) {
+            if (!mode3_notified) {
+                std::cout << "[MIXR-1] MATLAB detected. Releasing motor control...\n";
+                mode3_notified = true;
+                pi_control.reset();
+            }
+            motor.set_pwm(0);
+            if (network->has_client()) network->send_packet(-2.0, -2.0, -2);
             continue;
         }
 
-        if (network->wait_for_client()) {
-            std::cout << "[MIXR-1] Dashboard Connected.\n";
-            
-            auto encoder = std::make_unique<AMT102Encoder>(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
-            auto motor = std::make_unique<MotorController>(pi);
-            auto lcd = std::make_unique<LCD1602>(pi);
-            
-            PIController pi_control;
-            bool mode3_notified = false;
-            double target_rpm = 0.0;
-            int target_pwm_pct = 0;
-            bool pi_mode = true; 
-            int current_pwm = 0;
-            
-            int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL; 
-            int network_prescaler = 0;
-            int lcd_prescaler = 0;
-            bool simulink_is_active = false;
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
-            kinematics.reset(encoder->get_sync_snapshot());
-
-            auto next_wake = std::chrono::steady_clock::now();
-            auto last_time = next_wake;
-
-            while (run_loop) {
-                next_wake += std::chrono::microseconds(Config::LOOP_DELAY_US);
-                std::this_thread::sleep_until(next_wake);
-
-                auto current_time = std::chrono::steady_clock::now();
-                std::chrono::duration<double> dt = current_time - last_time;
-                last_time = current_time;
-
-                if (++simulink_check_counter >= Config::SIMULINK_CHECK_INTERVAL) {
-                    simulink_check_counter = 0;
-                    simulink_is_active = ProcessMonitor::is_simulink_running();
-                }
-
-                if (simulink_is_active) {
-                    if (!mode3_notified) {
-                        std::cout << "[MIXR-1] MATLAB detected. Releasing hardware...\n";
-                        motor.reset();
-                        encoder.reset();
-                        lcd.reset();
-                        pi_control.reset(); 
-                        target_rpm = 0.0;
-                        mode3_notified = true;
-                    }
-                    if (!network->send_packet(-2.0, -2.0, -2)) break; 
-                    continue;
-                }
-
-                if (mode3_notified) {
-                    std::cout << "[MIXR-1] MATLAB teardown complete.\n";
-                    mode3_notified = false;
-                    encoder = std::make_unique<AMT102Encoder>(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
-                    motor = std::make_unique<MotorController>(pi);
-                    lcd = std::make_unique<LCD1602>(pi);
-                    kinematics.reset(encoder->get_sync_snapshot());
-                }
-
-                if (network->receive_command(target_rpm, target_pwm_pct, pi_mode)) {
-                    if (pi_mode && target_rpm <= 0.0) pi_control.reset();
-                }
-
-                bool update_net = (++network_prescaler >= Config::NETWORK_PRESCALER);
-                if (update_net) network_prescaler = 0;
-
-                bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
-                if (update_lcd) lcd_prescaler = 0;
-
-                auto state = kinematics.process(encoder->get_sync_snapshot(), current_pwm, update_lcd);
-
-                if (motor && !simulink_is_active) {
-                    if (pi_mode) {
-                        if (target_rpm > 0.0) {
-                            current_pwm = pi_control.compute(target_rpm, state.exact_rpm, dt.count());
-                            motor->set_pwm(current_pwm);
-                        } else {
-                            current_pwm = 0;
-                            motor->set_pwm(0);
-                        }
-                    } else {
-                        current_pwm = (target_pwm_pct * 4095) / 100;
-                        motor->set_pwm(current_pwm);
-                    }
-                }
-
-                if (update_net) {
-                    if (!network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder->get_revolutions())) break; 
-                }
-
-                if (update_lcd) {
-                    if (lcd) {
-                        std::ostringstream raw_str, filtered_str;
-                        raw_str << std::fixed << std::setprecision(1) << "R:" << state.exact_rpm << " X:" << encoder->get_revolutions() << "   ";
-                        filtered_str << std::fixed << std::setprecision(1) << "FLT: " << state.ema_filtered_rpm << "       ";
-                        lcd->set_cursor(0, 0); lcd->print(raw_str.str());
-                        lcd->set_cursor(1, 0); lcd->print(filtered_str.str());
-                    }
-                }
-            }
-
-            motor.reset();
-            encoder.reset();
-            lcd.reset();
+        if (mode3_notified) {
+            std::cout << "[MIXR-1] MATLAB teardown complete.\n";
+            mode3_notified = false;
+            kinematics.reset(encoder.get_sync_snapshot());
+            pi_control.reset();
         }
-        network->stop_server();
+
+        if (ec11.button_pressed()) {
+            standalone_mode = !standalone_mode;
+            std::cout << "[MIXR-1] Mode switched to " << (standalone_mode ? "MODE1 (Standalone)" : "MODE2 (Dashboard)") << '\n';
+            pi_control.reset();
+        }
+
+        const int ec11_delta = ec11.read_delta();
+        if (ec11_delta != 0) {
+            standalone_target_rpm = std::clamp(
+                standalone_target_rpm + static_cast<double>(ec11_delta * Config::EC11_RPM_STEP),
+                Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM);
+            dashboard_target_rpm = standalone_target_rpm;
+        }
+
+        if (network->has_client() && network->receive_command(dashboard_target_rpm, dashboard_target_pwm_pct, dashboard_pi_mode)) {
+            if (dashboard_pi_mode) {
+                standalone_target_rpm = std::clamp(dashboard_target_rpm, Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM);
+            }
+        }
+
+        bool update_net = (++network_prescaler >= Config::NETWORK_PRESCALER);
+        if (update_net) network_prescaler = 0;
+
+        bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
+        if (update_lcd) lcd_prescaler = 0;
+
+        auto state = kinematics.process(encoder.get_sync_snapshot(), current_pwm, update_lcd);
+
+        const bool mode2_dashboard_active = !standalone_mode && network->has_client();
+        if (mode2_dashboard_active && !dashboard_pi_mode) {
+            current_pwm = std::clamp((dashboard_target_pwm_pct * 4095) / 100, 0, 4095);
+            motor.set_pwm(current_pwm);
+        } else {
+            const double active_target_rpm = mode2_dashboard_active ? std::clamp(dashboard_target_rpm, Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM)
+                                                                    : standalone_target_rpm;
+            if (active_target_rpm > 0.0) {
+                current_pwm = pi_control.compute(active_target_rpm, state.exact_rpm, dt.count());
+                motor.set_pwm(current_pwm);
+            } else {
+                current_pwm = 0;
+                motor.set_pwm(0);
+            }
+            if (mode2_dashboard_active) standalone_target_rpm = active_target_rpm;
+        }
+
+        if (update_net && network->has_client()) {
+            if (!network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder.get_revolutions())) {
+                std::cout << "[MIXR-1] Dashboard disconnected.\n";
+                standalone_mode = true;
+                pi_control.reset();
+            }
+        }
+
+        if (update_lcd) {
+            const double active_target = (!standalone_mode && network->has_client()) ? dashboard_target_rpm : standalone_target_rpm;
+            const double est_torque_nm = (static_cast<double>(current_pwm) / 4095.0) * Config::TORQUE_ESTIMATE_MAX_NM;
+            std::ostringstream line1, line2, line3, line4;
+            line1 << (standalone_mode ? "MODE1 STANDALONE" : "MODE2 DASHBOARD ");
+            line2 << std::fixed << std::setprecision(0) << "SET:" << active_target << "RPM";
+            line3 << std::fixed << std::setprecision(0) << "READ:" << state.exact_rpm << "RPM";
+            line4 << std::fixed << std::setprecision(2) << "T:" << est_torque_nm << "NM PWM:" << (current_pwm * 100 / 4095) << "%";
+
+            lcd.clear();
+            lcd.set_cursor(0, 0); lcd.print(line1.str());
+            lcd.set_cursor(1, 0); lcd.print(line2.str());
+            if (lcd.row_count() >= 4) {
+                lcd.set_cursor(2, 0); lcd.print(line3.str());
+                lcd.set_cursor(3, 0); lcd.print(line4.str());
+            } else {
+                lcd.set_cursor(1, 0);
+                std::ostringstream compact;
+                compact << std::fixed << std::setprecision(0) << "R:" << state.exact_rpm
+                        << " T:" << std::setprecision(2) << est_torque_nm;
+                lcd.print(compact.str());
+            }
+        }
     }
+
+    motor.stop_motor();
+    network->stop_server();
 
     pigpio_stop(pi);
     std::cout << "\n[MIXR-1] Daemon safely offline.\n";

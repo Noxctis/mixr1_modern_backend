@@ -15,6 +15,8 @@ public:
     ~TelemetryServer();
     bool start_server(int port);
     bool wait_for_client();
+    bool poll_for_client();
+    bool has_client() const;
     bool send_packet(double raw_rpm, double filtered_rpm, long long revolutions) const;
     
     // Updated signature for dual-mode control
