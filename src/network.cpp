@@ -7,6 +7,7 @@
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <atomic>
+#include <cerrno>
 
 extern std::atomic<bool> run_loop;
 
@@ -57,10 +58,34 @@ bool TelemetryServer::wait_for_client() {
     return false;
 }
 
-bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long revolutions) const {
+bool TelemetryServer::poll_for_client() {
+    if (server_fd < 0 || client_socket >= 0) return client_socket >= 0;
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(server_fd, &readfds);
+    struct timeval tv{0, 0};
+
+    if (select(server_fd + 1, &readfds, nullptr, nullptr, &tv) > 0 && FD_ISSET(server_fd, &readfds)) {
+        client_socket = accept(server_fd, nullptr, nullptr);
+        if (client_socket >= 0) {
+            int flag = 1;
+            setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
+            rx_buffer.clear();
+        }
+    }
+    return client_socket >= 0;
+}
+
+bool TelemetryServer::is_client_connected() const {
+    return client_socket >= 0;
+}
+
+bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long revolutions) {
     if (client_socket < 0) return false;
     std::string packet = std::to_string(raw_rpm) + "," + std::to_string(filtered_rpm) + "," + std::to_string(revolutions) + "\n";
-    return send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0;
+    if (send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0) return true;
+    disconnect_client();
+    return false;
 }
 
 bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, bool& pi_mode) {
@@ -73,8 +98,14 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
         if (bytes > 0) {
             chunk[bytes] = '\0';
             rx_buffer += chunk;
-        } else {
+        } else if (bytes == 0) {
+            disconnect_client();
+            return false;
+        } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
             break;
+        } else {
+            disconnect_client();
+            return false;
         }
     }
 
