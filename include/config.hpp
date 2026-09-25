@@ -45,5 +45,8 @@ namespace Config {
     constexpr unsigned int PIN_M1_INB = 27;              
     constexpr unsigned int PIN_M1_PWM = 13;              
     constexpr int I2C_LCD_ADDR = 0x27;                   
+    constexpr unsigned int PIN_UI_ENC_A = 5;
+    constexpr unsigned int PIN_UI_ENC_B = 6;
+    constexpr unsigned int PIN_UI_ENC_SW = 16;
     constexpr int PWM_FREQUENCY = 20000;                 
 }
