@@ -34,6 +34,7 @@ public:
     void clear();
     void set_cursor(int row, int col);
     void print(const std::string& str);
+    void print_line(int row, const std::string& text);   // padded full-line write, no clear needed
     int row_count() const { return rows; }
     int col_count() const { return cols; }
 };

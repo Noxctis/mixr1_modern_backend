@@ -25,7 +25,7 @@ namespace Config {
     
     constexpr int LOOP_DELAY_US = 10000; 
     constexpr int NETWORK_PRESCALER = 1;
-    constexpr int LCD_PRESCALER = 10;
+    constexpr int LCD_PRESCALER = 25;   // 25 x 10ms = 250ms refresh
     constexpr int SIMULINK_CHECK_INTERVAL = 100;         
     constexpr int TCP_PORT = 5000;                       
 
@@ -54,4 +54,4 @@ namespace Config {
     constexpr double STANDALONE_MIN_RPM = 0.0;
     constexpr double STANDALONE_MAX_RPM = 2500.0;
     constexpr double TORQUE_ESTIMATE_MAX_NM = 1.0;
-} 
+}

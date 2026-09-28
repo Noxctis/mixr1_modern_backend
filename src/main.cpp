@@ -303,17 +303,18 @@ int main(int argc, char** argv) {
     EC11Input ec11(pi, Config::PIN_EC11_A, Config::PIN_EC11_B, Config::PIN_EC11_SW);
     PIController pi_control;
 
-    bool standalone_mode = true;
+    bool dashboard_connected = false;
     bool simulink_is_active = false;
     bool mode3_notified = false;
+    bool prev_open_loop = false;
     double standalone_target_rpm = 0.0;
     double dashboard_target_rpm = 0.0;
     int dashboard_target_pwm_pct = 0;
-    bool dashboard_pi_mode = true;
+    bool dashboard_pi_mode = false;
     int current_pwm = 0;
     int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL;
-    int network_prescaler = 0;
     int lcd_prescaler = 0;
+    std::string last_lines[4];
 
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
     kinematics.reset(encoder.get_sync_snapshot());
@@ -353,80 +354,93 @@ int main(int argc, char** argv) {
             pi_control.reset();
         }
 
-        if (ec11.button_pressed()) {
-            standalone_mode = !standalone_mode;
-            std::cout << "[MIXR-1] Mode switched to " << (standalone_mode ? "MODE1 (Standalone)" : "MODE2 (Dashboard)") << '\n';
+        // ---- Connection edge: the dashboard owns control while connected ----
+        const bool client_now = network->has_client();
+        if (client_now != dashboard_connected) {
+            dashboard_connected = client_now;
             pi_control.reset();
-        }
-
-        const int ec11_delta = ec11.read_delta();
-        if (ec11_delta != 0) {
-            standalone_target_rpm = std::clamp(
-                standalone_target_rpm + static_cast<double>(ec11_delta * Config::EC11_RPM_STEP),
-                Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM);
-            dashboard_target_rpm = standalone_target_rpm;
-        }
-
-        if (network->has_client() && network->receive_command(dashboard_target_rpm, dashboard_target_pwm_pct, dashboard_pi_mode)) {
-            if (dashboard_pi_mode) {
-                standalone_target_rpm = std::clamp(dashboard_target_rpm, Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM);
+            if (client_now) {
+                dashboard_target_rpm = 0.0;
+                dashboard_target_pwm_pct = 0;
+                dashboard_pi_mode = false;
+                std::cout << "[MIXR-1] MODE2: Dashboard has control (EC11 disabled)\n";
+            } else {
+                standalone_target_rpm = 0.0;   // do not inherit the dashboard's speed
+                std::cout << "[MIXR-1] MODE1: Standalone (EC11 active)\n";
             }
         }
+        if (client_now) {
+            network->receive_command(dashboard_target_rpm, dashboard_target_pwm_pct, dashboard_pi_mode);
+        }
+        const bool dashboard_active = network->has_client();
 
-        bool update_net = (++network_prescaler >= Config::NETWORK_PRESCALER);
-        if (update_net) network_prescaler = 0;
+        if (!dashboard_active) {
+            if (ec11.button_pressed()) {           // button = stop
+                standalone_target_rpm = 0.0;
+                pi_control.reset();
+            }
+            const int d = ec11.read_delta();
+            if (d != 0) {
+                standalone_target_rpm = std::clamp(
+                    standalone_target_rpm + static_cast<double>(d * Config::EC11_RPM_STEP),
+                    Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM);
+            }
+        } else {
+            (void)ec11.read_delta();               // drain so nothing jumps on disconnect
+            (void)ec11.button_pressed();
+        }
 
-        bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
+        const bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
         if (update_lcd) lcd_prescaler = 0;
 
         auto state = kinematics.process(encoder.get_sync_snapshot(), current_pwm, update_lcd);
 
-        const bool mode2_dashboard_active = !standalone_mode && network->has_client();
-        if (mode2_dashboard_active && !dashboard_pi_mode) {
+        const bool open_loop = dashboard_active && !dashboard_pi_mode;
+        if (open_loop != prev_open_loop) {
+            pi_control.reset();
+            prev_open_loop = open_loop;
+        }
+
+        if (open_loop) {
             current_pwm = std::clamp((dashboard_target_pwm_pct * 4095) / 100, 0, 4095);
             motor.set_pwm(current_pwm);
         } else {
-            const double active_target_rpm = mode2_dashboard_active ? std::clamp(dashboard_target_rpm, Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM)
-                                                                    : standalone_target_rpm;
-            if (active_target_rpm > 0.0) {
-                current_pwm = pi_control.compute(active_target_rpm, state.exact_rpm, dt.count());
-                motor.set_pwm(current_pwm);
-            } else {
-                current_pwm = 0;
-                motor.set_pwm(0);
-            }
-            if (mode2_dashboard_active) standalone_target_rpm = active_target_rpm;
+            const double target = dashboard_active
+                ? std::clamp(dashboard_target_rpm, Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM)
+                : standalone_target_rpm;
+            if (target > 0.0) current_pwm = pi_control.compute(target, state.exact_rpm, dt.count());
+            else              current_pwm = 0;
+            motor.set_pwm(current_pwm);
         }
 
-        if (update_net && network->has_client()) {
+        if (dashboard_active) {
             if (!network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder.get_revolutions())) {
-                std::cout << "[MIXR-1] Dashboard disconnected.\n";
-                standalone_mode = true;
-                pi_control.reset();
+                std::cout << "[MIXR-1] Dashboard send failed.\n";
             }
         }
 
         if (update_lcd) {
-            const double active_target = (!standalone_mode && network->has_client()) ? dashboard_target_rpm : standalone_target_rpm;
             const double est_torque_nm = (static_cast<double>(current_pwm) / 4095.0) * Config::TORQUE_ESTIMATE_MAX_NM;
-            std::ostringstream line1, line2, line3, line4;
-            line1 << (standalone_mode ? "MODE1 STANDALONE" : "MODE2 DASHBOARD ");
-            line2 << std::fixed << std::setprecision(0) << "SET:" << active_target << "RPM";
-            line3 << std::fixed << std::setprecision(0) << "READ:" << state.exact_rpm << "RPM";
-            line4 << std::fixed << std::setprecision(2) << "T:" << est_torque_nm << "NM PWM:" << (current_pwm * 100 / 4095) << "%";
-
-            lcd.clear();
-            lcd.set_cursor(0, 0); lcd.print(line1.str());
-            lcd.set_cursor(1, 0); lcd.print(line2.str());
-            if (lcd.row_count() >= 4) {
-                lcd.set_cursor(2, 0); lcd.print(line3.str());
-                lcd.set_cursor(3, 0); lcd.print(line4.str());
+            std::ostringstream l1, l2, l3, l4;
+            l1 << (dashboard_active ? "MODE2 DASHBOARD" : "MODE1 STANDALONE");
+            if (open_loop) {
+                l2 << "SET: " << dashboard_target_pwm_pct << " %";
             } else {
-                lcd.set_cursor(1, 0);
-                std::ostringstream compact;
-                compact << std::fixed << std::setprecision(0) << "R:" << state.exact_rpm
-                        << " T:" << std::setprecision(2) << est_torque_nm;
-                lcd.print(compact.str());
+                l2 << std::fixed << std::setprecision(0) << "SET: "
+                   << (dashboard_active ? dashboard_target_rpm : standalone_target_rpm) << " RPM";
+            }
+            l3 << std::fixed << std::setprecision(0) << "READ: " << state.exact_rpm << " RPM";
+            l4 << std::fixed << std::setprecision(2) << "T:" << est_torque_nm
+               << "NM PWM:" << (current_pwm * 100 / 4095) << "%";
+
+            const std::string lines[4] = {l1.str(), l2.str(), l3.str(), l4.str()};
+            const int step = (lcd.row_count() >= 8) ? 2 : 1;   // OLED: rows 0,2,4,6
+            const int n = (lcd.row_count() >= 4) ? 4 : 2;
+            for (int i = 0; i < n; ++i) {
+                if (lines[i] != last_lines[i]) {               // only redraw changed lines
+                    lcd.print_line(i * step, lines[i]);
+                    last_lines[i] = lines[i];
+                }
             }
         }
     }
