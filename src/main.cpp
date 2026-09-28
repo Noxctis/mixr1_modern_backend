@@ -314,6 +314,11 @@ int main(int argc, char** argv) {
     int current_pwm = 0;
     int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL;
     int lcd_prescaler = 0;
+    int ec11_accum = 0;
+    int ec11_last_dir = 0;
+    int ec11_last_step = 0;
+    auto ec11_last_click = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+    double last_rpm = 0.0;
     std::string last_lines[4];
 
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -363,7 +368,9 @@ int main(int argc, char** argv) {
                 dashboard_target_rpm = 0.0;
                 dashboard_target_pwm_pct = 0;
                 dashboard_pi_mode = false;
-                std::cout << "[MIXR-1] MODE2: Dashboard has control (EC11 disabled)\n";
+                standalone_target_rpm = 0.0;   // knob preview restarts from 0
+                ec11_accum = 0;
+                std::cout << "[MIXR-1] MODE2: Dashboard connected (EC11 LOCKED, log only)\n";
             } else {
                 standalone_target_rpm = 0.0;   // do not inherit the dashboard's speed
                 std::cout << "[MIXR-1] MODE1: Standalone (EC11 active)\n";
@@ -374,26 +381,63 @@ int main(int argc, char** argv) {
         }
         const bool dashboard_active = network->has_client();
 
-        if (!dashboard_active) {
-            if (ec11.button_pressed()) {           // button = stop
-                standalone_target_rpm = 0.0;
-                pi_control.reset();
+        // ---- EC11: drives the motor only in standalone mode. When the dashboard is
+        //      connected the knob is locked, but every event is still printed to the terminal. ----
+        auto log_states = [&](const char* event) {
+            const double est_torque_nm = (static_cast<double>(current_pwm) / 4095.0) * Config::TORQUE_ESTIMATE_MAX_NM;
+            std::cout << std::fixed << std::setprecision(0)
+                      << "[EC11] " << event
+                      << " | " << (dashboard_active ? "MODE2 DASHBOARD (knob locked)" : "MODE1 STANDALONE")
+                      << " | knob_target=" << standalone_target_rpm << " RPM"
+                      << " (step " << ec11_last_step << ")";
+            if (dashboard_active) {
+                if (dashboard_pi_mode) std::cout << " | dash_target=" << dashboard_target_rpm << " RPM";
+                else                   std::cout << " | dash_target=" << dashboard_target_pwm_pct << " %PWM";
             }
-            const int d = ec11.read_delta();
-            if (d != 0) {
-                standalone_target_rpm = std::clamp(
-                    standalone_target_rpm + static_cast<double>(d * Config::EC11_RPM_STEP),
-                    Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM);
+            std::cout << " | measured=" << last_rpm << " RPM"
+                      << " | pwm=" << (current_pwm * 100 / 4095) << "%"
+                      << " | torque~" << std::setprecision(2) << est_torque_nm << " Nm\n";
+        };
+
+        if (ec11.button_pressed()) {                       // button = zero the knob target
+            standalone_target_rpm = 0.0;
+            if (!dashboard_active) pi_control.reset();
+            log_states("BUTTON  ");
+        }
+
+        ec11_accum += ec11.read_delta();                   // N transitions = 1 click
+        if (std::abs(ec11_accum) >= Config::EC11_TRANSITIONS_PER_CLICK) {
+            const int clicks = ec11_accum / Config::EC11_TRANSITIONS_PER_CLICK;
+            ec11_accum -= clicks * Config::EC11_TRANSITIONS_PER_CLICK;
+
+            // Turn-speed acceleration: short gap between clicks -> bigger step.
+            const int dir = (clicks > 0) ? 1 : -1;
+            const auto now_click = std::chrono::steady_clock::now();
+            const auto gap_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now_click - ec11_last_click).count();
+            ec11_last_click = now_click;
+
+            int step_rpm = Config::EC11_STEP_FINE_RPM;
+            if (dir != ec11_last_dir && ec11_last_dir != 0) {
+                step_rpm = Config::EC11_STEP_FINE_RPM;          // direction change -> back to fine
+            } else if (std::abs(clicks) >= 2 || gap_ms < Config::EC11_FAST_MAX_GAP_MS) {
+                step_rpm = Config::EC11_STEP_FAST_RPM;
+            } else if (gap_ms < Config::EC11_MEDIUM_MAX_GAP_MS) {
+                step_rpm = Config::EC11_STEP_MEDIUM_RPM;
             }
-        } else {
-            (void)ec11.read_delta();               // drain so nothing jumps on disconnect
-            (void)ec11.button_pressed();
+            ec11_last_dir = dir;
+            ec11_last_step = step_rpm;
+
+            standalone_target_rpm = std::clamp(
+                standalone_target_rpm + static_cast<double>(clicks * step_rpm),
+                Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM);
+            log_states(dir > 0 ? "TURN CW " : "TURN CCW");
         }
 
         const bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
         if (update_lcd) lcd_prescaler = 0;
 
         auto state = kinematics.process(encoder.get_sync_snapshot(), current_pwm, update_lcd);
+        last_rpm = state.exact_rpm;
 
         const bool open_loop = dashboard_active && !dashboard_pi_mode;
         if (open_loop != prev_open_loop) {
