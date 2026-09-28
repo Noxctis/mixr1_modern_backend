@@ -14,7 +14,7 @@ int main()
     try {
         sensor.initialize();
         sensor.setTimeout(500);
-        if (!sensor.setMeasurementTimingBudget(50000)) {
+        if (!sensor.setMeasurementTimingBudget(200000)) {
             std::cerr << "Could not set timing budget\n";
             return 2;
         }
