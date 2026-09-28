@@ -316,6 +316,7 @@ int main(int argc, char** argv) {
     int lcd_prescaler = 0;
     int ec11_accum = 0;
     int ec11_last_dir = 0;
+    auto ec11_last_edge = std::chrono::steady_clock::now();
     int ec11_last_step = 0;
     auto ec11_last_click = std::chrono::steady_clock::now() - std::chrono::seconds(10);
     double last_rpm = 0.0;
@@ -405,7 +406,16 @@ int main(int argc, char** argv) {
             log_states("BUTTON  ");
         }
 
-        ec11_accum += ec11.read_delta();                   // N transitions = 1 click
+        {
+            const int d = ec11.read_delta();               // interrupt-accumulated, nothing is lost
+            if (d != 0) {
+                ec11_accum += d;
+                ec11_last_edge = std::chrono::steady_clock::now();
+            } else if (ec11_accum != 0 &&
+                       std::chrono::steady_clock::now() - ec11_last_edge > std::chrono::milliseconds(300)) {
+                ec11_accum = 0;                            // drop a stale half-click so it can't drift
+            }
+        }
         if (std::abs(ec11_accum) >= Config::EC11_TRANSITIONS_PER_CLICK) {
             const int clicks = ec11_accum / Config::EC11_TRANSITIONS_PER_CLICK;
             ec11_accum -= clicks * Config::EC11_TRANSITIONS_PER_CLICK;

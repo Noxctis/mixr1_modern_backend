@@ -50,11 +50,13 @@ namespace Config {
     constexpr unsigned int PIN_EC11_SW = 26;
     constexpr int EC11_TRANSITIONS_PER_CLICK = 4;   // quadrature transitions per detent (set to 2 if your knob needs it)
     // Turn-speed acceleration: time between clicks decides how big each click is
-    constexpr int EC11_STEP_FINE_RPM   = 5;         // slow turning
-    constexpr int EC11_STEP_MEDIUM_RPM = 25;        // medium turning
-    constexpr int EC11_STEP_FAST_RPM   = 100;       // fast spinning
+    constexpr int EC11_STEP_FINE_RPM   = 1;         // slow turning
+    constexpr int EC11_STEP_MEDIUM_RPM = 5;         // medium turning
+    constexpr int EC11_STEP_FAST_RPM   = 10;        // fast spinning
     constexpr int EC11_MEDIUM_MAX_GAP_MS = 150;     // gap between clicks below this -> MEDIUM
     constexpr int EC11_FAST_MAX_GAP_MS   = 50;      // gap between clicks below this -> FAST
+    constexpr unsigned EC11_GLITCH_US = 300;         // hardware-timed debounce on A/B (raise if it double-counts, lower if fast spins are missed)
+    constexpr unsigned EC11_BUTTON_DEBOUNCE_US = 30000; // ignore button edges closer than 30 ms
 
     // --- Standalone Control ---
     constexpr double STANDALONE_MIN_RPM = 0.0;
