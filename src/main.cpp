@@ -317,7 +317,8 @@ int main(int argc, char** argv) {
     int ec11_accum = 0;
     int ec11_last_dir = 0;
     auto ec11_last_edge = std::chrono::steady_clock::now();
-    int ec11_last_step = 0;
+    double ec11_last_step = 0.0;
+    double ec11_rate_cps = 0.0;
     auto ec11_last_click = std::chrono::steady_clock::now() - std::chrono::seconds(10);
     double last_rpm = 0.0;
     std::string last_lines[4];
@@ -420,20 +421,24 @@ int main(int argc, char** argv) {
             const int clicks = ec11_accum / Config::EC11_TRANSITIONS_PER_CLICK;
             ec11_accum -= clicks * Config::EC11_TRANSITIONS_PER_CLICK;
 
-            // Turn-speed acceleration: short gap between clicks -> bigger step.
+            // Smooth velocity response: measure click rate, map it continuously to a step size.
             const int dir = (clicks > 0) ? 1 : -1;
             const auto now_click = std::chrono::steady_clock::now();
-            const auto gap_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now_click - ec11_last_click).count();
+            const double gap_ms = std::max(
+                1.0, static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(now_click - ec11_last_click).count()) / 1000.0);
             ec11_last_click = now_click;
 
-            int step_rpm = Config::EC11_STEP_FINE_RPM;
-            if (dir != ec11_last_dir && ec11_last_dir != 0) {
-                step_rpm = Config::EC11_STEP_FINE_RPM;          // direction change -> back to fine
-            } else if (std::abs(clicks) >= 2 || gap_ms < Config::EC11_FAST_MAX_GAP_MS) {
-                step_rpm = Config::EC11_STEP_FAST_RPM;
-            } else if (gap_ms < Config::EC11_MEDIUM_MAX_GAP_MS) {
-                step_rpm = Config::EC11_STEP_MEDIUM_RPM;
+            if ((dir != ec11_last_dir && ec11_last_dir != 0) || gap_ms > Config::EC11_IDLE_RESET_MS) {
+                ec11_rate_cps = 0.0;                              // reversal or pause -> start fine again
             }
+            const double inst_rate = (std::abs(clicks) * 1000.0) / gap_ms;   // clicks per second
+            const double a = Config::EC11_RATE_SMOOTH;
+            ec11_rate_cps = (ec11_rate_cps == 0.0) ? std::min(inst_rate, 2.0) : (a * inst_rate + (1.0 - a) * ec11_rate_cps);
+
+            const double t = std::min(1.0, std::pow(ec11_rate_cps / Config::EC11_RATE_FULL_CPS, Config::EC11_CURVE_GAMMA));
+            const double step_raw = Config::EC11_STEP_MIN_RPM + (Config::EC11_STEP_MAX_RPM - Config::EC11_STEP_MIN_RPM) * t;
+            const int step_rpm = std::max(1, static_cast<int>(std::lround(step_raw)));   // whole RPM only
+
             ec11_last_dir = dir;
             ec11_last_step = step_rpm;
 

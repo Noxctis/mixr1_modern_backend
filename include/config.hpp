@@ -49,12 +49,14 @@ namespace Config {
     constexpr unsigned int PIN_EC11_B = 21;
     constexpr unsigned int PIN_EC11_SW = 26;
     constexpr int EC11_TRANSITIONS_PER_CLICK = 4;   // quadrature transitions per detent (set to 2 if your knob needs it)
-    // Turn-speed acceleration: time between clicks decides how big each click is
-    constexpr int EC11_STEP_FINE_RPM   = 1;         // slow turning
-    constexpr int EC11_STEP_MEDIUM_RPM = 5;         // medium turning
-    constexpr int EC11_STEP_FAST_RPM   = 10;        // fast spinning
-    constexpr int EC11_MEDIUM_MAX_GAP_MS = 150;     // gap between clicks below this -> MEDIUM
-    constexpr int EC11_FAST_MAX_GAP_MS   = 50;      // gap between clicks below this -> FAST
+    // Smooth turn-speed response (real-knob feel): the step per click grows continuously with click rate
+    //   step = MIN + (MAX - MIN) * min(1, (rate / RATE_FULL)^GAMMA)
+    constexpr double EC11_STEP_MIN_RPM   = 1.0;     // slowest turning: 1 RPM per click
+    constexpr double EC11_STEP_MAX_RPM   = 25.0;    // fastest spinning: this many RPM per click
+    constexpr double EC11_RATE_FULL_CPS  = 30.0;    // clicks/second at which the max step is reached
+    constexpr double EC11_CURVE_GAMMA    = 1.6;     // >1 = more precision at low speed, ramps harder at high speed
+    constexpr double EC11_RATE_SMOOTH    = 0.5;     // 0..1, higher = reacts faster, lower = smoother
+    constexpr int    EC11_IDLE_RESET_MS  = 400;     // pause longer than this restarts at the fine step
     constexpr unsigned EC11_GLITCH_US = 300;         // hardware-timed debounce on A/B (raise if it double-counts, lower if fast spins are missed)
     constexpr unsigned EC11_BUTTON_DEBOUNCE_US = 30000; // ignore button edges closer than 30 ms
 
