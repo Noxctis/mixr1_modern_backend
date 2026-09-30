@@ -1,0 +1,21 @@
+/*Enable this flag to enable the Non linearity correction algorithm*/
+1. uint8_t algo_enable=1;   // Enable =1 , Disable =0
+
+/*Lookup table: First col : indicator level , Second col: Expected result , Third Col: compensate value*/
+/*Compensate value (OC_val) get from characterization*/
+/*In this app, Consider 10 indicator/water levels, It can vary based on user requirement */
+
+2. ogalgo_data ogalgo_data_inst[MAX_LABEL]={
+		{ 9, 21, 4 },
+		{ 8, 42, 4 },
+		{ 7, 63, 2 },
+		{ 6, 84, 1 },
+		{ 5, 105, 5 },
+		{ 4, 126, 14 },
+		{ 3, 147, 25 },
+		 { 2, 168, 30 },
+		 { 1, 189, 20 },
+	};
+ 
+/*User Need to configure total height of container, if not default set to 210*/
+3. uint16_t totaldistance=270;

@@ -1,0 +1,7 @@
+firmware=VL53L4CD
+OCalgorithm=1
+totalheight=270
+offsetcalibration=100
+indicators=4
+characterization=2
+turbu_det_std=20
