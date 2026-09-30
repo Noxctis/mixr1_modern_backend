@@ -78,4 +78,9 @@ uint8_t VL53L4CD_WrDWord(Dev_t dev, uint16_t RegisterAdress, uint32_t value);
 
 uint8_t VL53L4CD_WaitMs(Dev_t dev, uint32_t TimeMs);
 
-#endif	// _PLATFORM_H_
+/**
+ * @brief Initialize the Raspberry Pi Linux I2C port
+ */
+uint8_t VL53L4CD_PlatformInit(void);
+
+#endif  // _PLATFORM_H_
