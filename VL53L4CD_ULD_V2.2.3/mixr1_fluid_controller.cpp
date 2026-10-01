@@ -91,6 +91,7 @@ constexpr const char* kCalibrationFile = "container_zero.txt";
 constexpr const char* kDataFile        = "fluid_dynamics_data.csv";
 constexpr const char* kRawDataFile     = "raw_sensor_data.csv";
 constexpr const char* kExperimentFile  = "tank_zero_experiment.csv";
+constexpr const char* kLiveDataFile    = "live_level_log.csv";
 
 }  // namespace cfg
 
@@ -527,6 +528,27 @@ bool requireCalibration(const Context& ctx) {
 // ============================================================================
 // Level monitoring (shared by every fill / drain / stream loop)
 // ============================================================================
+// Logs every level reading taken while pumping / draining (one row per reading).
+class LiveLog {
+public:
+    LiveLog(const std::string& sessionId, const std::string& event)
+        : csv_(cfg::kLiveDataFile,
+               "SessionID,Timestamp,Event,Target_mm,RawMedian_mm,Level_mm,ValidSamples"),
+          sessionId_(sessionId), event_(event) {}
+
+    void record(double target_mm, const SensorMetrics& m, double level_mm) {
+        if (!csv_.ok()) return;
+        csv_.stream() << sessionId_ << ',' << timestamp("%Y-%m-%d %H:%M:%S") << ',' << event_ << ','
+                      << fmt(target_mm, 1) << ',' << fmt(m.median, 1) << ',' << fmt(level_mm, 1) << ','
+                      << m.validSamples << '\n';
+    }
+
+private:
+    CsvFile csv_;
+    std::string sessionId_;
+    std::string event_;
+};
+
 enum class Outcome { Completed, KeyStop, Quit, Emergency, SensorFault };
 
 void reportOutcome(Outcome o) {
@@ -571,9 +593,11 @@ bool readLevel(ToFSensor& tof, const Calibration& cal, int frames, double& level
 }
 
 // Runs the pump until level >= target. Pump is guaranteed off on return.
-Outcome fillToLevel(ToFSensor& tof, const Calibration& cal, int target, int pumpPwm) {
+Outcome fillToLevel(ToFSensor& tof, const Calibration& cal, int target, int pumpPwm,
+                    LiveLog* log = nullptr) {
     ScopedActuator pump(kPump, pumpPwm);
     return monitorLevel(tof, cal, 3, [&](double level, const SensorMetrics& m) {
+        if (log) log->record(target, m, level);
         std::cout << "\rLvl: " << fmt(level, 1) << "/" << target << " mm | Yield: "
                   << m.validSamples << "/" << m.requestedSamples << "    " << std::flush;
         return level >= target;
@@ -581,10 +605,12 @@ Outcome fillToLevel(ToFSensor& tof, const Calibration& cal, int target, int pump
 }
 
 // Opens the solenoid until level <= stopLevel (never below the "empty" threshold).
-Outcome drainToLevel(ToFSensor& tof, const Calibration& cal, double stopLevel, int solenoidPwm, int frames) {
+Outcome drainToLevel(ToFSensor& tof, const Calibration& cal, double stopLevel, int solenoidPwm,
+                     int frames, LiveLog* log = nullptr) {
     const double effectiveStop = std::max(stopLevel, cfg::kEmptyLevelMm);
     ScopedActuator valve(kSolenoid, solenoidPwm);
     return monitorLevel(tof, cal, frames, [&](double level, const SensorMetrics& m) {
+        if (log) log->record(effectiveStop, m, level);
         std::cout << "\rLvl: " << fmt(level, 1) << " mm | Stop at: " << fmt(effectiveStop, 1)
                   << " mm | Yield: " << m.validSamples << "/" << m.requestedSamples << "    " << std::flush;
         return level <= effectiveStop;
@@ -825,7 +851,8 @@ bool runExperimentIteration(Context& ctx, const Calibration& tank, const Experim
     }
 
     std::cout << "Filling... Press ANY KEY to stop pump early, or 'q' to EXIT experiment.\n";
-    Outcome o = fillToLevel(ctx.tof, tank, p.target, p.pumpPwm);
+    LiveLog fillLog(ctx.sessionId, "TankZero_Fill");
+    Outcome o = fillToLevel(ctx.tof, tank, p.target, p.pumpPwm, &fillLog);
     if (o != Outcome::Completed && o != Outcome::KeyStop) {
         reportOutcome(o);
         return false;
@@ -850,7 +877,8 @@ bool runExperimentIteration(Context& ctx, const Calibration& tank, const Experim
     if (!confirm("Press ENTER to OPEN SOLENOID and start draining (or type 'q' to EXIT)... ")) return false;
 
     std::cout << "Draining... Press ANY KEY to stop solenoid, or 'q' to EXIT experiment.\n";
-    o = drainToLevel(ctx.tof, tank, 0.0, p.solenoidPwm, 2);
+    LiveLog drainLog(ctx.sessionId, "TankZero_Drain");
+    o = drainToLevel(ctx.tof, tank, 0.0, p.solenoidPwm, 2, &drainLog);
     if (o == Outcome::Completed) {
         std::cout << "\n[SYSTEM] Tank empty. Solenoid closed.\n";
     } else if (o != Outcome::KeyStop) {
@@ -919,7 +947,8 @@ void runSolenoidAndToF(Context& ctx) {
     if (!confirm("Press ENTER to OPEN SOLENOID and monitor ToF drop (or type 'q' to abort)... ")) return;
 
     std::cout << "Draining... Press ANY KEY to abort.\n";
-    const Outcome o = drainToLevel(ctx.tof, ctx.cal, 0.0, pwm, 3);
+    LiveLog log(ctx.sessionId, "GravityDrain");
+    const Outcome o = drainToLevel(ctx.tof, ctx.cal, 0.0, pwm, 3, &log);
     if (o == Outcome::Completed) {
         std::cout << "\n[SYSTEM] Tank empty. Solenoid closed.\n";
     } else {
@@ -947,7 +976,8 @@ void runFullFluidCycle(Context& ctx) {
     }
     setSolenoid(false);
     std::cout << "Filling... Press ANY KEY to abort.\n";
-    const Outcome fill = fillToLevel(ctx.tof, ctx.cal, target, pumpPwm);
+    LiveLog fillLog(ctx.sessionId, "FullCycle_Fill");
+    const Outcome fill = fillToLevel(ctx.tof, ctx.cal, target, pumpPwm, &fillLog);
     if (fill != Outcome::Completed) {
         reportOutcome(fill);
         parkHardware();
@@ -989,7 +1019,8 @@ void runFullFluidCycle(Context& ctx) {
         }
 
         std::cout << "Draining... Press ANY KEY to stop.\n";
-        const Outcome o = drainToLevel(ctx.tof, ctx.cal, std::max(0.0, level - drainStep), solenoidPwm, 2);
+        LiveLog drainLog(ctx.sessionId, "FullCycle_Drain");
+        const Outcome o = drainToLevel(ctx.tof, ctx.cal, std::max(0.0, level - drainStep), solenoidPwm, 2, &drainLog);
         std::cout << "\n[STEP COMPLETE] Solenoid closed.\n";
         if (o == Outcome::Emergency || o == Outcome::SensorFault) {
             reportOutcome(o);
