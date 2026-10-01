@@ -1,0 +1,3 @@
+run_id,timestamp,note,offset_mm,gain_m,intercept_b,n_points,worst_before_mm,worst_after_mm
+20261001_163823,2026-10-01 16:48:59,,-26,0.928000,19.2000,5,14.00,6.25
+20261001_171647,2026-10-01 17:23:07,,-26,1.000000,-2.0000,3,2.00,0.00
