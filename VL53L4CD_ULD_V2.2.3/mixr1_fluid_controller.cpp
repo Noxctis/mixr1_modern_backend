@@ -31,8 +31,13 @@
 #include <cmath>
 #include <algorithm>
 
+extern "C" {
 #include "VL53L4CD_ULD_Driver/VL53L4CD_api.h"
 #include "Platform/platform.h"
+
+// Custom platform init (defined in Platform/platform.c)
+uint8_t VL53L4CD_PlatformInit(void);
+}
 
 uint8_t VL53L4CD_PlatformInit(void);
 
