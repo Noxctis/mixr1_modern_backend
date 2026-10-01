@@ -1,18 +1,10 @@
-// mixr1_fluid_controller.cpp  (accuracy revision 3)
+// mixr1_fluid_controller.cpp  (on/off bang-bang revision)
 //
-// Changes this pass:
-//   1. AUTO RE-ZERO: after every confirmed drain-to-empty, the resting-floater
-//      distance is re-measured and the zero reference is updated. This removes
-//      the "tank is empty but reads 1.1 mm" error (floater never lands at
-//      exactly the same height twice).
-//   2. fillToLevel(): fast timing, rate estimate, stops BELOW target, then
-//   3. trimToTarget(): settle, measure at full accuracy, pulse pump (if low) or
-//      solenoid (if high) until within TARGET_TOLERANCE_MM.
-//   4. Multi-level calibration run (Fill and Drain menu): fills to several
-//      levels, you enter the physical measurement, it fits the correction and
-//      saves it to level_correction.txt (loaded automatically on startup).
-//      Correction is linear-through-origin gain OR a piecewise table.
-//   5. extern "C" around the ST C headers (fixes link errors).
+//   FILL TESTS      : pump ONLY. On/Off closed-loop (on predicted error) to a ToF level.
+//   DRAIN TESTS     : you fill manually, solenoid ONLY drains to the target with On/Off closed-loop.
+//   FILL+DRAIN TESTS: both actuators cooperate (never at the same time) to track a setpoint sequence.
+//   Auto re-zero after every drain-to-empty; multi-level calibration run fits ToF->physical correction.
+//   Every control run is logged to control_log.csv (time, level, target, error, PWM) for step-response plots.
 
 #include <wiringPi.h>
 #include <iostream>
@@ -78,25 +70,25 @@ constexpr double RATE_WINDOW_S         = 1.0;
 constexpr double DRAIN_STALL_TIMEOUT_S = 20.0;
 
 // ---- Fill tuning ----
-constexpr double FILL_UNDERSHOOT_MM    = 3.0;   // coarse fill stops this far under target
+constexpr double FILL_UNDERSHOOT_MM    = 3.0;   
 constexpr double FILL_LATENCY_S        = 0.55;  // measured: ~3.8 mm keeps arriving after pump-off at 6.8 mm/s
 constexpr double FILL_STALL_TIMEOUT_S  = 25.0;  // generous: floater doesn't rise until fluid passes its draft
 
 // ---- Trim tuning ----
 constexpr double TARGET_TOLERANCE_MM   = 1.0;
 constexpr int    MAX_TRIM_PULSES       = 10;
-constexpr int    PUMP_TRIM_MS_PER_MM   = 60;    // tune to your pump
-constexpr int    SOL_TRIM_MS_PER_MM    = 100;   // tune to your valve
+constexpr int    PUMP_TRIM_MS_PER_MM   = 60;    
+constexpr int    SOL_TRIM_MS_PER_MM    = 100;   
 constexpr int    TRIM_MIN_MS           = 60;
 constexpr int    TRIM_MAX_MS           = 600;
 constexpr int    TRIM_SETTLE_US        = 2000000;
-constexpr int    PUMP_DEADTIME_MS      = 800;   // initial: pump spin-up + hose refill before fluid reaches the tank
-constexpr int    PUMP_DEADTIME_STEP_MS = 500;   // added whenever a pump pulse produces no rise
+constexpr int    PUMP_DEADTIME_MS      = 800;   
+constexpr int    PUMP_DEADTIME_STEP_MS = 500;   
 constexpr int    PUMP_TRIM_MAX_MS      = 4000;
 
 // ---- Auto re-zero ----
 constexpr int    REZERO_SAMPLES        = 30;
-constexpr double REZERO_MAX_SHIFT_MM   = 8.0;   // refuse to re-zero if shift is larger (tank probably not empty)
+constexpr double REZERO_MAX_SHIFT_MM   = 8.0;   
 
 struct SensorMetrics {
     double   average;
@@ -107,15 +99,15 @@ struct SensorMetrics {
     int      targetSamples;
 };
 
-enum class MoveResult { Reached, Aborted, Stalled, SensorLost };
+enum class MoveResult { Reached, Aborted, Stalled, SensorLost, Unreachable, Timeout };
 
 // ------------------------------------------------------------------------------
 // LEVEL CORRECTION (raw ToF level -> physical level)
 // ------------------------------------------------------------------------------
 
 struct LevelCorrection {
-    double gain = 1.0;                                   // used when table is empty
-    std::vector<std::pair<double, double>> table;        // (toF level, physical level), ascending
+    double gain = 1.0;                                   
+    std::vector<std::pair<double, double>> table;        
 };
 LevelCorrection g_corr;
 
@@ -133,7 +125,7 @@ double applyCorrection(double x) {
     while (i + 1 < p.size() && x > p[i].first) ++i;
     double dx = p[i].first - p[i - 1].first;
     if (dx <= 0.0) return x * g_corr.gain;
-    double t = (x - p[i - 1].first) / dx;               // t > 1 extrapolates past last point
+    double t = (x - p[i - 1].first) / dx;                
     return p[i - 1].second + t * (p[i].second - p[i - 1].second);
 }
 
@@ -475,73 +467,9 @@ void reportMove(MoveResult r, const char* what) {
         case MoveResult::Aborted:    std::cout << "\n[SYSTEM] " << what << " stopped by user.\n"; break;
         case MoveResult::Stalled:    std::cout << "\n[!] " << what << ": no level change for too long (dry pump / clog / air lock?). Hardware stopped.\n"; break;
         case MoveResult::SensorLost: std::cout << "\n[!] " << what << ": lost valid ToF readings. Hardware stopped.\n"; break;
+        case MoveResult::Unreachable: std::cout << "\n[!] " << what << ": settled outside tolerance and the allowed actuator can't correct it.\n"; break;
+        case MoveResult::Timeout:    std::cout << "\n[!] " << what << ": timed out. Hardware stopped.\n"; break;
     }
-}
-
-// Fill (coarse) until the predicted level reaches target - FILL_UNDERSHOOT_MM.
-// The caller then calls trimToTarget() for the final approach.
-MoveResult fillToLevel(Dev_t dev, double zero, double floater, int pumpPwm,
-                       double targetLevel, char* abortKey = nullptr) {
-    using clock = std::chrono::steady_clock;
-    auto secs = [](clock::time_point a, clock::time_point b) {
-        return std::chrono::duration<double>(b - a).count();
-    };
-
-    double coarseTarget = std::max(targetLevel - FILL_UNDERSHOOT_MM, targetLevel * 0.5);
-    MoveResult result = MoveResult::Reached;
-
-    {
-        FastTimingScope fast(dev);
-        while (kbhit()) getchar();
-        setPump(true, pumpPwm);
-
-        const auto t0 = clock::now();
-        auto tProgress = t0;
-        double bestLevel = -1e9;
-        std::deque<std::pair<double, double>> hist;
-        int badReads = 0;
-
-        while (!emergencyStop) {
-            if (kbhit()) {
-                char c = getchar();
-                if (abortKey) *abortKey = c;
-                result = MoveResult::Aborted;
-                break;
-            }
-
-            double level;
-            if (!readLevel(dev, zero, floater, level)) {
-                if (++badReads > 20) { result = MoveResult::SensorLost; break; }
-                continue;
-            }
-            badReads = 0;
-
-            auto now = clock::now();
-            double ts = secs(t0, now);
-
-            hist.push_back({ts, level});
-            while (hist.size() > 2 && ts - hist.front().first > RATE_WINDOW_S) hist.pop_front();
-            double rate = 0.0;   // mm/s, positive while filling
-            if (hist.size() >= 3) {
-                double dt = ts - hist.front().first;
-                if (dt > 0.3) rate = (level - hist.front().second) / dt;
-            }
-
-            if (level > bestLevel + 0.5) { bestLevel = level; tProgress = now; }
-            double stall = secs(tProgress, now);
-
-            std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << level
-                      << " mm | Rate: " << rate << " mm/s | Coarse target: " << coarseTarget
-                      << " (final " << targetLevel << ") mm    " << std::flush;
-
-            double predicted = level + std::max(rate, 0.0) * FILL_LATENCY_S;
-            if (predicted >= coarseTarget) break;
-
-            if (stall > FILL_STALL_TIMEOUT_S) { result = MoveResult::Stalled; break; }
-        }
-        setPump(false);
-    }
-    return result;
 }
 
 // Drain until level <= targetLevel. targetLevel <= EMPTY_BAND_MM => drain-to-empty
@@ -631,53 +559,152 @@ MoveResult drainToLevel(Dev_t dev, double zero, double floater, int solPwm,
     return result;
 }
 
-// Settle, measure at full accuracy, and pulse pump (too low) or solenoid (too
-// high) until within TARGET_TOLERANCE_MM. allowPump=false => never adds fluid
-// (use for drain steps). Returns true if within tolerance (or undershoot when
-// pump not allowed).
-bool trimToTarget(Dev_t dev, double zero, double floater, int pumpPwm, int solPwm,
-                  double target, bool allowPump) {
-    std::cout << "[TRIM] Settling and verifying level at full accuracy...\n";
-    static int pumpDeadMs = PUMP_DEADTIME_MS;     // learned across calls
-    bool lastWasPump = false;
-    double prevLevel = 0.0;
-    for (int i = 0; i <= MAX_TRIM_PULSES && !emergencyStop; ++i) {
-        usleep(TRIM_SETTLE_US);
-        SensorMetrics m = getSensorMetrics(dev, 8, 0, true);
-        if (m.validSamples == 0) return false;
+// ------------------------------------------------------------------------------
+// CLOSED-LOOP ON/OFF (BANG-BANG) CONTROLLER
+// ------------------------------------------------------------------------------
 
-        double level = computeFluidLevel(zero, m.average, floater, false);
-        double err = level - target;
-        std::cout << "[TRIM] Level " << std::fixed << std::setprecision(2) << level
-                  << " mm (target " << target << ", error " << err << ")\n";
+constexpr double CTRL_DEADBAND_MM   = 0.4;    // predicted error below this => actuators off
+constexpr double CTRL_SETTLE_RATE   = 0.4;    // mm/s considered "steady"
+constexpr double CTRL_SETTLE_HOLD_S = 2.0;    // in tolerance + steady this long => done
+constexpr double CTRL_UNREACH_HOLD_S= 3.0;
+constexpr double CTRL_TIMEOUT_S     = 240.0;
+constexpr double CTRL_STALL_S       = 25.0;   // actuator on but error not improving
+constexpr int    SOL_KICK_MS        = 120;    // full-PWM kick when opening the valve
+const char* CONTROL_LOG_FILE = "control_log.csv";
 
-        if (lastWasPump && (level - prevLevel) < 0.3) {
-            pumpDeadMs = std::min(pumpDeadMs + PUMP_DEADTIME_STEP_MS, PUMP_TRIM_MAX_MS);
-            std::cout << "[TRIM] Last pump pulse added no fluid -> pump dead time now " << pumpDeadMs << " ms\n";
+struct ControlOptions {
+    bool allowPump  = true;
+    bool allowDrain = true;
+    int  pumpMaxPwm = 1024;
+    int  solMaxPwm  = 1024;
+    const char* eventName = "Control";
+};
+
+MoveResult controlToLevel(Dev_t dev, double zero, double floater, double target,
+                          const ControlOptions& opt, char* abortKey = nullptr, double* finalLevel = nullptr) {
+    using clock = std::chrono::steady_clock;
+    auto secs = [](clock::time_point a, clock::time_point b) {
+        return std::chrono::duration<double>(b - a).count();
+    };
+
+    bool logExists = fileExists(CONTROL_LOG_FILE);
+    std::ofstream clog(CONTROL_LOG_FILE, std::ios::app);
+    if (!logExists) clog << "SessionID,Event,Time_s,Level_mm,Predicted_mm,Target_mm,Error_mm,Actuator,PWM\n";
+
+    MoveResult result = MoveResult::Aborted;
+    double level = 0.0;
+    
+    {
+        FastTimingScope fast(dev);
+        while (kbhit()) getchar();
+        setPump(false);
+        setSolenoid(false);
+
+        const auto t0 = clock::now();
+        auto tProgress = t0, tBand = t0, tStuck = t0;
+        double bestAbsErr = 1e9, lastTs = 0.0;
+        std::deque<std::pair<double, double>> hist;
+        int badReads = 0;
+        bool solOpen = false, inBand = false, stuck = false;
+
+        while (!emergencyStop) {
+            if (kbhit()) {
+                char c = getchar();
+                if (abortKey) *abortKey = c;
+                result = MoveResult::Aborted;
+                break;
+            }
+
+            if (!readLevel(dev, zero, floater, level)) {
+                if (++badReads > 20) { result = MoveResult::SensorLost; break; }
+                continue;
+            }
+            badReads = 0;
+
+            auto now = clock::now();
+            double ts = secs(t0, now);
+            lastTs = ts;
+
+            hist.push_back({ts, level});
+            while (hist.size() > 2 && ts - hist.front().first > RATE_WINDOW_S) hist.pop_front();
+            double rate = 0.0;
+            if (hist.size() >= 3) {
+                double w = ts - hist.front().first;
+                if (w > 0.3) rate = (level - hist.front().second) / w;
+            }
+
+            // Latency prediction prevents overshoot when snapping OFF
+            double lat = (rate >= 0.0) ? FILL_LATENCY_S : DRAIN_LATENCY_S;
+            double pred = level + rate * lat;
+            double e = target - pred;
+            double absErr = std::fabs(target - level);
+
+            int act = 0, pwm = 0;
+            
+            // --- SIMPLE ON/OFF (BANG-BANG) LOGIC ---
+            if (e > CTRL_DEADBAND_MM && opt.allowPump) {
+                act = +1;
+                pwm = opt.pumpMaxPwm; // Strictly ON
+            } else if (e < -CTRL_DEADBAND_MM && opt.allowDrain) {
+                act = -1;
+                pwm = opt.solMaxPwm;  // Strictly ON
+            }
+
+            // Hardware actuation
+            if (act == +1) {
+                if (solOpen) { setSolenoid(false); solOpen = false; }
+                setPump(true, pwm);
+            } else if (act == -1) {
+                setPump(false);
+                if (!solOpen) {
+                    setSolenoid(true, opt.solMaxPwm); // Kick to pull valve in
+                    usleep(SOL_KICK_MS * 1000);
+                    solOpen = true;
+                }
+                setSolenoid(true, pwm);
+            } else {
+                setPump(false);
+                if (solOpen) { setSolenoid(false); solOpen = false; }
+            }
+
+            std::cout << "\rLvl: " << std::fixed << std::setprecision(1) << level
+                      << " mm | Pred: " << pred << " | Target: " << target
+                      << " | " << (act > 0 ? "PUMP " : act < 0 ? "DRAIN" : "OFF  ")
+                      << " " << std::setw(3) << (pwm * 100 / 1024) << "%    " << std::flush;
+            
+            clog << currentSessionID << "," << opt.eventName << "," << std::fixed << std::setprecision(3) << ts << ","
+                 << std::setprecision(2) << level << "," << pred << "," << target << "," << (target - level) << ","
+                 << (act > 0 ? "P" : act < 0 ? "D" : "-") << "," << pwm << "\n";
+
+            // Termination conditions
+            bool inTol  = absErr <= TARGET_TOLERANCE_MM;
+            bool steady = std::fabs(rate) <= CTRL_SETTLE_RATE;
+
+            if (inTol && steady) {
+                if (!inBand) { inBand = true; tBand = now; }
+                if (secs(tBand, now) >= CTRL_SETTLE_HOLD_S) { result = MoveResult::Reached; break; }
+            } else {
+                inBand = false;
+            }
+
+            if (act == 0 && !inTol && steady) {
+                if (!stuck) { stuck = true; tStuck = now; }
+                if (secs(tStuck, now) >= CTRL_UNREACH_HOLD_S) { result = MoveResult::Unreachable; break; }
+            } else {
+                stuck = false;
+            }
+
+            if (absErr < bestAbsErr - 0.5) { bestAbsErr = absErr; tProgress = now; }
+            if (act != 0 && secs(tProgress, now) > CTRL_STALL_S) { result = MoveResult::Stalled; break; }
+            if (ts > CTRL_TIMEOUT_S) { result = MoveResult::Timeout; break; }
         }
-        if (std::fabs(err) <= TARGET_TOLERANCE_MM) return true;
-        if (err < 0.0 && !allowPump) return true;
-        if (i == MAX_TRIM_PULSES) break;
-
-        if (kbhit()) { getchar(); std::cout << "[TRIM] Stopped by user.\n"; return false; }
-
-        if (err < 0.0) {
-            int ms = std::clamp(pumpDeadMs + static_cast<int>(-err * PUMP_TRIM_MS_PER_MM), TRIM_MIN_MS, PUMP_TRIM_MAX_MS);
-            prevLevel = level;
-            lastWasPump = true;
-            setPump(true, pumpPwm);
-            usleep(ms * 1000);
-            setPump(false);
-        } else {
-            lastWasPump = false;
-            int ms = std::clamp(static_cast<int>(err * SOL_TRIM_MS_PER_MM), TRIM_MIN_MS, TRIM_MAX_MS);
-            setSolenoid(true, solPwm);
-            usleep(ms * 1000);
-            setSolenoid(false);
-        }
+        
+        setPump(false);
+        setSolenoid(false);
     }
-    std::cout << "[TRIM] Could not reach target within tolerance.\n";
-    return false;
+    
+    if (finalLevel) *finalLevel = level;
+    return result;
 }
 
 // ==============================================================================
@@ -929,23 +956,22 @@ void runTankZeroExperiment(Dev_t dev) {
         std::getline(std::cin, dummy);
         if (dummy == "q" || dummy == "Q") { abortExp = true; break; }
 
-        std::cout << "Filling... Press ANY KEY to stop pump early, or 'q' to EXIT experiment.\n";
+        std::cout << "Filling (On/Off closed-loop, PUMP ONLY)... Press ANY KEY to stop, or 'q' to EXIT experiment.\n";
 
         char key = 0;
-        MoveResult fr = fillToLevel(dev, tankBottom, floaterThickness, pump_pwm, targetLevel, &key);
+        ControlOptions co;
+        co.allowPump = true;
+        co.allowDrain = false;
+        co.pumpMaxPwm = pump_pwm;
+        co.solMaxPwm = sol_pwm;
+        co.eventName = "TankZeroFill";
+        MoveResult fr = controlToLevel(dev, tankBottom, floaterThickness, targetLevel, co, &key);
         reportMove(fr, "Fill");
         if (fr == MoveResult::Aborted && (key == 'q' || key == 'Q')) abortExp = true;
         if (abortExp || emergencyStop || fr == MoveResult::Stalled || fr == MoveResult::SensorLost) {
             std::cout << "\n[ABORT] Exiting experiment...\n";
             break;
         }
-
-        if (fr == MoveResult::Reached) {
-            trimToTarget(dev, tankBottom, floaterThickness, pump_pwm, sol_pwm, targetLevel, true);
-        } else {
-            usleep(TRIM_SETTLE_US);   // stopped early by user: just settle
-        }
-        if (emergencyStop) break;
 
         capture100Readings(dev, "TankZero_SettledMeasurement", tankBottom, floaterThickness);
 
@@ -1015,16 +1041,75 @@ void runTankZeroExperiment(Dev_t dev) {
 // DRAIN TESTS
 // ==============================================================================
 
-void runSolenoidAndToF(Dev_t dev, double& containerZero, double& floaterThickness) {
+// Drain test: you fill manually, the solenoid (on/off, closed-loop) drains to the target.
+void runControlledDrain(Dev_t dev, double& containerZero, double& floaterThickness) {
     if (containerZero == 0.0) {
         std::cout << "[!] Run calibration first.\n";
         return;
     }
 
-    std::cout << "\n--- [ GRAVITY DRAIN & MONITOR ] ---\n";
+    std::cout << "\n--- [ CONTROLLED DRAIN TO TARGET (MANUAL FILL) ] ---\n";
+    std::cout << "Fill the tank by hand (floater IN). The solenoid drains it to your target using On/Off feedback.\n";
     int sol_pwm = getPWMFromVoltage("Solenoid");
 
-    std::cout << "Press ENTER to OPEN SOLENOID and monitor ToF drop (or type 'q' to abort)... ";
+    double target = 0.0;
+    std::cout << "Enter target level (mm): ";
+    if (!(std::cin >> target) || target <= 0.0) {
+        std::cout << "[!] Invalid target.\n";
+        std::cin.clear(); std::cin.ignore(10000, '\n'); return;
+    }
+    std::cin.ignore(10000, '\n');
+
+    std::cout << "Fill the tank above the target, let it settle, then press ENTER (or 'q' to abort)... ";
+    std::string dummy;
+    std::cin.clear();
+    std::getline(std::cin, dummy);
+    if (dummy == "q" || dummy == "Q") return;
+
+    SensorMetrics start = getSensorMetrics(dev, 10, 0, true);
+    if (start.validSamples == 0) { std::cout << "[!] No valid ToF readings.\n"; return; }
+    double startLevel = computeFluidLevel(containerZero, start.average, floaterThickness, false);
+    std::cout << "Start level: " << std::fixed << std::setprecision(1) << startLevel << " mm\n";
+    if (startLevel <= target + TARGET_TOLERANCE_MM) {
+        std::cout << "[!] Tank is already at or below the target. Nothing to drain.\n";
+        return;
+    }
+
+    emergencyStop = 0;
+    std::cout << "Draining (On/Off closed-loop, SOLENOID ONLY)... Press ANY KEY to abort.\n";
+    ControlOptions co;
+    co.allowPump = false;
+    co.allowDrain = true;
+    co.solMaxPwm = sol_pwm;
+    co.eventName = "ControlledDrain";
+    MoveResult r = controlToLevel(dev, containerZero, floaterThickness, target, co);
+    reportMove(r, "Drain");
+
+    SensorMetrics fin = getSensorMetrics(dev, 30, 0, true);
+    if (fin.validSamples == 0) return;
+    double calc = computeFluidLevel(containerZero, fin.average, floaterThickness);
+    std::cout << "Final ToF level: " << std::fixed << std::setprecision(2) << calc
+              << " mm (target " << target << ", error " << (calc - target) << ")\n";
+    std::cout << "Enter actual measured level (mm) [-1 to skip]: ";
+    double actual = -1.0;
+    if (std::cin >> actual) {
+        std::cin.ignore(10000, '\n');
+        if (actual >= 0.0) logCycleData(currentSessionID, static_cast<int>(target), calc, actual, fin.average);
+    } else {
+        std::cin.clear(); std::cin.ignore(10000, '\n');
+    }
+}
+
+void runDrainToEmpty(Dev_t dev, double& containerZero, double& floaterThickness) {
+    if (containerZero == 0.0) {
+        std::cout << "[!] Run calibration first.\n";
+        return;
+    }
+
+    std::cout << "\n--- [ DRAIN TO EMPTY ] ---\n";
+    int sol_pwm = getPWMFromVoltage("Solenoid");
+
+    std::cout << "Press ENTER to OPEN SOLENOID and drain (or type 'q' to abort)... ";
     std::string dummy;
     std::cin.clear();
     std::getline(std::cin, dummy);
@@ -1078,12 +1163,16 @@ void runFullFluidCycle(Dev_t dev, double& containerZero, double& floaterThicknes
     emergencyStop = 0;
     setSolenoid(false);
 
-    std::cout << "Filling... Press ANY KEY to abort.\n";
-    MoveResult fr = fillToLevel(dev, containerZero, floaterThickness, pump_pwm, targetLevel);
+    std::cout << "Filling (On/Off closed-loop, PUMP ONLY)... Press ANY KEY to abort.\n";
+    ControlOptions fillOpt;
+    fillOpt.allowPump = true;
+    fillOpt.allowDrain = false;
+    fillOpt.pumpMaxPwm = pump_pwm;
+    fillOpt.solMaxPwm = sol_pwm;
+    fillOpt.eventName = "FullCycleFill";
+    MoveResult fr = controlToLevel(dev, containerZero, floaterThickness, targetLevel, fillOpt);
     reportMove(fr, "Fill");
-    if (fr != MoveResult::Reached) { setPump(false); return; }
-
-    trimToTarget(dev, containerZero, floaterThickness, pump_pwm, sol_pwm, targetLevel, true);
+    if (fr == MoveResult::Aborted || fr == MoveResult::Stalled || fr == MoveResult::SensorLost) return;
     if (emergencyStop) return;
 
     capture100Readings(dev, "FullCycle_SettledMeasurement", containerZero, floaterThickness);
@@ -1126,17 +1215,23 @@ void runFullFluidCycle(Dev_t dev, double& containerZero, double& floaterThicknes
         double stepTarget = std::max(0.0, currentLevel - drainInterval);
 
         std::cout << "Draining... Press ANY KEY to stop.\n";
-        MoveResult dr = drainToLevel(dev, containerZero, floaterThickness, sol_pwm, stepTarget);
-        reportMove(dr, "Drain");
-        if (dr == MoveResult::Stalled || dr == MoveResult::SensorLost) break;
-
-        if (dr == MoveResult::Reached) {
-            if (stepTarget > EMPTY_BAND_MM) {
-                trimToTarget(dev, containerZero, floaterThickness, pump_pwm, sol_pwm, stepTarget, false);
-            } else {
+        MoveResult dr;
+        if (stepTarget > EMPTY_BAND_MM) {
+            ControlOptions stepOpt;
+            stepOpt.allowPump = false;
+            stepOpt.allowDrain = true;
+            stepOpt.solMaxPwm = sol_pwm;
+            stepOpt.eventName = "FullCycleStepDrain";
+            dr = controlToLevel(dev, containerZero, floaterThickness, stepTarget, stepOpt);
+            reportMove(dr, "Drain");
+        } else {
+            dr = drainToLevel(dev, containerZero, floaterThickness, sol_pwm, 0.0);
+            reportMove(dr, "Drain");
+            if (dr == MoveResult::Reached) {
                 if (autoRezero(dev, containerZero, floaterThickness)) saveCalibration(containerZero, floaterThickness);
             }
         }
+        if (dr == MoveResult::Stalled || dr == MoveResult::SensorLost) break;
 
         capture100Readings(dev, "FullCycle_PostDrainStep", containerZero, floaterThickness);
         std::cout << "\n";
@@ -1204,11 +1299,15 @@ void runLevelCalibrationRun(Dev_t dev, double& containerZero, double& floaterThi
         if (in == "q" || in == "Q") break;
 
         char key = 0;
-        MoveResult fr = fillToLevel(dev, containerZero, floaterThickness, pump_pwm, target, &key);
+        ControlOptions calOpt;
+        calOpt.allowPump = true;
+        calOpt.allowDrain = false;
+        calOpt.pumpMaxPwm = pump_pwm;
+        calOpt.solMaxPwm = sol_pwm;
+        calOpt.eventName = "CalRunFill";
+        MoveResult fr = controlToLevel(dev, containerZero, floaterThickness, target, calOpt, &key);
         reportMove(fr, "Fill");
-        if (fr != MoveResult::Reached) break;
-
-        trimToTarget(dev, containerZero, floaterThickness, pump_pwm, sol_pwm, target, true);
+        if (fr == MoveResult::Aborted || fr == MoveResult::Stalled || fr == MoveResult::SensorLost) break;
         if (emergencyStop) break;
 
         SensorMetrics m = getSensorMetrics(dev, 30, 0, true);
@@ -1352,19 +1451,81 @@ void menuFillTests(Dev_t dev) {
     }
 }
 
+// Fill+Drain test: pump and solenoid cooperate (never together) to track a setpoint sequence.
+void runSetpointSequence(Dev_t dev, double& containerZero, double& floaterThickness) {
+    if (containerZero == 0.0) {
+        std::cout << "[!] Run calibration first.\n";
+        return;
+    }
+
+    std::cout << "\n--- [ SETPOINT SEQUENCE: PUMP + SOLENOID TOGETHER ] ---\n";
+    std::cout << "The controller fills with the pump when below the setpoint and drains with the solenoid when above.\n";
+    std::cout << "Enter setpoints in mm separated by spaces (e.g. 50 20 70 30): ";
+
+    std::string line;
+    std::cin.clear();
+    std::getline(std::cin, line);
+    std::istringstream iss(line);
+    std::vector<double> sp;
+    double v;
+    while (iss >> v) if (v > 0.0) sp.push_back(v);
+    if (sp.empty()) { std::cout << "[!] No valid setpoints.\n"; return; }
+
+    int pump_pwm = getPWMFromVoltage("Pump");
+    int sol_pwm = getPWMFromVoltage("Solenoid");
+
+    std::cout << "Floater IN the tank. Press ENTER to start (or 'q' to abort)... ";
+    std::string dummy;
+    std::getline(std::cin, dummy);
+    if (dummy == "q" || dummy == "Q") return;
+
+    emergencyStop = 0;
+    for (size_t i = 0; i < sp.size() && !emergencyStop; ++i) {
+        std::cout << "\n=== SETPOINT " << (i + 1) << "/" << sp.size() << ": " << sp[i] << " mm ===\n";
+        ControlOptions co;
+        co.allowPump = true;
+        co.allowDrain = true;
+        co.pumpMaxPwm = pump_pwm;
+        co.solMaxPwm = sol_pwm;
+        co.eventName = "Setpoint";
+        MoveResult r = controlToLevel(dev, containerZero, floaterThickness, sp[i], co);
+        reportMove(r, "Control");
+        if (r == MoveResult::Aborted || r == MoveResult::Stalled || r == MoveResult::SensorLost) break;
+
+        SensorMetrics fin = getSensorMetrics(dev, 30, 0, true);
+        if (fin.validSamples == 0) continue;
+        double calc = computeFluidLevel(containerZero, fin.average, floaterThickness);
+        std::cout << "Settled ToF level: " << std::fixed << std::setprecision(2) << calc
+                  << " mm (setpoint " << sp[i] << ", error " << (calc - sp[i]) << ")\n";
+        std::cout << "Enter actual measured level (mm) [-1 to skip]: ";
+        double actual = -1.0;
+        if (std::cin >> actual) {
+            std::cin.ignore(10000, '\n');
+            if (actual >= 0.0) logCycleData(currentSessionID, static_cast<int>(sp[i]), calc, actual, fin.average);
+        } else {
+            std::cin.clear(); std::cin.ignore(10000, '\n');
+        }
+    }
+    setPump(false);
+    setSolenoid(false);
+    std::cout << "\n[SYSTEM] Sequence finished. Hardware parked.\n";
+}
+
 void menuDrainTests(Dev_t dev, double& containerZero, double& floaterThickness) {
     int choice = 0;
     while (!systemOffline) {
         std::cout << "\n--- DRAIN TESTS ---\n";
-        std::cout << " [1] Gravity Drain & Monitor (Solenoid + ToF)\n";
-        std::cout << " [2] Back to Main Menu\nSelection: ";
+        std::cout << " [1] Controlled Drain to Target (manual fill, solenoid On/Off control)\n";
+        std::cout << " [2] Drain to Empty (+ auto re-zero)\n";
+        std::cout << " [3] Back to Main Menu\nSelection: ";
 
         if (!(std::cin >> choice)) { std::cin.clear(); std::cin.ignore(10000, '\n'); continue; }
         std::cin.ignore(10000, '\n');
 
         switch (choice) {
-            case 1: runSolenoidAndToF(dev, containerZero, floaterThickness); break;
-            case 2: return;
+            case 1: runControlledDrain(dev, containerZero, floaterThickness); break;
+            case 2: runDrainToEmpty(dev, containerZero, floaterThickness); break;
+            case 3: return;
         }
     }
 }
@@ -1373,17 +1534,19 @@ void menuFillAndDrainTests(Dev_t dev, double& containerZero, double& floaterThic
     int choice = 0;
     while (!systemOffline) {
         std::cout << "\n--- FILL AND DRAIN TESTS ---\n";
-        std::cout << " [1] Full Cycle (Pump Fill -> Settle -> Stepped Drain)\n";
-        std::cout << " [2] Multi-Level Calibration Run (fit ToF -> physical correction)\n";
-        std::cout << " [3] Back to Main Menu\nSelection: ";
+        std::cout << " [1] Setpoint Sequence (pump + solenoid cooperate, On/Off control)\n";
+        std::cout << " [2] Full Cycle (Pump Fill -> Settle -> Stepped Drain)\n";
+        std::cout << " [3] Multi-Level Calibration Run (fit ToF -> physical correction)\n";
+        std::cout << " [4] Back to Main Menu\nSelection: ";
 
         if (!(std::cin >> choice)) { std::cin.clear(); std::cin.ignore(10000, '\n'); continue; }
         std::cin.ignore(10000, '\n');
 
         switch (choice) {
-            case 1: runFullFluidCycle(dev, containerZero, floaterThickness); break;
-            case 2: runLevelCalibrationRun(dev, containerZero, floaterThickness); break;
-            case 3: return;
+            case 1: runSetpointSequence(dev, containerZero, floaterThickness); break;
+            case 2: runFullFluidCycle(dev, containerZero, floaterThickness); break;
+            case 3: runLevelCalibrationRun(dev, containerZero, floaterThickness); break;
+            case 4: return;
         }
     }
 }
