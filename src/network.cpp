@@ -7,12 +7,14 @@
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <atomic>
+#include <algorithm>
 
 extern std::atomic<bool> run_loop;
 
 void TelemetryServer::disconnect_client() {
     if (client_socket >= 0) close(client_socket);
     client_socket = -1;
+    ext_requested = false;
 }
 
 TelemetryServer::~TelemetryServer() { 
@@ -50,6 +52,7 @@ bool TelemetryServer::wait_for_client() {
                 int flag = 1;
                 setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
                 rx_buffer.clear();
+                ext_requested = false;
                 return client_socket >= 0;
             }
         }
@@ -69,6 +72,7 @@ bool TelemetryServer::poll_for_client() {
             int flag = 1;
             setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
             rx_buffer.clear();
+            ext_requested = false;
             std::cout << "[MIXR-1] Dashboard Connected.\n";
             return true;
         }
@@ -83,6 +87,15 @@ bool TelemetryServer::has_client() const {
 bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long revolutions) const {
     if (client_socket < 0) return false;
     std::string packet = std::to_string(raw_rpm) + "," + std::to_string(filtered_rpm) + "," + std::to_string(revolutions) + "\n";
+    return send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0;
+}
+
+bool TelemetryServer::send_packet_ext(double raw_rpm, double feedback_rpm, long long revolutions,
+                                      double pwm_pct, double target_rpm, double elapsed_s) const {
+    if (client_socket < 0) return false;
+    std::string packet = std::to_string(raw_rpm) + "," + std::to_string(feedback_rpm) + "," +
+                         std::to_string(revolutions) + "," + std::to_string(pwm_pct) + "," +
+                         std::to_string(target_rpm) + "," + std::to_string(elapsed_s) + "\n";
     return send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0;
 }
 
@@ -113,6 +126,10 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
         size_t pwm_pos = line.find("CMD:PWM,");
         size_t cpr_pos = line.find("CMD:CPR,");
         size_t win_pos = line.find("CMD:WIN,");
+        size_t kp_pos  = line.find("CMD:KP,");
+        size_t ki_pos  = line.find("CMD:KI,");
+        size_t fa_pos  = line.find("CMD:ALPHA,");
+        size_t ext_pos = line.find("CMD:EXT,");
 
         if (rpm_pos != std::string::npos) {
             try {
@@ -139,6 +156,33 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
             try {
                 Config::RPM_SAMPLE_WINDOW_US = std::stoi(line.substr(win_pos + 8));
                 std::cout << "[MIXR-1] Live Config Update: RPM_SAMPLE_WINDOW_US = " << Config::RPM_SAMPLE_WINDOW_US << "us\n";
+            } catch (...) {}
+        } else if (kp_pos != std::string::npos) {
+            try {
+                const double v = std::stod(line.substr(kp_pos + 7));
+                if (v >= 0.0) {
+                    Config::GLOBAL_KP = v;
+                    std::cout << "[MIXR-1] Live Config Update: Kp = " << Config::GLOBAL_KP << '\n';
+                }
+            } catch (...) {}
+        } else if (ki_pos != std::string::npos) {
+            try {
+                const double v = std::stod(line.substr(ki_pos + 7));
+                if (v >= 0.0) {
+                    Config::GLOBAL_KI = v;
+                    std::cout << "[MIXR-1] Live Config Update: Ki = " << Config::GLOBAL_KI << '\n';
+                }
+            } catch (...) {}
+        } else if (fa_pos != std::string::npos) {
+            try {
+                const double v = std::stod(line.substr(fa_pos + 10));
+                Config::FEEDBACK_ALPHA = std::clamp(v, 0.01, 1.0);
+                std::cout << "[MIXR-1] Live Config Update: FEEDBACK_ALPHA = " << Config::FEEDBACK_ALPHA << '\n';
+            } catch (...) {}
+        } else if (ext_pos != std::string::npos) {
+            try {
+                ext_requested = (std::stoi(line.substr(ext_pos + 8)) != 0);
+                std::cout << "[MIXR-1] Extended telemetry " << (ext_requested ? "ON" : "OFF") << '\n';
             } catch (...) {}
         }
     }

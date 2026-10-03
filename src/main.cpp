@@ -45,6 +45,9 @@ struct TestOptions {
     int fixed_pwm = 1000;
     double duration_sec = 30.0; 
     std::string csv_path = "timing_test.csv";
+    bool stream = true;          // stream live to the dashboard / live_plot.py while the test runs
+    bool wait_client = false;    // block at start until a dashboard connects (so the plot starts at t=0)
+    bool ext_telemetry = false;  // 6-field packet (adds pwm/target/elapsed) for tools/live_plot.py
 };
 
 bool set_fifo_priority() {
@@ -94,6 +97,20 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.sine_amplitude = std::stod(argument.substr(11));
         } else if (argument.rfind("--sine-freq=", 0) == 0) {
             options.sine_freq_hz = std::stod(argument.substr(12));
+        } else if (argument.rfind("--kp=", 0) == 0) {
+            Config::GLOBAL_KP = std::stod(argument.substr(5));
+        } else if (argument.rfind("--ki=", 0) == 0) {
+            Config::GLOBAL_KI = std::stod(argument.substr(5));
+        } else if (argument.rfind("--alpha=", 0) == 0) {
+            Config::FEEDBACK_ALPHA = std::stod(argument.substr(8));
+        } else if (argument == "--stream") {
+            options.stream = true;
+        } else if (argument == "--no-stream") {
+            options.stream = false;
+        } else if (argument == "--wait-client") {
+            options.wait_client = true;
+        } else if (argument == "--ext") {
+            options.ext_telemetry = true;
         } else {
             return false;
         }
@@ -128,10 +145,34 @@ int run_test(const TestOptions& options) {
     const std::string intended_fifo = options.fifo ? "FIFO" : "NoFIFO";
     const std::string condition = intended_mode + "_" + intended_fifo;
 
-    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition\n";
+    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition,fb_rpm\n";
     
+    // ---- Live streaming (same TCP port/protocol as normal mode) ----
+    TelemetryServer net;
+    bool streaming = false;
+    if (options.stream) {
+        streaming = net.start_server(Config::TCP_PORT);
+        if (!streaming) {
+            std::cerr << "[TEST] Could not open port " << Config::TCP_PORT
+                      << " (is the daemon already running?). Continuing without live streaming.\n";
+        } else {
+            std::cout << "[TEST] Live streaming on port " << Config::TCP_PORT
+                      << (options.ext_telemetry ? " (extended packet)" : " (dashboard-compatible packet)")
+                      << ". KP/KI/ALPHA commands apply live; RPM/PWM commands are ignored in test mode.\n";
+            if (options.wait_client) {
+                if (!net.wait_for_client()) {            // Ctrl+C while waiting
+                    motor.stop_motor();
+                    pigpio_stop(pi);
+                    return 0;
+                }
+                std::cout << "[TEST] Dashboard connected. Starting test.\n";
+            }
+        }
+    }
+
     int current_pwm = options.use_pi ? 0 : (options.sweep ? 0 : options.fixed_pwm);
-    double current_target = options.use_pi ? 0.0 : options.target_rpm;
+    // PI fixed mode = step response from rest to target_rpm (sweep/sine override this per-iteration).
+    double current_target = options.target_rpm;
     motor.set_pwm(current_pwm);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -147,6 +188,8 @@ int run_test(const TestOptions& options) {
     std::vector<double> late_us;
     std::vector<double> rpm_samples;
     std::vector<double> errors;
+    std::vector<double> pwm_samples;
+    std::vector<double> time_samples;
 
     const double total_duration = options.sweep ? options.duration_sec * 11.0 : options.duration_sec;
     
@@ -191,11 +234,32 @@ int run_test(const TestOptions& options) {
         const double lateness = std::max(0.0, std::chrono::duration<double, std::micro>(now - next_wake).count());
         previous_tick = now;
         
+        // Accept live KP/KI/ALPHA (and CPR/WIN) from the dashboard; RPM/PWM commands are dummies here.
+        if (streaming) {
+            net.poll_for_client();
+            if (net.has_client()) {
+                double ignored_rpm = 0.0; int ignored_pwm = 0; bool ignored_mode = false;
+                net.receive_command(ignored_rpm, ignored_pwm, ignored_mode);
+            }
+        }
+
         auto state = kinematics.process(encoder.get_sync_snapshot(), current_pwm, false);
 
         if (options.use_pi) {
             current_pwm = controller.compute(current_target, state.exact_rpm, period / 1000000.0);
             motor.set_pwm(current_pwm);
+        }
+
+        // The value the controller is really acting on (PI) or the display EMA (open loop).
+        const double fb_rpm = options.use_pi ? controller.feedback_rpm(state.exact_rpm) : state.ema_filtered_rpm;
+
+        if (streaming && net.has_client()) {
+            if (options.ext_telemetry || net.wants_ext()) {
+                net.send_packet_ext(state.exact_rpm, fb_rpm, encoder.get_revolutions(),
+                                    current_pwm * 100.0 / 4095.0, current_target, elapsed);
+            } else {
+                net.send_packet(state.exact_rpm, fb_rpm, encoder.get_revolutions());
+            }
         }
 
         const double error = current_target - state.exact_rpm;
@@ -204,11 +268,14 @@ int run_test(const TestOptions& options) {
             << period << ',' << lateness << ','
             << state.exact_rpm << ',' << state.ema_filtered_rpm << ',' << current_target << ','
             << current_pwm << ',' << error << ','
-            << intended_mode << ',' << intended_fifo << ',' << (fifo_active ? "true" : "false") << ',' << condition << '\n';
+            << intended_mode << ',' << intended_fifo << ',' << (fifo_active ? "true" : "false") << ',' << condition << ','
+            << fb_rpm << '\n';
         periods_us.push_back(period);
         late_us.push_back(lateness);
         rpm_samples.push_back(state.exact_rpm);
         errors.push_back(std::abs(error));
+        pwm_samples.push_back(static_cast<double>(current_pwm));
+        time_samples.push_back(elapsed);
     }
 
     motor.stop_motor();
@@ -236,6 +303,61 @@ int run_test(const TestOptions& options) {
               << " mean_rpm=" << mean(rpm_samples)
               << " mean_abs_error_rpm=" << mean(errors) << '\n';
     std::cout << "[TEST] CSV saved to " << options.csv_path << '\n';
+
+    // ---- Step-response / jitter metrics (PI, fixed target only) ----
+    // Steady-state window = last 40% of the run. Parsed by tools/run_matrix.sh via the [RESULT] tag.
+    if (options.use_pi && !options.sweep && !options.sine_mode && options.target_rpm > 0.0) {
+        const size_t n = rpm_samples.size();
+        const size_t ss = static_cast<size_t>(static_cast<double>(n) * 0.6);
+        const size_t cnt = n - ss;
+        if (cnt > 2) {
+            double rpm_mean = 0.0, pwm_mean = 0.0;
+            for (size_t i = ss; i < n; ++i) { rpm_mean += rpm_samples[i]; pwm_mean += pwm_samples[i]; }
+            rpm_mean /= static_cast<double>(cnt);
+            pwm_mean /= static_cast<double>(cnt);
+
+            double rpm_var = 0.0, pwm_var = 0.0, diff_sq = 0.0;
+            for (size_t i = ss; i < n; ++i) {
+                rpm_var += (rpm_samples[i] - rpm_mean) * (rpm_samples[i] - rpm_mean);
+                pwm_var += (pwm_samples[i] - pwm_mean) * (pwm_samples[i] - pwm_mean);
+                if (i > ss) {
+                    const double d = pwm_samples[i] - pwm_samples[i - 1];
+                    diff_sq += d * d;
+                }
+            }
+            const double rpm_std = std::sqrt(rpm_var / static_cast<double>(cnt));
+            const double to_pct = 100.0 / 4095.0;
+            const double pwm_std_pct = std::sqrt(pwm_var / static_cast<double>(cnt)) * to_pct;
+            const double pwm_jitter_pct = std::sqrt(diff_sq / static_cast<double>(cnt - 1)) * to_pct;
+
+            const double max_rpm = *std::max_element(rpm_samples.begin(), rpm_samples.end());
+            const double overshoot_pct = std::max(0.0, (max_rpm - options.target_rpm) / options.target_rpm * 100.0);
+
+            // Settling time: last moment raw RPM was outside +/-5% of target (-1 = never settled).
+            const double band = 0.05 * options.target_rpm;
+            double settle_s = 0.0;
+            for (size_t i = n; i-- > 0;) {
+                if (std::abs(rpm_samples[i] - options.target_rpm) > band) {
+                    settle_s = (i == n - 1) ? -1.0 : time_samples[i];
+                    break;
+                }
+            }
+
+            std::cout << std::fixed << std::setprecision(3)
+                      << "[RESULT] kp=" << Config::GLOBAL_KP
+                      << " ki=" << Config::GLOBAL_KI
+                      << " alpha=" << Config::FEEDBACK_ALPHA
+                      << " target=" << options.target_rpm
+                      << " rpm_mean=" << rpm_mean
+                      << " rpm_std=" << rpm_std
+                      << " sse=" << (options.target_rpm - rpm_mean)
+                      << " pwm_mean_pct=" << (pwm_mean * to_pct)
+                      << " pwm_std_pct=" << pwm_std_pct
+                      << " pwm_jitter_pct=" << pwm_jitter_pct
+                      << " overshoot_pct=" << overshoot_pct
+                      << " settle5_s=" << settle_s << '\n';
+        }
+    }
     return 0;
 }
 
@@ -248,6 +370,15 @@ int main(int argc, char** argv) {
         } else if (arg.rfind("--window=", 0) == 0) {
             Config::RPM_SAMPLE_WINDOW_US = std::stoi(arg.substr(9));
             std::cout << "[CONFIG] Set RPM_SAMPLE_WINDOW_US to " << Config::RPM_SAMPLE_WINDOW_US << "us\n";
+        } else if (arg.rfind("--kp=", 0) == 0) {
+            Config::GLOBAL_KP = std::stod(arg.substr(5));
+            std::cout << "[CONFIG] Set Kp to " << Config::GLOBAL_KP << '\n';
+        } else if (arg.rfind("--ki=", 0) == 0) {
+            Config::GLOBAL_KI = std::stod(arg.substr(5));
+            std::cout << "[CONFIG] Set Ki to " << Config::GLOBAL_KI << '\n';
+        } else if (arg.rfind("--alpha=", 0) == 0) {
+            Config::FEEDBACK_ALPHA = std::stod(arg.substr(8));
+            std::cout << "[CONFIG] Set FEEDBACK_ALPHA to " << Config::FEEDBACK_ALPHA << '\n';
         }
     }
 
@@ -327,6 +458,7 @@ int main(int argc, char** argv) {
     kinematics.reset(encoder.get_sync_snapshot());
     auto next_wake = std::chrono::steady_clock::now();
     auto last_time = next_wake;
+    const auto loop_start = next_wake;
 
     while (run_loop) {
         next_wake += std::chrono::microseconds(Config::LOOP_DELAY_US);
@@ -460,6 +592,7 @@ int main(int argc, char** argv) {
             prev_open_loop = open_loop;
         }
 
+        double active_target = 0.0;      // PI target actually being tracked (0 in open loop)
         if (open_loop) {
             current_pwm = std::clamp((dashboard_target_pwm_pct * 4095) / 100, 0, 4095);
             motor.set_pwm(current_pwm);
@@ -467,15 +600,28 @@ int main(int argc, char** argv) {
             const double target = dashboard_active
                 ? std::clamp(dashboard_target_rpm, Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM)
                 : standalone_target_rpm;
-            if (target > 0.0) current_pwm = pi_control.compute(target, state.exact_rpm, dt.count());
-            else              current_pwm = 0;
+            active_target = target;
+            if (target > 0.0) {
+                current_pwm = pi_control.compute(target, state.exact_rpm, dt.count());
+            } else {
+                current_pwm = 0;
+                pi_control.reset();      // drop stale filter + integral so the next start is clean
+            }
             motor.set_pwm(current_pwm);
         }
 
         if (dashboard_active) {
-            if (!network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder.get_revolutions())) {
-                std::cout << "[MIXR-1] Dashboard send failed.\n";
+            bool sent;
+            if (network->wants_ext()) {
+                // Extended packet: raw, the RPM the PI actually acts on, revs, PWM %, PI target, uptime
+                const double uptime = std::chrono::duration<double>(current_time - loop_start).count();
+                sent = network->send_packet_ext(state.exact_rpm, pi_control.feedback_rpm(state.exact_rpm),
+                                                encoder.get_revolutions(), current_pwm * 100.0 / 4095.0,
+                                                active_target, uptime);
+            } else {
+                sent = network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder.get_revolutions());
             }
+            if (!sent) std::cout << "[MIXR-1] Dashboard send failed.\n";
         }
 
         if (update_lcd) {

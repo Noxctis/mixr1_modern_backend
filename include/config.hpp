@@ -17,8 +17,15 @@ namespace Config {
     constexpr int DEADBAND_TICK_THRESHOLD = 2;           
 
 // --- GLOBAL PI GAINS (1.0 rad/s Bandwidth) ---
-    constexpr double GLOBAL_KP = 1.5641;
-    constexpr double GLOBAL_KI = 41.2249;
+    // inline (not constexpr) so they can be changed live (CMD:KP / CMD:KI) or via --kp= / --ki=.
+    // Defaults below are the ORIGINAL tuning = the baseline. Update them after running tools/run_matrix.sh.
+    inline double GLOBAL_KP = 1.5641;
+    inline double GLOBAL_KI = 41.2249;
+
+    // First-order low-pass on the PI *feedback* path:  y = a*x + (1-a)*y_prev
+    // 1.0 = no filtering (baseline). Adviser suggested starting at 0.5 then tuning.
+    // At the 10 ms loop: time constant ~ 10ms*(1-a)/a  (0.5->10ms, 0.3->23ms, 0.15->57ms)
+    inline double FEEDBACK_ALPHA = 1.0;
 
     // --- Execution Pacing Matrix ---
     inline int RPM_SAMPLE_WINDOW_US = 20000;
