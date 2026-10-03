@@ -25,6 +25,7 @@ mixr1_water_suite
 *.slo
 *.lo
 *.ilk
+*.d
 
 # --- Compiled Dynamic & Static Libraries ---
 *.so
