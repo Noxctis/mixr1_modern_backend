@@ -1,0 +1,14 @@
+A_baseline kp=1.564 ki=41.225 alpha=1.000 target=460.000 rpm_mean=460.007 rpm_std=2.081 sse=-0.007 pwm_mean_pct=18.803 pwm_std_pct=0.094 pwm_jitter_pct=0.106 overshoot_pct=1.796 settle5_s=0.130
+C3_kp0.8 kp=0.800 ki=41.225 alpha=1.000 target=460.000 rpm_mean=459.995 rpm_std=1.814 sse=0.005 pwm_mean_pct=18.715 pwm_std_pct=0.051 pwm_jitter_pct=0.058 overshoot_pct=1.757 settle5_s=0.070
+D3_kp1.0_a0.5 kp=1.000 ki=41.225 alpha=0.500 target=460.000 rpm_mean=460.005 rpm_std=1.799 sse=-0.005 pwm_mean_pct=18.698 pwm_std_pct=0.039 pwm_jitter_pct=0.033 overshoot_pct=13.115 settle5_s=0.110
+F1_kp0.8_a0.5 kp=0.800 ki=41.225 alpha=0.500 target=460.000 rpm_mean=459.991 rpm_std=1.806 sse=0.009 pwm_mean_pct=18.669 pwm_std_pct=0.035 pwm_jitter_pct=0.029 overshoot_pct=12.141 settle5_s=0.140
+F2_kp0.8_ki25 kp=0.800 ki=25.000 alpha=1.000 target=460.000 rpm_mean=460.007 rpm_std=1.846 sse=-0.007 pwm_mean_pct=18.659 pwm_std_pct=0.048 pwm_jitter_pct=0.053 overshoot_pct=1.227 settle5_s=0.180
+F3_kp0.8_ki25_a0.5 kp=0.800 ki=25.000 alpha=0.500 target=460.000 rpm_mean=459.995 rpm_std=1.891 sse=0.005 pwm_mean_pct=18.686 pwm_std_pct=0.031 pwm_jitter_pct=0.027 overshoot_pct=1.104 settle5_s=0.160
+F4_kp0.8_ki15 kp=0.800 ki=15.000 alpha=1.000 target=460.000 rpm_mean=460.004 rpm_std=1.895 sse=-0.004 pwm_mean_pct=18.689 pwm_std_pct=0.042 pwm_jitter_pct=0.050 overshoot_pct=1.167 settle5_s=0.350
+A_baseline kp=1.564 ki=41.225 alpha=1.000 target=460.000 rpm_mean=459.998 rpm_std=2.260 sse=0.002 pwm_mean_pct=18.689 pwm_std_pct=0.101 pwm_jitter_pct=0.113 overshoot_pct=1.316 settle5_s=0.130
+C3_kp0.8 kp=0.800 ki=41.225 alpha=1.000 target=460.000 rpm_mean=460.008 rpm_std=2.040 sse=-0.008 pwm_mean_pct=18.700 pwm_std_pct=0.056 pwm_jitter_pct=0.062 overshoot_pct=1.854 settle5_s=0.070
+D3_kp1.0_a0.5 kp=1.000 ki=41.225 alpha=0.500 target=460.000 rpm_mean=459.995 rpm_std=1.910 sse=0.005 pwm_mean_pct=18.671 pwm_std_pct=0.039 pwm_jitter_pct=0.035 overshoot_pct=8.104 settle5_s=0.120
+F1_kp0.8_a0.5 kp=0.800 ki=41.225 alpha=0.500 target=460.000 rpm_mean=460.010 rpm_std=1.946 sse=-0.010 pwm_mean_pct=18.661 pwm_std_pct=0.037 pwm_jitter_pct=0.031 overshoot_pct=14.721 settle5_s=0.150
+F2_kp0.8_ki25 kp=0.800 ki=25.000 alpha=1.000 target=460.000 rpm_mean=460.013 rpm_std=1.892 sse=-0.013 pwm_mean_pct=18.674 pwm_std_pct=0.046 pwm_jitter_pct=0.054 overshoot_pct=1.283 settle5_s=0.190
+F3_kp0.8_ki25_a0.5 kp=0.800 ki=25.000 alpha=0.500 target=460.000 rpm_mean=460.005 rpm_std=1.853 sse=-0.005 pwm_mean_pct=18.662 pwm_std_pct=0.029 pwm_jitter_pct=0.026 overshoot_pct=1.227 settle5_s=0.130
+F4_kp0.8_ki15 kp=0.800 ki=15.000 alpha=1.000 target=460.000 rpm_mean=459.995 rpm_std=1.911 sse=0.005 pwm_mean_pct=18.667 pwm_std_pct=0.043 pwm_jitter_pct=0.051 overshoot_pct=1.179 settle5_s=0.360
