@@ -92,6 +92,26 @@ class Out:
         if caption:
             self.caps.append((f"individual/{name}", caption))
 
+    def single2(self, name, draw, title=None, caption=None, size=None, ratios=(3, 2)):
+        """Two stacked panels sharing the time axis (speed on top, PWM below). draw(ax_top, ax_bottom)."""
+        if self.args.no_individual:
+            return
+        rc = dict(SLIDE_RC)
+        rc.update({"font.size": 13, "xtick.labelsize": 12, "ytick.labelsize": 12, "axes.labelsize": 14, "legend.fontsize": 11})
+        with plt.rc_context(rc):
+            fig, (a1, a2) = plt.subplots(2, 1, figsize=size or tuple(self.args.slide_size), sharex=True,
+                                         gridspec_kw={"height_ratios": list(ratios)})
+            draw(a1, a2)
+            if title and not self.args.no_title:
+                a1.set_title(title, fontsize=14, fontweight="bold", loc="left")
+            fig.tight_layout(h_pad=0.5)
+            fig.savefig(os.path.join(self.ind, f"{name}.png"), dpi=200)
+            fig.savefig(os.path.join(self.ind, f"{name}.svg"))
+            plt.close(fig)
+        self.n_ind += 1
+        if caption:
+            self.caps.append((f"individual/{name}", caption))
+
     def single_fig(self, name, fig, caption=None):
         """Save an already-built single-axes figure (e.g. a table) to the individual folder too."""
         if self.args.no_individual:
@@ -568,8 +588,10 @@ def place_labels(ax, pts, labels):
     for (x, y), lab in zip(P, labels):
         w, h = (0.62 * fs * len(lab) + 2) * k, 1.25 * fs * k
         gap = 7 * k
+        g2 = 2.3 * gap
         cands = [(gap, gap), (gap, -gap - h), (-gap - w, gap), (-gap - w, -gap - h), (-w / 2, gap + 3 * k), (-w / 2, -gap - h - 3 * k),
-                 (gap + 4 * k, -h / 2), (-gap - w - 4 * k, -h / 2)]
+                 (gap + 4 * k, -h / 2), (-gap - w - 4 * k, -h / 2),
+                 (g2, g2), (g2, -g2 - h), (-g2 - w, g2), (-g2 - w, -g2 - h), (-w / 2, g2 + 6 * k), (-w / 2, -g2 - h - 6 * k)]
         choice = cands[0]
         for dx, dy in cands:
             r = (x + dx, y + dy, w, h)
@@ -620,7 +642,7 @@ def d_ranking(ax, known, base):
               loc="upper right", title="Startup overshoot")
 
 
-def d_peaks(ax, shown, base, pk):
+def d_peaks(ax, shown, base, pk, ylabel="PWM ripple amplitude (% duty, zero-to-peak)", fmt="{:.3f}"):
     xs = np.arange(len(shown))
     w = 0.38
     p1 = [pk[c.name][0] for c in shown]
@@ -628,17 +650,118 @@ def d_peaks(ax, shown, base, pk):
     b1 = ax.bar(xs - w / 2, p1, w, color="#8FB3D9", label="1\u00d7 shaft frequency")
     b2 = ax.bar(xs + w / 2, p2, w, color="#1B4F72", label="2\u00d7 shaft frequency")
     for b, v in zip(list(b1) + list(b2), p1 + p2):
-        ax.text(b.get_x() + b.get_width() / 2, v * 1.02, f"{v:.3f}", ha="center", fontsize=8.5)
+        ax.text(b.get_x() + b.get_width() / 2, v * 1.02, fmt.format(v), ha="center", fontsize=8.5)
     if base is not None and base in shown:
         ax.axhline(pk[base.name][0], color="#8FB3D9", ls="--", lw=1)
         ax.axhline(pk[base.name][1], color="#1B4F72", ls="--", lw=1)
     ax.set_xticks(xs)
     ax.set_xticklabels([c.id for c in shown])
     ax.set_xlabel("Setting (dashed lines = baseline)")
-    ax.set_ylabel("PWM ripple amplitude (% duty, zero-to-peak)")
+    ax.set_ylabel(ylabel)
     ax.set_ylim(0, max(p1 + p2) * 1.2)
     ax.legend(loc="upper right")
     ax.grid(axis="x", alpha=0)
+
+
+# ---- speed (RPM) comparison drawers
+def d_rtrace(ax, c, color, win, ylim, tgt):
+    r = c.runs[0]
+    mask, _ = trace_window(r, win)
+    ax.plot(r.t[mask], r.rpm[mask], color=color, lw=None)
+    ax.axhline(tgt, color="k", ls=":", lw=1)
+    ax.set_ylim(*ylim)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Raw speed (RPM)")
+
+
+def d_roverlay(ax, shown, cols, base, win, ylim, tgt):
+    for c in shown:
+        r = c.runs[0]
+        mask, _ = trace_window(r, win)
+        ax.plot(r.t[mask], r.rpm[mask], color=cols[c.name], lw=1.4, alpha=0.85, label=label_of(c, base))
+    ax.axhline(tgt, color="k", ls=":", lw=1)
+    ax.set_ylim(*ylim)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Raw speed (RPM)")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.17), ncol=2 if len(shown) > 3 else 1, frameon=False)
+
+
+def d_step(axr, axp, c, color, tgt, rlim, plim):
+    """One setting's step response: speed (both repeats, +-5 % band, overshoot and settling marked) and, optionally, the PWM command below."""
+    for r in c.runs[:2]:
+        first = r is c.runs[0]
+        m = r.t <= 1.2
+        axr.plot(r.t[m], r.rpm[m], color=color, lw=None, ls="-" if first else "--", alpha=1 if first else 0.55, label=f"repeat {r.rep}")
+        if axp is not None:
+            axp.plot(r.t[m], r.pwm[m], color=color, lw=None, ls="-" if first else "--", alpha=1 if first else 0.55)
+    axr.axhline(tgt, color="k", ls=":", lw=1)
+    axr.axhspan(tgt * 0.95, tgt * 1.05, color="k", alpha=0.06)
+    r0 = c.runs[0]
+    m = r0.t <= 1.2
+    i = int(np.argmax(r0.rpm[m]))
+    t_pk, v_pk = float(r0.t[m][i]), float(r0.rpm[m][i])
+    ov, st = mean_m(c, "overshoot"), mean_m(c, "settle")
+    if ov > 5.0:                       # a real overshoot feature: point at the peak
+        axr.annotate(f"peak {v_pk:.0f} RPM\n(overshoot {ov:.1f} %)", xy=(t_pk, v_pk), xytext=(t_pk + 0.13, min(v_pk + 0.03 * rlim[1], rlim[1] * 0.80)),
+                     arrowprops=dict(arrowstyle="-", color="gray", lw=1), va="bottom")
+    else:                              # no overshoot beyond the ripple: do not point at a noise peak
+        axr.text(0.97, 0.62, f"no overshoot beyond the ripple\n(max {v_pk:.0f} RPM, +{ov:.1f} %)", transform=axr.transAxes, ha="right", va="center",
+                 fontsize=plt.rcParams["font.size"] * 0.85)
+    if st >= 0:
+        for a in ([axr] + ([axp] if axp is not None else [])):
+            a.axvline(st, color="gray", ls="--", lw=1.2)
+        axr.text(st + 0.02, rlim[1] * 0.12, f"settles within \u00b15 %\nat {st:.2f} s", va="bottom", fontsize=plt.rcParams["font.size"] * 0.85)
+    axr.set_ylim(*rlim)
+    axr.set_ylabel("Speed (RPM)")
+    axr.legend(loc="lower right")
+    if axp is not None:
+        axp.set_ylim(*plim)
+        axp.set_ylabel("PWM duty (%)")
+        axp.set_xlabel("Time (s)")
+    else:
+        axr.set_xlabel("Time (s)")
+
+
+def d_rpm_pwm(axr, axp, c, color, win, rlim, plim, tgt):
+    """One setting at steady state: speed on top, PWM command below, shared time axis."""
+    r = c.runs[0]
+    mask, _ = trace_window(r, win)
+    axr.plot(r.t[mask], r.rpm[mask], color=color, lw=1.4)
+    axr.axhline(tgt, color="k", ls=":", lw=1)
+    axp.plot(r.t[mask], r.pwm[mask], color=color, lw=1.6)
+    axr.set_ylim(*rlim)
+    axp.set_ylim(*plim)
+    axr.set_ylabel("Speed (RPM)")
+    axp.set_ylabel("PWM duty (%)")
+    axp.set_xlabel("Time (s)")
+
+
+def d_rbars(ax, items, cols, base, bs):
+    vals = [mean_m(c, "rpm_std") for c in items]
+    bars = ax.bar([c.id for c in items], vals, color=[cols.get(c.name, "#7F8C8D") for c in items], width=0.65)
+    for b, c, v in zip(bars, items, vals):
+        top = max([v] + [r["rpm_std"] for r in c.rows])
+        ax.text(b.get_x() + b.get_width() / 2, top * 1.03, f"{v:.2f}", ha="center", fontsize=9)
+        ax.plot([b.get_x() + b.get_width() / 2] * len(c.rows), [r["rpm_std"] for r in c.rows], "k.", ms=4)
+    if base is not None and base in items:
+        ax.axhline(mean_m(base, "rpm_std"), color=PALETTE[0], ls="--", lw=1)
+    ax.set_ylim(0, max(max(r["rpm_std"] for r in c.rows) for c in items) * 1.25)
+    ax.set_ylabel("Speed ripple, std at steady state (RPM)")
+    ax.set_xlabel("Setting (dashed line = baseline)")
+    ax.grid(axis="x", alpha=0)
+
+
+def d_pwm_vs_rpm(ax, known, shown, cols, base):
+    for c in known:
+        ax.scatter(mean_m(c, "jitter"), mean_m(c, "rpm_std"), s=100, color=cols.get(c.name, "#7F8C8D"), edgecolor="k" if c in shown else "none", zorder=3)
+    ax.set_xlabel("PWM jitter (% duty)  \u2190 flatter command")
+    ax.set_ylabel("Speed ripple, std (RPM)  \u2193 steadier speed")
+    ax.set_xlim(0, max(mean_m(c, "jitter") for c in known) * 1.18)
+    ax.set_ylim(0, max(mean_m(c, "rpm_std") for c in known) * 1.25)
+    ordered = sorted(known, key=lambda c: (mean_m(c, "jitter"), mean_m(c, "rpm_std")))
+    offs = place_labels(ax, [(mean_m(c, "jitter"), mean_m(c, "rpm_std")) for c in ordered], [c.id for c in ordered])
+    for c, off in zip(ordered, offs):
+        ax.annotate(c.id, (mean_m(c, "jitter"), mean_m(c, "rpm_std")), textcoords="offset points", xytext=off, fontweight="bold" if c in shown else "normal")
 
 
 def d_spec(ax, grid, shown, cols, base, data, which, ol_ref):
@@ -677,10 +800,29 @@ def pi_section(runs, raw_rows, args, out):
     tgt = tgts[0] if tgts else 460.0
     known = [c for c in cfgs.values() if c.known and c.rows]
 
+    bs = mean_m(base, "rpm_std") if base else float("nan")
+
+    def cfg_peaks(c):
+        rr1, rr2, pp1, pp2 = [], [], [], []
+        for r in c.runs:
+            xr, xp = steady_arr(r, r.rpm), steady_arr(r, r.pwm)
+            if xr is None or xp is None:
+                continue
+            sh = float(np.mean(xr)) / 60.0
+            fr, a = spectrum(xr)
+            rr1.append(order_peak(fr, a, sh)); rr2.append(order_peak(fr, a, 2 * sh))
+            fr, a = spectrum(xp)
+            pp1.append(order_peak(fr, a, sh)); pp2.append(order_peak(fr, a, 2 * sh))
+        f = lambda v: float(np.mean(v)) if v else float("nan")                      # noqa: E731
+        return dict(rpm_amp_1x=f(rr1), rpm_amp_2x=f(rr2), pwm_amp_1x_pct=f(pp1), pwm_amp_2x_pct=f(pp2))
+    allpk = {c.name: cfg_peaks(c) for c in cfgs.values()}
+
     pd.DataFrame([dict(id=c.id, config=c.name, kp=c.kp, ki=c.ki, alpha=c.alpha, runs=len(c.rows), source=c.source,
                        jitter_pct=mean_m(c, "jitter"), pwm_std_pct=mean_m(c, "pwm_std"), rpm_std=mean_m(c, "rpm_std"),
-                       sse=mean_m(c, "sse"), overshoot_pct=mean_m(c, "overshoot"), settle_s=mean_m(c, "settle"),
-                       jitter_vs_baseline_pct=(mean_m(c, "jitter") / bj - 1) * 100 if (base and c.known) else np.nan)
+                       rpm_mean=mean_m(c, "rpm_mean"), mean_error_rpm=mean_m(c, "sse"),
+                       overshoot_pct=mean_m(c, "overshoot"), settle_s=mean_m(c, "settle"),
+                       jitter_vs_baseline_pct=(mean_m(c, "jitter") / bj - 1) * 100 if (base and c.known) else np.nan,
+                       rpm_std_vs_baseline_pct=(mean_m(c, "rpm_std") / bs - 1) * 100 if (base and c.known) else np.nan, **allpk[c.name])
                   for c in cfgs.values()]).sort_values("jitter_pct").to_csv(os.path.join(out.dir, "metrics_pi_configs.csv"), index=False)
 
     def red_txt(c):
@@ -829,6 +971,107 @@ def pi_section(runs, raw_rows, args, out):
             out.single("04c_ripple_peaks", lambda ax: d_peaks(ax, sh_pk, base, pk), title="PWM ripple at 1\u00d7 and 2\u00d7 shaft frequency, per setting", caption=pcap,
                        size=(max(10, 1.2 * len(sh_pk) + 3), 5.625))
 
+    # ---------------------------------------------------------------- speed (RPM) comparison
+    def rdelta(c):
+        v = mean_m(c, "rpm_std")
+        if c is base or not base or not c.known:
+            return ""
+        if abs(v / bs - 1) < 0.005:
+            return "  (\u2248 0 %)"
+        return f"  ({MINUS if v < bs else '+'}{abs(v / bs - 1) * 100:.0f} %)"
+    if shown:
+        wins = [trace_window(c.runs[0], args.window) for c in shown]
+        rmin = min(np.nanmin(c.runs[0].rpm[w[0]]) for c, w in zip(shown, wins))
+        rmax = max(np.nanmax(c.runs[0].rpm[w[0]]) for c, w in zip(shown, wins))
+        rpad = 0.12 * (rmax - rmin)
+        rlim = (rmin - rpad, rmax + rpad)
+
+        def rtitle(c):
+            v = mean_m(c, "rpm_std")
+            return f"{label_of(c, base)}   \u2192  speed ripple (std) {v:.2f} RPM = {v / tgt * 100:.2f} % of target{rdelta(c)}"
+        fig, axs = plt.subplots(len(shown), 1, figsize=(10, (2.2 if len(shown) <= 5 else (1.75 if len(shown) <= 8 else 1.5)) * len(shown) + 1.2),
+                                sharex=True, sharey=True, squeeze=False)
+        for ax, c in zip(axs[:, 0], shown):
+            d_rtrace(ax, c, cols[c.name], args.window, rlim, tgt)
+            ax.set_xlabel("")
+            ax.lines[0].set_linewidth(1.2)
+            ax.set_title(rtitle(c), loc="left", fontsize=10.5, color=cols[c.name], fontweight="bold")
+        axs[-1, 0].set_xlabel("Time (s)")
+        fig.suptitle(f"Raw motor speed at steady state, {tgt:g} RPM target (same vertical scale on all panels)", y=1.0, fontsize=12)
+        fig.tight_layout()
+        rtxt = "; ".join(f"{c.id} {mean_m(c, 'rpm_std'):.2f} RPM" for c in shown)
+        out.comp(fig, "06_rpm_traces", f"Raw motor speed at steady state for a {tgt:g} RPM step. Same vertical scale in all panels; repeat 1 shown. "
+                 f"Speed ripple (std over the last 40 % of the run, mean of repeats): {rtxt}.")
+        for c in shown:
+            out.single(f"06_rpm_trace_{c.id}", lambda ax, c=c: d_rtrace(ax, c, cols[c.name], args.window, rlim, tgt), title=rtitle(c),
+                       caption=f"Raw speed at steady state, {label_of(c, base)}: std {mean_m(c, 'rpm_std'):.2f} RPM{rdelta(c).strip()}. Same vertical scale as the other 06_rpm_trace graphs.")
+        out.single("06_rpm_overlay", lambda ax: d_roverlay(ax, shown, cols, base, args.window, rlim, tgt), title="Raw motor speed at steady state: all settings overlaid",
+                   caption="All shown settings overlaid on one axis (repeat 1).")
+        for suf, ttl, cs in family_sets(shown, base):
+            out.single(f"06_rpm_overlay_{suf}", lambda ax, cs=cs: d_roverlay(ax, cs, cols, base, args.window, rlim, tgt), title=f"Raw speed: {ttl.lower()}",
+                       caption=f"{ttl}: raw speed at steady state, repeat 1, same vertical scale as the other speed graphs.")
+
+    # speed summary: ripple size, shaft-order content, and PWM vs speed
+    allc = sorted([c for c in known if c.rows], key=lambda c: fam_key(c, base))
+    rpk = {c.name: (allpk[c.name]["rpm_amp_1x"], allpk[c.name]["rpm_amp_2x"]) for c in shown if np.isfinite(allpk[c.name]["rpm_amp_1x"])}
+    sh_r = [c for c in shown if c.name in rpk]
+    if allc:
+        npan = 3 if sh_r else 2
+        fig, axs = plt.subplots(1, npan, figsize=(max(14, 0.5 * len(allc) + 11), 4.8), squeeze=False)
+        axs = axs[0]
+        d_rbars(axs[0], allc, cols, base, bs)
+        axs[0].set_title("(a) Speed ripple per setting")
+        k = 1
+        if sh_r:
+            d_peaks(axs[k], sh_r, base, rpk, ylabel="Speed-ripple amplitude (RPM, zero-to-peak)", fmt="{:.2f}")
+            axs[k].set_title("(b) Speed ripple at 1\u00d7 and 2\u00d7 shaft frequency")
+            k += 1
+        d_pwm_vs_rpm(axs[k], allc, shown, cols, base)
+        axs[k].set_title(f"({'abc'[k]}) Flatter PWM vs steadier speed")
+        fig.tight_layout()
+        lo, hi = min(allc, key=lambda c: mean_m(c, "rpm_std")), max(allc, key=lambda c: mean_m(c, "rpm_std"))
+        ccap = (f"Speed comparison across settings: (a) speed ripple (std) per setting, (b) shaft-order components of the speed ripple, (c) PWM jitter versus speed ripple. "
+                f"Speed ripple ranges from {mean_m(lo, 'rpm_std'):.2f} RPM ({lo.id}) to {mean_m(hi, 'rpm_std'):.2f} RPM ({hi.id}); "
+                f"the baseline is {bs:.2f} RPM." if base else "Speed comparison across settings.")
+        out.comp(fig, "07_rpm_summary", ccap)
+        out.single("07a_rpm_std", lambda ax: d_rbars(ax, allc, cols, base, bs), title="Speed ripple (std) per setting",
+                   caption=ccap, size=(max(10, 0.9 * len(allc) + 3), 5.625))
+        if sh_r:
+            out.single("07b_rpm_ripple_peaks", lambda ax: d_peaks(ax, sh_r, base, rpk, ylabel="Speed-ripple amplitude (RPM, zero-to-peak)", fmt="{:.2f}"),
+                       title="Speed ripple at 1\u00d7 and 2\u00d7 shaft frequency, per setting", caption=ccap, size=(max(10, 1.2 * len(sh_r) + 3), 5.625))
+        out.single("07c_pwm_vs_rpm", lambda ax: d_pwm_vs_rpm(ax, allc, shown, cols, base), title="Flatter PWM vs steadier speed (one point per setting)", caption=ccap)
+
+    # ---------------------------------------------------------------- per-setting step responses and speed + PWM graphs
+    if shown:
+        rmax_s = max(float(np.nanmax(r.rpm[r.t <= 1.2])) for c in shown for r in c.runs[:2])
+        pmin_s = min(float(np.nanmin(r.pwm[r.t <= 1.2])) for c in shown for r in c.runs[:2])
+        pmax_s = max(float(np.nanmax(r.pwm[r.t <= 1.2])) for c in shown for r in c.runs[:2])
+        ppad = 0.08 * (pmax_s - pmin_s)
+        rlim_s, plim_s = (0.0, rmax_s * 1.25), (max(0.0, pmin_s - ppad), pmax_s + ppad)
+
+        def step_title(c):
+            st = mean_m(c, "settle")
+            return (f"{label_of(c, base)}   \u2192  overshoot {mean_m(c, 'overshoot'):.1f} %, "
+                    + (f"settles in {st:.2f} s" if st >= 0 else "does not settle within the window"))
+        fig, axs = plt.subplots(len(shown), 1, figsize=(10, (2.4 if len(shown) <= 5 else (1.9 if len(shown) <= 8 else 1.6)) * len(shown) + 1.2),
+                                sharex=True, sharey=True, squeeze=False)
+        for ax, c in zip(axs[:, 0], shown):
+            d_step(ax, None, c, cols[c.name], tgt, rlim_s, None)
+            ax.set_xlabel("")
+            ax.set_title(step_title(c), loc="left", fontsize=10.5, color=cols[c.name], fontweight="bold")
+        axs[-1, 0].set_xlabel("Time (s)")
+        fig.suptitle(f"Step response 0 \u2192 {tgt:g} RPM, one panel per setting (solid = repeat 1, dashed = repeat 2; grey band = \u00b15 %)", y=1.0, fontsize=12)
+        fig.tight_layout()
+        stxt = "; ".join(f"{c.id} {mean_m(c, 'overshoot'):.1f} % / {mean_m(c, 'settle'):.2f} s" for c in shown)
+        out.comp(fig, "08_step_by_setting", f"Step response from rest to {tgt:g} RPM for each setting on the same axes. Overshoot / settling time to \u00b15 % (mean of repeats): {stxt}.")
+        for c in shown:
+            out.single2(f"08_step_{c.id}", lambda a1, a2, c=c: d_step(a1, a2, c, cols[c.name], tgt, rlim_s, plim_s), title=step_title(c),
+                        caption=f"Step response of {label_of(c, base)}: speed (top) and PWM command (bottom), both repeats. Overshoot {mean_m(c, 'overshoot'):.1f} %, settling {mean_m(c, 'settle'):.2f} s. "
+                                f"Same axes as the other 08_step graphs.")
+            out.single2(f"09_rpm_pwm_{c.id}", lambda a1, a2, c=c: d_rpm_pwm(a1, a2, c, cols[c.name], args.window, rlim, ylim, tgt),
+                        title=f"{label_of(c, base)}:  speed ripple {mean_m(c, 'rpm_std'):.2f} RPM,  PWM jitter {mean_m(c, 'jitter'):.3f} %",
+                        caption=f"Steady-state speed (top) and PWM command (bottom) for {label_of(c, base)}; same axes as the other 09_rpm_pwm graphs.")
+
     # ---------------------------------------------------------------- settings table
     def grp(c):
         if c is base:
@@ -839,7 +1082,7 @@ def pi_section(runs, raw_rows, args, out):
             return 2
         return 3
     order = sorted(cfgs.values(), key=lambda c: (grp(c), -c.kp if grp(c) == 1 else 0, c.id))
-    hdr = ["ID", "What changed", "Kp", "Ki", "Filter \u03b1", "PWM jitter\n(% duty)", "vs baseline", "Overshoot\n(%)", "Settling to\n\u00b15 % (s)", "RPM std", "runs"]
+    hdr = ["ID", "What changed", "Kp", "Ki", "Filter \u03b1", "PWM jitter\n(% duty)", "vs baseline", "Overshoot\n(%)", "Settling to\n\u00b15 % (s)", "RPM std\n(RPM)", "RPM std\nvs baseline", "runs"]
     data_t = []
     for c in order:
         j = mean_m(c, "jitter")
@@ -847,10 +1090,12 @@ def pi_section(runs, raw_rows, args, out):
         vs = "\u2014" if (c is base or not base or not c.known) else (f"{MINUS}{abs(j / bj - 1) * 100:.0f} %" if j < bj else f"+{(j / bj - 1) * 100:.0f} %")
         data_t.append([c.id, what, f"{c.kp:.2f}" if c.known else "\u2014", f"{c.ki:.1f}" if c.known else "\u2014",
                        ("1.0 (off)" if abs(c.alpha - 1) < 1e-6 else fg(c.alpha)) if c.known else "\u2014", f"{j:.3f}", vs,
-                       f"{mean_m(c, 'overshoot'):.1f}", f"{mean_m(c, 'settle'):.2f}", f"{mean_m(c, 'rpm_std'):.2f}", str(len(c.rows))])
+                       f"{mean_m(c, 'overshoot'):.1f}", f"{mean_m(c, 'settle'):.2f}", f"{mean_m(c, 'rpm_std'):.2f}",
+                       "\u2014" if (c is base or not base or not c.known) else ("\u2248 0 %" if abs(mean_m(c, "rpm_std") / bs - 1) < 0.005 else (f"{MINUS}{abs(mean_m(c, 'rpm_std') / bs - 1) * 100:.0f} %" if mean_m(c, "rpm_std") < bs else f"+{(mean_m(c, 'rpm_std') / bs - 1) * 100:.0f} %")),
+                       str(len(c.rows))])
     fig, ax = plt.subplots(figsize=(13.5, 0.42 * len(data_t) + 1.3))
     ax.axis("off")
-    tb = ax.table(cellText=data_t, colLabels=hdr, loc="upper center", cellLoc="center", colWidths=[.05, .22, .06, .06, .09, .10, .10, .09, .10, .08, .05])
+    tb = ax.table(cellText=data_t, colLabels=hdr, loc="upper center", cellLoc="center", colWidths=[.04, .19, .05, .05, .08, .09, .085, .085, .09, .075, .09, .04])
     tb.auto_set_font_size(False)
     tb.set_fontsize(11)
     tb.scale(1, 1.7)
@@ -868,7 +1113,7 @@ def pi_section(runs, raw_rows, args, out):
         else:
             rid = data_t[r_ - 1][0]
             cell.set_facecolor("#E3EAF4" if (base and rid == base.id) else ovr_col[rid])
-            if c_ in (5, 7):
+            if c_ in (5, 7, 9):
                 cell.get_text().set_fontweight("bold")
     pd.DataFrame(data_t, columns=[h.replace("\n", " ") for h in hdr]).to_csv(os.path.join(out.dir, "05_settings_table_editable.csv"), index=False, encoding="utf-8-sig")
     fig.canvas.draw()
