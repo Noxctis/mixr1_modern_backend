@@ -49,6 +49,7 @@ struct TestOptions {
     bool wait_client = false;    // block at start until a dashboard connects (so the plot starts at t=0)
     bool ext_telemetry = false;  // 6-field packet (adds pwm/target/elapsed) for tools/live_plot.py
     double abort_rpm = 0.0;      // safety: stop the motor and end the run if the speed ever exceeds this (0 = off)
+    double wait_rest_s = 0.0;    // before starting, wait (up to this many seconds) until the shaft has stopped turning (0 = don't wait)
 };
 
 bool set_fifo_priority() {
@@ -110,6 +111,8 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.stream = false;
         } else if (argument == "--wait-client") {
             options.wait_client = true;
+        } else if (argument.rfind("--wait-rest=", 0) == 0) {
+            options.wait_rest_s = std::stod(argument.substr(12));
         } else if (argument.rfind("--abort-rpm=", 0) == 0) {
             options.abort_rpm = std::stod(argument.substr(12));
         } else if (argument == "--ext") {
@@ -171,6 +174,25 @@ int run_test(const TestOptions& options) {
                 std::cout << "[TEST] Dashboard connected. Starting test.\n";
             }
         }
+    }
+
+    // Make every run start from rest: the motor is still off here, so just wait until the encoder has not moved for 1 s.
+    if (options.wait_rest_s > 0.0) {
+        const auto t_wait0 = std::chrono::steady_clock::now();
+        long long last_count = encoder.get_sync_snapshot().count;
+        auto still_since = t_wait0;
+        bool at_rest = false;
+        double waited = 0.0;
+        while (run_loop) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            const auto tw = std::chrono::steady_clock::now();
+            const long long c = encoder.get_sync_snapshot().count;
+            if (c != last_count) { last_count = c; still_since = tw; }
+            waited = std::chrono::duration<double>(tw - t_wait0).count();
+            if (std::chrono::duration<double>(tw - still_since).count() >= 1.0) { at_rest = true; break; }
+            if (waited >= options.wait_rest_s) break;
+        }
+        std::cout << "[TEST] " << (at_rest ? "shaft at rest" : "WARNING: shaft still turning after waiting") << " (waited " << waited << " s)\n";
     }
 
     int current_pwm = options.use_pi ? 0 : (options.sweep ? 0 : options.fixed_pwm);
@@ -410,6 +432,7 @@ int main(int argc, char** argv) {
         }
         std::signal(SIGINT, signal_handler);
         std::signal(SIGTERM, signal_handler);
+        std::signal(SIGHUP, signal_handler);   // SSH disconnect: stop the motor cleanly instead of dying with PWM still running
         return run_test(options);
     }
 
@@ -436,6 +459,7 @@ int main(int argc, char** argv) {
 
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
+    std::signal(SIGHUP, signal_handler);   // SSH disconnect: stop the motor cleanly
     std::signal(SIGPIPE, SIG_IGN); 
 
     auto network = std::make_unique<TelemetryServer>();

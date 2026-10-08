@@ -5,10 +5,9 @@
 # Usage (run from the folder containing the binary; sudo for SCHED_FIFO):
 #   sudo ./run_matrix.sh [TARGET_RPM=460] [DURATION_S=20] [REPEATS=2]
 #
-# Grid size (env GRID=fast|full|wide|max, default full):
+# Grid size (env GRID=fast|full|max, default full):
 #   fast  5 Kp x 5 alpha  =  25 settings
 #   full  9 Kp x 9 alpha  =  81 settings        (default)
-#   wide 10 Kp x  9 alpha =  90 settings        (same as full, plus Kp 1.8, 2.0, 2.5 ABOVE the baseline)
 #   max  12 Kp x 12 alpha = 144 settings
 #   or your own:  KPS="1.5641 1.2 0.8" ALPHAS="1.0 0.5 0.3"
 #   or an explicit list:  CONFIGS_FILE=path   (one setting per line:  name kp ki alpha)
@@ -16,7 +15,6 @@
 # Other env overrides:
 #   BIN=./mixr1_daemon  FLAGS="--fifo"  PAUSE=4  STREAM=0|1  KI=41.2249
 #   ABORT_RPM=<rpm>   safety: stop the motor and flag the run if speed exceeds this (default 2 x target; 0 = off)
-#   WAIT_REST=60      before every run wait (up to this many seconds) until the shaft has stopped, so each run starts FROM REST (0 = off)
 #   ANCHOR_EVERY=20   re-run the baseline every N runs to watch for motor warm-up drift (0 = off)
 #   MAX_OVERSHOOT=5  MAX_SETTLE=0.3  TOP=8     what counts as an acceptable setting in the shortlist
 #   OUT=<folder>      continue an interrupted run: already-finished runs are skipped
@@ -66,15 +64,6 @@ esac
 TARGET="${1:-460}"
 DUR="${2:-20}"
 REPEATS="${3:-2}"
-# the three positional arguments must be numbers (a typical mistake: putting the output folder name here)
-for pair in "TARGET_RPM:$TARGET" "DURATION_S:$DUR" "REPEATS:$REPEATS"; do
-  if ! [[ "${pair#*:}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    echo "Argument ${pair%%:*} must be a number but is '${pair#*:}'."
-    echo "Usage:  sudo env OUT=<folder name> ./run_matrix.sh <target RPM> <duration s> <repeats>"
-    echo "Example: sudo env OUT=water90mmbaffle200mmwater PAUSE=15 ./run_matrix.sh 360 20 1"
-    exit 1
-  fi
-done
 BIN="${BIN:-./mixr1_daemon}"
 FLAGS="${FLAGS:---fifo}"
 PAUSE="${PAUSE:-4}"
@@ -99,7 +88,6 @@ if [ -n "${CONFIGS_FILE:-}" ]; then
 else
   case "$GRID" in
     fast) D_KPS="$BASE_KP 1.2 1.0 0.8 0.6";                                   D_ALPHAS="1.0 0.7 0.5 0.3 0.2" ;;
-    wide) D_KPS="2.5 2.0 1.8 $BASE_KP 1.4 1.2 1.0 0.8 0.6 0.5";                D_ALPHAS="1.0 0.8 0.7 0.6 0.5 0.4 0.3 0.2 0.15" ;;
     max)  D_KPS="$BASE_KP 1.4 1.3 1.2 1.1 1.0 0.9 0.8 0.7 0.6 0.5 0.4";       D_ALPHAS="1.0 0.9 0.8 0.7 0.6 0.5 0.45 0.4 0.3 0.25 0.2 0.15" ;;
     *)    D_KPS="$BASE_KP 1.4 1.2 1.0 0.9 0.8 0.7 0.6 0.5";                   D_ALPHAS="1.0 0.8 0.7 0.6 0.5 0.4 0.3 0.2 0.15" ;;
   esac
@@ -129,11 +117,6 @@ if [ "$ABORT_RPM" != "0" ]; then
        exit 1; fi
 fi
 STREAM_FLAG="--no-stream"; [ "$STREAM" = "1" ] && STREAM_FLAG="--stream"
-WAIT_REST="${WAIT_REST:-60}"; REST_FLAG=""
-if [ "$WAIT_REST" != "0" ]; then
-  if grep -qa -- "--wait-rest" "$BIN"; then REST_FLAG="--wait-rest=$WAIT_REST"
-  else echo "NOTE: this daemon build has no --wait-rest, so runs may start while the shaft is still coasting. Rebuild (make) with the updated main.cpp, or raise PAUSE (e.g. PAUSE=20)."; fi
-fi
 
 # ---------------------------------------------------------------- output folder (ONE for everything)
 OUT="${OUT:-matrix_all_$(date +%Y%m%d_%H%M%S)}"
@@ -236,7 +219,7 @@ try:
 except OSError:
     pass
 with open(os.path.join(out, 'confirm_list.txt'), 'w') as f:
-    f.write("# name kp ki alpha   (confirm with:  sudo env CONFIGS_FILE=%s/confirm_list.txt ./run_matrix.sh 460 20 5)\n" % out)
+    f.write("# name kp ki alpha   (confirm with:  CONFIGS_FILE=%s/confirm_list.txt sudo ./run_matrix.sh 460 20 5)\n" % out)
     for r in conf:
         kp, ki, al = exact.get(r['name'], [f"{r['kp']:g}", f"{r['ki']:g}", f"{r['alpha']:g}"])
         f.write(f"{r['name']} {kp} {ki} {al}\n")
@@ -264,10 +247,7 @@ run_one() {  # name kp ki alpha r
   if grep -qx "$name $r" "$DONE"; then echo "   (already done, skipping)"; return 0; fi
   local output res ab
   output=$("$BIN" --test --pi --fixed $FLAGS $STREAM_FLAG --target="$TARGET" --duration="$DUR" \
-             --kp="$kp" --ki="$ki" --alpha="$alpha" $ABORT_FLAG $REST_FLAG --csv="$csv" 2>&1)
-  if printf '%s\n' "$output" | grep -q "shaft still turning"; then
-    echo "   !! the shaft was still turning after $WAIT_REST s - this run did NOT start from rest (listed in not_at_rest.txt)"; echo "$name r$r" >> "$OUT/not_at_rest.txt"
-  fi
+             --kp="$kp" --ki="$ki" --alpha="$alpha" $ABORT_FLAG --csv="$csv" 2>&1)
   res=$(printf '%s\n' "$output" | grep '^\[RESULT\]' | sed 's/^\[RESULT\] //')
   ab=$(printf '%s\n' "$output" | grep '^\[ABORTED\]')
   if [ -n "$ab" ]; then
