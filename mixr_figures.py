@@ -1514,7 +1514,7 @@ def main():
     ap.add_argument("--show", default=None, help="comma-separated config IDs or names for the time-series graphs")
     ap.add_argument("--n-show", type=int, default=3, help="auto-pick this many configs besides the baseline")
     ap.add_argument("--max-overshoot", type=float, default=15.0, help="auto-pick only configs below this overshoot %%")
-    ap.add_argument("--window", type=float, nargs=2, default=(10.0, 13.0), help="time window for trace graphs (s)")
+    ap.add_argument("--window", type=float, nargs=2, default=(10.0, 12.0), help="time window for trace graphs (s)")
     ap.add_argument("--event-thr", type=float, default=3.0, help="disturbance detection threshold, %% of target")
     ap.add_argument("--slide-size", type=float, nargs=2, default=(10.0, 5.625), help="individual graph size in inches (default 16:9)")
     ap.add_argument("--no-title", action="store_true", help="individual graphs without titles")
