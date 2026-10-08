@@ -25,8 +25,6 @@
 #include "encoder.hpp"
 #include "motor.hpp"
 #include "lcd.hpp"
-#include "torque.hpp"
-#include <limits>
 #include "network.hpp"
 #include "ec11.hpp"
 
@@ -136,7 +134,6 @@ int run_test(const TestOptions& options) {
 
     AMT102Encoder encoder(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
     MotorController motor(pi);
-    TorqueSensor torque(pi);          // optional: logs torque_v / torque_nm when the ADS1115 is present
     KinematicsEngine kinematics;
     PIController controller;
     std::ofstream log(options.csv_path);
@@ -151,7 +148,7 @@ int run_test(const TestOptions& options) {
     const std::string intended_fifo = options.fifo ? "FIFO" : "NoFIFO";
     const std::string condition = intended_mode + "_" + intended_fifo;
 
-    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition,fb_rpm,torque_v,torque_nm\n";
+    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition,fb_rpm\n";
     
     // ---- Live streaming (same TCP port/protocol as normal mode) ----
     TelemetryServer net;
@@ -261,9 +258,6 @@ int run_test(const TestOptions& options) {
                       << " RPM limit at t=" << elapsed << " s - motor stopped\n";
             break;
         }
-        if (torque.available()) torque.update();
-        const double tq_v  = torque.available() ? torque.volts()         : std::numeric_limits<double>::quiet_NaN();
-        const double tq_nm = torque.available() ? torque.torque_raw_nm() : std::numeric_limits<double>::quiet_NaN();
 
         if (options.use_pi) {
             current_pwm = controller.compute(current_target, state.exact_rpm, period / 1000000.0);
@@ -276,7 +270,7 @@ int run_test(const TestOptions& options) {
         if (streaming && net.has_client()) {
             if (options.ext_telemetry || net.wants_ext()) {
                 net.send_packet_ext(state.exact_rpm, fb_rpm, encoder.get_revolutions(),
-                                    current_pwm * 100.0 / 4095.0, current_target, elapsed, tq_nm);
+                                    current_pwm * 100.0 / 4095.0, current_target, elapsed);
             } else {
                 net.send_packet(state.exact_rpm, fb_rpm, encoder.get_revolutions());
             }
@@ -289,7 +283,7 @@ int run_test(const TestOptions& options) {
             << state.exact_rpm << ',' << state.ema_filtered_rpm << ',' << current_target << ','
             << current_pwm << ',' << error << ','
             << intended_mode << ',' << intended_fifo << ',' << (fifo_active ? "true" : "false") << ',' << condition << ','
-            << fb_rpm << ',' << tq_v << ',' << tq_nm << '\n';
+            << fb_rpm << '\n';
         periods_us.push_back(period);
         late_us.push_back(lateness);
         rpm_samples.push_back(state.exact_rpm);
@@ -408,12 +402,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    for (int i = 1; i < argc; ++i) {
-        const std::string a = argv[i];
-        if (a == "--torque-cal")  return torque_calibration_cli(false);   // multi-point calibration (TC-U3/TC-U4)
-        if (a == "--torque-zero") return torque_calibration_cli(true);    // re-zero only
-    }
-
     if (argc > 1 && std::string(argv[1]) == "--test") {
         TestOptions options;
         if (!parse_test_options(argc, argv, options)) {
@@ -463,9 +451,6 @@ int main(int argc, char** argv) {
     AMT102Encoder encoder(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
     MotorController motor(pi);
     LCD1602 lcd(pi, Config::DISPLAY_TYPE);
-    TorqueSensor torque(pi);
-    const bool torque_ok = torque.available();     // false -> keeps the PWM-based estimate
-    bool torque_fault_reported = false;
     EC11Input ec11(pi, Config::PIN_EC11_A, Config::PIN_EC11_B, Config::PIN_EC11_SW);
     PIController pi_control;
 
@@ -478,10 +463,6 @@ int main(int argc, char** argv) {
     int dashboard_target_pwm_pct = 0;
     bool dashboard_pi_mode = false;
     int current_pwm = 0;
-    auto torque_now = [&]() -> double {
-        return torque_ok ? torque.torque_nm()
-                         : (static_cast<double>(current_pwm) / 4095.0) * Config::TORQUE_ESTIMATE_MAX_NM;
-    };
     int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL;
     int lcd_prescaler = 0;
     int ec11_accum = 0;
@@ -557,7 +538,7 @@ int main(int argc, char** argv) {
         // ---- EC11: drives the motor only in standalone mode. When the dashboard is
         //      connected the knob is locked, but every event is still printed to the terminal. ----
         auto log_states = [&](const char* event) {
-            const double est_torque_nm = torque_now();
+            const double est_torque_nm = (static_cast<double>(current_pwm) / 4095.0) * Config::TORQUE_ESTIMATE_MAX_NM;
             std::cout << std::fixed << std::setprecision(0)
                       << "[EC11] " << event
                       << " | " << (dashboard_active ? "MODE2 DASHBOARD (knob locked)" : "MODE1 STANDALONE")
@@ -569,7 +550,7 @@ int main(int argc, char** argv) {
             }
             std::cout << " | measured=" << last_rpm << " RPM"
                       << " | pwm=" << (current_pwm * 100 / 4095) << "%"
-                      << (torque_ok ? " | torque=" : " | torque~") << std::setprecision(3) << est_torque_nm << " Nm\n";
+                      << " | torque~" << std::setprecision(2) << est_torque_nm << " Nm\n";
         };
 
         if (ec11.button_pressed()) {                       // button = zero the knob target
@@ -623,15 +604,6 @@ int main(int argc, char** argv) {
         if (update_lcd) lcd_prescaler = 0;
 
         auto state = kinematics.process(encoder.get_sync_snapshot(), current_pwm, update_lcd);
-        if (torque_ok) {
-            torque.update();
-            if ((torque.fault() || torque.overrange()) && !torque_fault_reported) {
-                std::cout << "[TORQUE] " << (torque.fault() ? "I2C read failures - check wiring" : "input out of range (overload or wire break)") << '\n';
-                torque_fault_reported = true;     // report once per episode (stopping the motor is a policy decision, see notes)
-            } else if (!torque.fault() && !torque.overrange()) {
-                torque_fault_reported = false;
-            }
-        }
         last_rpm = state.exact_rpm;
 
         const bool open_loop = dashboard_active && !dashboard_pi_mode;
@@ -665,8 +637,7 @@ int main(int argc, char** argv) {
                 const double uptime = std::chrono::duration<double>(current_time - loop_start).count();
                 sent = network->send_packet_ext(state.exact_rpm, state.ema_filtered_rpm,
                                                 encoder.get_revolutions(), current_pwm * 100.0 / 4095.0,
-                                                active_target, uptime,
-                                                torque_ok ? torque.torque_nm() : std::numeric_limits<double>::quiet_NaN());
+                                                active_target, uptime);
             } else {
                 sent = network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder.get_revolutions());
             }
@@ -674,7 +645,7 @@ int main(int argc, char** argv) {
         }
 
         if (update_lcd) {
-            const double est_torque_nm = torque_now();
+            const double est_torque_nm = (static_cast<double>(current_pwm) / 4095.0) * Config::TORQUE_ESTIMATE_MAX_NM;
             std::ostringstream l1, l2, l3, l4;
             l1 << (dashboard_active ? "MODE2 DASHBOARD" : "MODE1 STANDALONE");
             if (open_loop) {
@@ -684,7 +655,7 @@ int main(int argc, char** argv) {
                    << (dashboard_active ? dashboard_target_rpm : standalone_target_rpm) << " RPM";
             }
             l3 << std::fixed << std::setprecision(0) << "READ: " << state.exact_rpm << " RPM";
-            l4 << std::fixed << std::setprecision(3) << (torque_ok ? "T:" : "E:") << est_torque_nm
+            l4 << std::fixed << std::setprecision(2) << "T:" << est_torque_nm
                << "NM PWM:" << (current_pwm * 100 / 4095) << "%";
 
             const std::string lines[4] = {l1.str(), l2.str(), l3.str(), l4.str()};
