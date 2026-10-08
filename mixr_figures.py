@@ -488,15 +488,41 @@ def d_trace(ax, c, color, win, ylim):
     ax.set_ylabel("PWM duty (%)")
 
 
+EMPH = {"other_alpha": 0.3}          # opacity of every non-baseline line in overlay graphs (1.0 = no emphasis)
+
+
+def emph(c, base, first=True, lw=None):
+    """Line kwargs that make the baseline stand out: baseline thick, opaque and on top; every other setting faded."""
+    lw0 = lw if lw is not None else plt.rcParams["lines.linewidth"]
+    if base is not None and c is base:
+        return dict(lw=lw0 * 1.7, alpha=1.0 if first else 0.7, zorder=6)
+    a = EMPH["other_alpha"]
+    return dict(lw=lw0, alpha=a if first else a * 0.6, zorder=2)
+
+
+def leg_opaque(leg):
+    """Legend swatches stay fully readable even though the plotted lines are faded."""
+    for h in getattr(leg, "legend_handles", None) or getattr(leg, "legendHandles", []):
+        try:
+            h.set_alpha(1.0)
+        except Exception:                                                        # noqa: BLE001
+            pass
+
+
+def lc1(t):
+    """Lower-case only the first letter (keeps Kp, Ki capitalised)."""
+    return t[0].lower() + t[1:] if t else t
+
+
 def d_overlay(ax, shown, cols, base, win, ylim):
     for c in shown:
         r = c.runs[0]
         mask, _ = trace_window(r, win)
-        ax.plot(r.t[mask], r.pwm[mask], color=cols[c.name], lw=None, alpha=0.9, label=label_of(c, base))
+        ax.plot(r.t[mask], r.pwm[mask], color=cols[c.name], label=label_of(c, base), **emph(c, base))
     ax.set_ylim(*ylim)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("PWM duty (%)")
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.17), ncol=2 if len(shown) > 3 else 1, frameon=False)
+    leg_opaque(ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.17), ncol=2 if len(shown) > 3 else 1, frameon=False))
 
 
 def d_startup(ax, shown, cols, base, tgt, legend_loc="lower right"):
@@ -504,21 +530,20 @@ def d_startup(ax, shown, cols, base, tgt, legend_loc="lower right"):
         for r in c.runs[:2]:
             first = r.rep == c.runs[0].rep
             m = r.t <= 1.2
-            ax.plot(r.t[m], r.rpm[m], color=cols[c.name], lw=None, ls="-" if first else "--", alpha=1 if first else 0.5,
-                    label=label_of(c, base) if first else None)
+            ax.plot(r.t[m], r.rpm[m], color=cols[c.name], ls="-" if first else "--", label=label_of(c, base) if first else None, **emph(c, base, first))
     ax.axhline(tgt, color="k", ls=":", lw=1)
     ax.axhspan(tgt * 0.95, tgt * 1.05, color="k", alpha=0.06)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Raw speed (RPM)")
-    ax.legend(loc=legend_loc)
+    leg_opaque(ax.legend(loc=legend_loc))
 
 
-def d_steady(ax, shown, cols, tgt, win):
+def d_steady(ax, shown, cols, tgt, win, base=None):
     for c in shown:
         for r in c.runs[:2]:
             first = r.rep == c.runs[0].rep
             mask, _ = trace_window(r, win)
-            ax.plot(r.t[mask], r.rpm[mask], color=cols[c.name], lw=None, ls="-" if first else "--", alpha=0.85 if first else 0.45)
+            ax.plot(r.t[mask], r.rpm[mask], color=cols[c.name], ls="-" if first else "--", **emph(c, base, first))
     ax.axhline(tgt, color="k", ls=":", lw=1)
     ax.set_ylim(tgt * 0.955, tgt * 1.045)
     ax.set_xlabel("Time (s)")
@@ -678,12 +703,12 @@ def d_roverlay(ax, shown, cols, base, win, ylim, tgt):
     for c in shown:
         r = c.runs[0]
         mask, _ = trace_window(r, win)
-        ax.plot(r.t[mask], r.rpm[mask], color=cols[c.name], lw=1.4, alpha=0.85, label=label_of(c, base))
+        ax.plot(r.t[mask], r.rpm[mask], color=cols[c.name], label=label_of(c, base), **emph(c, base, lw=1.4))
     ax.axhline(tgt, color="k", ls=":", lw=1)
     ax.set_ylim(*ylim)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Raw speed (RPM)")
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.17), ncol=2 if len(shown) > 3 else 1, frameon=False)
+    leg_opaque(ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.17), ncol=2 if len(shown) > 3 else 1, frameon=False))
 
 
 def d_step(axr, axp, c, color, tgt, rlim, plim):
@@ -772,14 +797,14 @@ def d_spec(ax, grid, shown, cols, base, data, which, ol_ref):
         if c.name not in data:
             continue
         y = data[c.name][0 if which == "speed" else 1]
-        ax.plot(grid, y, color=cols[c.name], lw=None, alpha=0.95, label=("PI: " if which == "speed" else "") + label_of(c, base))
+        ax.plot(grid, y, color=cols[c.name], label=("PI: " if which == "speed" else "") + label_of(c, base), **emph(c, base))
     ax.set_xlim(0, 4.5)
     ax.set_xticks([0, 1, 2, 3, 4])
     ax.set_xticklabels(["0", "1\u00d7", "2\u00d7", "3\u00d7", "4\u00d7"])
     ax.set_xlabel("Frequency in multiples of shaft rotation frequency")
     ax.set_ylabel("Speed-ripple amplitude (RPM)" if which == "speed" else "PWM-command ripple amplitude (% duty)")
     ax.set_ylim(bottom=0)
-    ax.legend(loc="upper right")
+    leg_opaque(ax.legend(loc="upper right"))
 
 
 # ============================================================================================ PI study: section
@@ -857,14 +882,14 @@ def pi_section(runs, raw_rows, args, out):
         out.single("01_pwm_overlay", lambda ax: d_overlay(ax, shown, cols, base, args.window, ylim), title="PWM command at steady state: all settings overlaid",
                    caption="All shown settings overlaid on one axis (repeat 1).")
         for suf, ttl, cs in family_sets(shown, base):
-            out.single(f"01_pwm_overlay_{suf}", lambda ax, cs=cs: d_overlay(ax, cs, cols, base, args.window, ylim), title=f"PWM command: {ttl.lower()}",
+            out.single(f"01_pwm_overlay_{suf}", lambda ax, cs=cs: d_overlay(ax, cs, cols, base, args.window, ylim), title=f"PWM command: {lc1(ttl)}",
                        caption=f"{ttl}: PWM command at steady state, repeat 1, same vertical scale as the other PWM graphs.")
 
     # ---------------------------------------------------------------- step response
     if shown:
         fig, ax = plt.subplots(1, 2, figsize=(13, 4.8))
         d_startup(ax[0], shown, cols, base, tgt)
-        d_steady(ax[1], shown, cols, tgt, args.window)
+        d_steady(ax[1], shown, cols, tgt, args.window, base)
         ax[0].set_title(f"(a) Startup step 0 \u2192 {tgt:g} RPM (grey band = \u00b15 %)")
         ax[1].set_title("(b) Steady state (solid = run 1, dashed = run 2)")
         fig.tight_layout()
@@ -872,10 +897,10 @@ def pi_section(runs, raw_rows, args, out):
         out.comp(fig, "02_step_response", f"Speed response to a step from rest to {tgt:g} RPM. (a) Startup; (b) steady state. Overshoot (mean of repeats): {txt}.")
         out.single("02a_step_startup", lambda ax: d_startup(ax, shown, cols, base, tgt), title=f"Startup step 0 \u2192 {tgt:g} RPM (grey band = \u00b15 %)",
                    caption=f"Startup response to the {tgt:g} RPM step; overshoot {txt}.")
-        out.single("02b_step_steady", lambda ax: d_steady(ax, shown, cols, tgt, args.window), title="Steady state (solid = run 1, dashed = run 2)",
+        out.single("02b_step_steady", lambda ax: d_steady(ax, shown, cols, tgt, args.window, base), title="Steady state (solid = run 1, dashed = run 2)",
                    caption="Steady-state speed, same shaft-order ripple for all settings.")
         for suf, ttl, cs in family_sets(shown, base):
-            out.single(f"02a_step_startup_{suf}", lambda ax, cs=cs: d_startup(ax, cs, cols, base, tgt), title=f"Startup step: {ttl.lower()}",
+            out.single(f"02a_step_startup_{suf}", lambda ax, cs=cs: d_startup(ax, cs, cols, base, tgt), title=f"Startup step: {lc1(ttl)}",
                        caption=f"{ttl}: startup response to the {tgt:g} RPM step (solid = run 1, dashed = run 2).")
 
     # ---------------------------------------------------------------- tuning summary: Kp / alpha / Ki / trade-off
@@ -1008,7 +1033,7 @@ def pi_section(runs, raw_rows, args, out):
         out.single("06_rpm_overlay", lambda ax: d_roverlay(ax, shown, cols, base, args.window, rlim, tgt), title="Raw motor speed at steady state: all settings overlaid",
                    caption="All shown settings overlaid on one axis (repeat 1).")
         for suf, ttl, cs in family_sets(shown, base):
-            out.single(f"06_rpm_overlay_{suf}", lambda ax, cs=cs: d_roverlay(ax, cs, cols, base, args.window, rlim, tgt), title=f"Raw speed: {ttl.lower()}",
+            out.single(f"06_rpm_overlay_{suf}", lambda ax, cs=cs: d_roverlay(ax, cs, cols, base, args.window, rlim, tgt), title=f"Raw speed: {lc1(ttl)}",
                        caption=f"{ttl}: raw speed at steady state, repeat 1, same vertical scale as the other speed graphs.")
 
     # speed summary: ripple size, shaft-order content, and PWM vs speed
@@ -1493,11 +1518,14 @@ def main():
     ap.add_argument("--event-thr", type=float, default=3.0, help="disturbance detection threshold, %% of target")
     ap.add_argument("--slide-size", type=float, nargs=2, default=(10.0, 5.625), help="individual graph size in inches (default 16:9)")
     ap.add_argument("--no-title", action="store_true", help="individual graphs without titles")
+    ap.add_argument("--other-alpha", type=float, default=0.3,
+                    help="opacity (0-1) of non-baseline lines in overlay graphs so the baseline stands out; 1.0 = no fading (default 0.3)")
     ap.add_argument("--no-individual", action="store_true", help="only the multi-panel thesis figures")
     ap.add_argument("--list", action="store_true", help="only list how each file was classified")
     ap.add_argument("-r", "--recursive", action="store_true")
     args = ap.parse_args()
     set_style()
+    EMPH["other_alpha"] = min(1.0, max(0.05, args.other_alpha))
 
     pattern = os.path.join(args.folder, "**", "*.csv") if args.recursive else os.path.join(args.folder, "*.csv")
     files = sorted(glob.glob(pattern, recursive=args.recursive))
