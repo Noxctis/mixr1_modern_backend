@@ -1,4 +1,4 @@
-# name kp ki alpha   (confirm with:  CONFIGS_FILE=open_air/confirm_list.txt sudo ./run_matrix.sh 460 20 5)
+# name kp ki alpha   (confirm with:  CONFIGS_FILE=open_air/confirm_list.txt sudo ./run_matrix.sh 360 20 5)
 A_baseline 1.5641 41.2249 1.0
 G30_kp1.0_a0.7 1.0 41.2249 0.7
 G47_kp0.8_a0.8 0.8 41.2249 0.8
