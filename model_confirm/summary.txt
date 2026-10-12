@@ -1,0 +1,34 @@
+5 settings finished.  Ki varies between settings (22 to 41.23; see the ki column).  Acceptable = overshoot <= 5 % and settling <= 0.3 s.
+Typical repeat-to-repeat spread of PWM jitter: 0.002 % duty -> differences smaller than this are NOT real.
+
+=== BEST ACCEPTABLE SETTINGS (lowest PWM jitter), top 8 ===
+setting                  n     kp     ki  alpha  pwmJit%   vs A  rpmStd   ovr% settle_s
+---------------------------------------------------------------------------------------
+  (none meet the limits - relax MAX_OVERSHOOT / MAX_SETTLE)
+
+baseline for reference:
+A_baseline               3   1.56   41.2   1.00    0.117           2.31   4.96     2.11
+
+=== ALL SETTINGS ranked by PWM jitter (top 20; check overshoot!) ===
+setting                  n     kp     ki  alpha  pwmJit%   vs A  rpmStd   ovr% settle_s
+---------------------------------------------------------------------------------------
+MODEL_kp0.5_ki22_a0.8    3   0.50   22.0   0.80    0.032   -72%    2.44   6.00     3.57
+MODEL_kp0.5_ki26_a0.8    3   0.50   26.0   0.80    0.034   -71%    2.46   7.30     4.83
+MODEL_kp0.5_ki31_a0.8    3   0.50   31.0   0.80    0.036   -69%    2.51   4.69     1.90
+MODEL_kp0.6_ki31_a0.8    3   0.60   31.0   0.80    0.040   -66%    2.41   5.38     2.29
+A_baseline               3   1.56   41.2   1.00    0.117           2.31   4.96     2.11
+
+=== PWM jitter, % duty, alpha = 0.8 (rows: Kp, columns: Ki; * = acceptable) ===
+   Kp \ Ki      31      26      22
+    0.600  0.040        .       .
+    0.500  0.036   0.034   0.032 
+
+=== Startup overshoot, %, alpha = 0.8 (rows: Kp, columns: Ki; * = acceptable) ===
+   Kp \ Ki      31      26      22
+    0.600    5.4        .       .
+    0.500    4.7     7.3     6.0 
+
+=== Settling time to +-5 %, s, alpha = 0.8 (rows: Kp, columns: Ki; * = acceptable) ===
+   Kp \ Ki      31      26      22
+    0.600   2.29        .       .
+    0.500   1.90    4.83    3.57 

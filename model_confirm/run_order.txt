@@ -1,0 +1,15 @@
+MODEL_kp0.6_ki31_a0.8 r1
+MODEL_kp0.5_ki31_a0.8 r1
+MODEL_kp0.5_ki26_a0.8 r1
+A_baseline r1
+MODEL_kp0.5_ki22_a0.8 r1
+MODEL_kp0.5_ki31_a0.8 r2
+MODEL_kp0.5_ki22_a0.8 r2
+A_baseline r2
+MODEL_kp0.5_ki26_a0.8 r2
+MODEL_kp0.6_ki31_a0.8 r2
+MODEL_kp0.5_ki31_a0.8 r3
+A_baseline r3
+MODEL_kp0.5_ki26_a0.8 r3
+MODEL_kp0.6_ki31_a0.8 r3
+MODEL_kp0.5_ki22_a0.8 r3
