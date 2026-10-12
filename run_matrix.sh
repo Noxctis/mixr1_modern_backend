@@ -13,6 +13,10 @@
 #   or your own:  KPS="1.5641 1.2 0.8" ALPHAS="1.0 0.5 0.3"
 #   or an explicit list:  CONFIGS_FILE=path   (one setting per line:  name kp ki alpha)
 #
+# Every option can ALSO be a flag after the numbers (flags survive sudo, environment variables may not):
+#   sudo ./run_matrix.sh 360 20 1 --out water_baffled --pause 15
+#   sudo ./run_matrix.sh 360 20 5 --configs water_baffled/confirm_list.txt --out confirm
+#   flags: --out --pause --grid --configs --kps --alphas --wait-rest --abort-rpm --foreground
 # Other env overrides:
 #   BIN=./mixr1_daemon  FLAGS="--fifo"  PAUSE=4  STREAM=0|1  KI=41.2249
 #   ABORT_RPM=<rpm>   safety: stop the motor and flag the run if speed exceeds this (default 2 x target; 0 = off)
@@ -63,6 +67,26 @@ case "${1:-}" in
     echo "Resume later with:  sudo env OUT=$d ./run_matrix.sh <same target> <same duration> <same repeats>"
     exit 0 ;;
 esac
+
+# ---------------------------------------------------------------- options as command-line flags (they survive sudo; environment variables often do not)
+ORIG_ARGS=("$@")
+POS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out)        OUT="${2:?--out needs a folder name}"; shift 2 ;;
+    --pause)      PAUSE="${2:?--pause needs seconds}"; shift 2 ;;
+    --grid)       GRID="${2:?--grid needs fast|full|wide|max}"; shift 2 ;;
+    --configs)    CONFIGS_FILE="${2:?--configs needs a settings file}"; shift 2 ;;
+    --kps)        KPS="${2:?--kps needs a quoted list}"; shift 2 ;;
+    --alphas)     ALPHAS="${2:?--alphas needs a quoted list}"; shift 2 ;;
+    --wait-rest)  WAIT_REST="${2:?--wait-rest needs seconds}"; shift 2 ;;
+    --abort-rpm)  ABORT_RPM="${2:?--abort-rpm needs an RPM}"; shift 2 ;;
+    --foreground) DETACH=0; shift ;;
+    -*)           echo "Unknown option '$1'. Options: --out --pause --grid --configs --kps --alphas --wait-rest --abort-rpm --foreground"; exit 1 ;;
+    *)            POS+=("$1"); shift ;;
+  esac
+done
+set -- ${POS[@]+"${POS[@]}"}
 TARGET="${1:-460}"
 DUR="${2:-20}"
 REPEATS="${3:-2}"
@@ -91,9 +115,15 @@ BASE_KP=1.5641
 
 # ---------------------------------------------------------------- the settings to test
 CONFIGS=()      # each entry:  "name kp ki alpha"
+if [ -n "${CONFIGS_FILE:-}" ] && [ ! -f "$CONFIGS_FILE" ]; then
+  echo "Settings file not found: $CONFIGS_FILE"; exit 1
+fi
 if [ -n "${CONFIGS_FILE:-}" ]; then
   while read -r name kp ki alpha rest; do
     [[ -z "${name:-}" || "$name" == \#* ]] && continue
+    if ! [[ "${kp:-}" =~ ^[0-9]+([.][0-9]+)?$ && "${ki:-}" =~ ^[0-9]+([.][0-9]+)?$ && "${alpha:-}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      echo "Skipping unreadable line in $CONFIGS_FILE: '$name ${kp:-} ${ki:-} ${alpha:-}'"; continue
+    fi
     CONFIGS+=("$name $kp $ki $alpha")
   done < "$CONFIGS_FILE"
 else
@@ -147,7 +177,8 @@ printf 'max_overshoot=%s\nmax_settle=%s\ntop=%s\n' "$MAX_OVERSHOOT" "$MAX_SETTLE
 anchors=0; [ "$ANCHOR_EVERY" -gt 0 ] && anchors=$(( (N * REPEATS) / ANCHOR_EVERY ))
 total=$(( N * REPEATS + anchors ))
 mins=$(awk -v t="$total" -v d="$DUR" -v p="$PAUSE" 'BEGIN{printf "%d", t*(d+p+2)/60}')
-echo "Grid=$GRID  settings=$N  repeats=$REPEATS  anchors=$anchors  total runs=$total"
+if [ -n "${CONFIGS_FILE:-}" ]; then echo "Settings: $N taken from $CONFIGS_FILE   repeats=$REPEATS  anchors=$anchors  total runs=$total"
+else echo "Grid=$GRID  settings=$N  repeats=$REPEATS  anchors=$anchors  total runs=$total"; fi
 echo "Target=$TARGET RPM  duration=${DUR}s  pause=${PAUSE}s  Ki fixed at $KI  abort limit=${ABORT_RPM} RPM"
 echo "Estimated time: ${mins} min   (Ctrl+C any time; re-run with OUT=$OUT to continue)"
 echo "Output folder: $OUT"
@@ -157,7 +188,7 @@ fi
 
 # ---------------------------------------------------------------- detach: from here on a lost SSH connection cannot touch the run
 if [ "${MIXR_DETACHED:-0}" != "1" ] && [ "${DETACH:-1}" = "1" ] && command -v setsid >/dev/null 2>&1; then
-  MIXR_DETACHED=1 NOWAIT=1 OUT="$OUT" setsid nohup "$0" "$@" >> "$OUT/run.log" 2>&1 < /dev/null &
+  MIXR_DETACHED=1 NOWAIT=1 OUT="$OUT" setsid nohup "$0" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"} >> "$OUT/run.log" 2>&1 < /dev/null &
   sleep 1
   echo
   echo "Started in the background - it keeps running if you close this terminal or lose SSH."
@@ -173,9 +204,10 @@ summarize() {
   # the daemon ran under sudo: give the folder back to the normal user so mixr_figures.py can write into it
   [ -n "${SUDO_USER:-}" ] && chown -R "$SUDO_USER" "$OUT" 2>/dev/null
   [ -s "$RAW" ] || { echo "No finished runs to summarise."; return; }
-  python3 - "$RAW" "$OUT" "$MAX_OVERSHOOT" "$MAX_SETTLE" "$TOP" "$KI" << 'PY'
+  python3 - "$RAW" "$OUT" "$MAX_OVERSHOOT" "$MAX_SETTLE" "$TOP" "$KI" "$TARGET" "$DUR" << 'PY'
 import sys, os, collections
 raw, out, max_ovr, max_settle, top, ki0 = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), int(sys.argv[5]), float(sys.argv[6])
+tgt_arg, dur_arg = sys.argv[7], sys.argv[8]
 groups = collections.OrderedDict()
 for ln in open(raw):
     p = ln.split()
@@ -197,7 +229,7 @@ spreads = [r['spread'] for r in rows if r['n'] > 1 and r['spread'] == r['spread'
 noise = sum(spreads) / len(spreads) if spreads else float('nan')
 
 def line(r):
-    d = '' if base is None or r is base else f"{(r['pwm_jitter_pct'] / base['pwm_jitter_pct'] - 1) * 100:+5.0f}%"
+    d = '' if (base is None or r is base or not base['pwm_jitter_pct']) else f"{(r['pwm_jitter_pct'] / base['pwm_jitter_pct'] - 1) * 100:+5.0f}%"
     return (f"{r['name']:<24}{r['n']:>2} {r['kp']:>6.2f} {r['alpha']:>6.2f} {r['pwm_jitter_pct']:>8.3f} {d:>6} {r['rpm_std']:>7.2f} "
             f"{r['overshoot_pct']:>6.2f} {r['settle5_s']:>8.2f}")
 hdr = f"{'setting':<24}{'n':>2} {'kp':>6} {'alpha':>6} {'pwmJit%':>8} {'vs A':>6} {'rpmStd':>7} {'ovr%':>6} {'settle_s':>8}"
@@ -236,7 +268,7 @@ try:
 except OSError:
     pass
 with open(os.path.join(out, 'confirm_list.txt'), 'w') as f:
-    f.write("# name kp ki alpha   (confirm with:  sudo env CONFIGS_FILE=%s/confirm_list.txt ./run_matrix.sh 460 20 5)\n" % out)
+    f.write("# name kp ki alpha   (confirm with:  sudo ./run_matrix.sh %s %s 5 --configs %s/confirm_list.txt --out %s_confirm)\n" % (tgt_arg, dur_arg, out, out))
     for r in conf:
         kp, ki, al = exact.get(r['name'], [f"{r['kp']:g}", f"{r['ki']:g}", f"{r['alpha']:g}"])
         f.write(f"{r['name']} {kp} {ki} {al}\n")

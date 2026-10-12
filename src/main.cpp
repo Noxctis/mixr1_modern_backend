@@ -50,6 +50,12 @@ struct TestOptions {
     bool ext_telemetry = false;  // 6-field packet (adds pwm/target/elapsed) for tools/live_plot.py
     double abort_rpm = 0.0;      // safety: stop the motor and end the run if the speed ever exceeds this (0 = off)
     double wait_rest_s = 0.0;    // before starting, wait (up to this many seconds) until the shaft has stopped turning (0 = don't wait)
+    // open-loop two-level PWM step (system identification): hold step_from_pct until step_at_s, then step_to_pct
+    bool step_mode = false;
+    double step_from_pct = 0.0;
+    double step_to_pct = 0.0;
+    double step_at_s = 3.0;
+    bool start_at_zero = false;  // keep the motor off during the 250 ms preparation and switch it on exactly when the log starts (records the ramp from rest)
 };
 
 bool set_fifo_priority() {
@@ -111,6 +117,16 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.stream = false;
         } else if (argument == "--wait-client") {
             options.wait_client = true;
+        } else if (argument.rfind("--step-from=", 0) == 0) {
+            options.step_from_pct = std::stod(argument.substr(12));
+            options.step_mode = true;
+        } else if (argument.rfind("--step-to=", 0) == 0) {
+            options.step_to_pct = std::stod(argument.substr(10));
+            options.step_mode = true;
+        } else if (argument.rfind("--step-at=", 0) == 0) {
+            options.step_at_s = std::stod(argument.substr(10));
+        } else if (argument == "--start-at-zero") {
+            options.start_at_zero = true;
         } else if (argument.rfind("--wait-rest=", 0) == 0) {
             options.wait_rest_s = std::stod(argument.substr(12));
         } else if (argument.rfind("--abort-rpm=", 0) == 0) {
@@ -120,6 +136,13 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
         } else {
             return false;
         }
+    }
+    if (options.step_mode) {                    // an open-loop step is neither PI, sweep nor sine
+        options.use_pi = false;
+        options.sweep = false;
+        options.sine_mode = false;
+        if (options.step_from_pct < 0.0 || options.step_from_pct > 100.0 || options.step_to_pct < 0.0 || options.step_to_pct > 100.0 ||
+            options.step_at_s <= 0.0 || options.step_at_s >= options.duration_sec) return false;
     }
     return options.duration_sec > 0.0 && options.target_rpm >= 0.0 &&
            options.fixed_pwm >= 0 && options.fixed_pwm <= 4095;
@@ -195,15 +218,18 @@ int run_test(const TestOptions& options) {
         std::cout << "[TEST] " << (at_rest ? "shaft at rest" : "WARNING: shaft still turning after waiting") << " (waited " << waited << " s)\n";
     }
 
-    int current_pwm = options.use_pi ? 0 : (options.sweep ? 0 : options.fixed_pwm);
+    const int step_from_counts = static_cast<int>(std::lround(options.step_from_pct / 100.0 * 4095.0));
+    const int step_to_counts = static_cast<int>(std::lround(options.step_to_pct / 100.0 * 4095.0));
+    int current_pwm = options.step_mode ? step_from_counts : (options.use_pi ? 0 : (options.sweep ? 0 : options.fixed_pwm));
     // PI fixed mode = step response from rest to target_rpm (sweep/sine override this per-iteration).
     double current_target = options.target_rpm;
-    motor.set_pwm(current_pwm);
+    motor.set_pwm(options.start_at_zero ? 0 : current_pwm);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
     kinematics.reset(encoder.get_sync_snapshot());
     controller.reset();
+    if (options.start_at_zero) motor.set_pwm(current_pwm);          // the motor starts exactly at t = 0 of the log
 
     const auto start = std::chrono::steady_clock::now();
     auto next_wake = start;
@@ -239,6 +265,13 @@ int run_test(const TestOptions& options) {
             current_pwm = options.fixed_pwm + static_cast<int>(options.sine_amplitude * std::sin(2.0 * M_PI * options.sine_freq_hz * elapsed));
             current_pwm = std::clamp(current_pwm, 0, 4095);
             motor.set_pwm(current_pwm);
+        } else if (options.step_mode) {
+            const int want = (elapsed < options.step_at_s) ? step_from_counts : step_to_counts;
+            if (want != current_pwm) {
+                current_pwm = want;
+                motor.set_pwm(current_pwm);
+                std::cout << "[TEST] PWM step " << options.step_from_pct << "% -> " << options.step_to_pct << "% at t=" << elapsed << " s\n";
+            }
         } else if (options.sweep) {
             const int new_step_index = std::min(10, static_cast<int>(elapsed / options.duration_sec));
             if (new_step_index != step_index) {

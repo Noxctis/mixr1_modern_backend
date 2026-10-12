@@ -1,0 +1,57 @@
+9 settings finished.  Ki fixed at 41.2249.  Acceptable = overshoot <= 5 % and settling <= 0.3 s.
+Typical repeat-to-repeat spread of PWM jitter: 0.003 % duty -> differences smaller than this are NOT real.
+
+=== BEST ACCEPTABLE SETTINGS (lowest PWM jitter), top 8 ===
+setting                  n     kp  alpha  pwmJit%   vs A  rpmStd   ovr% settle_s
+--------------------------------------------------------------------------------
+G38_kp0.9_a0.8           2   0.90   0.80    0.065   -50%    2.61   4.74     0.07
+G29_kp1.0_a0.8           2   1.00   0.80    0.072   -44%    2.74   3.46     0.06
+G21_kp1.2_a0.7           2   1.20   0.70    0.073   -44%    2.72   4.33     0.07
+G46_kp0.8_a1.0           2   0.80   1.00    0.075   -41%    2.56   3.64     0.07
+A_baseline               2   1.56   1.00    0.129           2.69   1.83     0.14
+
+baseline for reference:
+A_baseline               2   1.56   1.00    0.129           2.69   1.83     0.14
+
+=== ALL SETTINGS ranked by PWM jitter (top 20; check overshoot!) ===
+setting                  n     kp  alpha  pwmJit%   vs A  rpmStd   ovr% settle_s
+--------------------------------------------------------------------------------
+G30_kp1.0_a0.7           2   1.00   0.70    0.062   -51%    2.64   6.97     0.11
+G38_kp0.9_a0.8           2   0.90   0.80    0.065   -50%    2.61   4.74     0.07
+G47_kp0.8_a0.8           2   0.80   0.80    0.066   -49%    2.80   6.86     7.68
+G55_kp0.7_a1.0           2   0.70   1.00    0.068   -47%    2.55   5.29     0.14
+G29_kp1.0_a0.8           2   1.00   0.80    0.072   -44%    2.74   3.46     0.06
+G21_kp1.2_a0.7           2   1.20   0.70    0.073   -44%    2.72   4.33     0.07
+G13_kp1.4_a0.6           2   1.40   0.60    0.075   -42%    2.91   9.29     0.09
+G46_kp0.8_a1.0           2   0.80   1.00    0.075   -41%    2.56   3.64     0.07
+A_baseline               2   1.56   1.00    0.129           2.69   1.83     0.14
+
+=== PWM jitter, % duty (rows: Kp, columns: alpha; * = acceptable) ===
+   Kp/alpha       1     0.8     0.7     0.6
+    1.564  0.129*       .       .       .
+    1.400       .       .       .  0.075 
+    1.200       .       .  0.073*       .
+    1.000       .  0.072*  0.062        .
+    0.900       .  0.065*       .       .
+    0.800  0.075*  0.066        .       .
+    0.700  0.068        .       .       .
+
+=== Startup overshoot, % (rows: Kp, columns: alpha; * = acceptable) ===
+   Kp/alpha       1     0.8     0.7     0.6
+    1.564    1.8*       .       .       .
+    1.400       .       .       .    9.3 
+    1.200       .       .    4.3*       .
+    1.000       .    3.5*    7.0        .
+    0.900       .    4.7*       .       .
+    0.800    3.6*    6.9        .       .
+    0.700    5.3        .       .       .
+
+=== Settling time to +-5 %, s (rows: Kp, columns: alpha; * = acceptable) ===
+   Kp/alpha       1     0.8     0.7     0.6
+    1.564   0.14*       .       .       .
+    1.400       .       .       .   0.09 
+    1.200       .       .   0.07*       .
+    1.000       .   0.06*   0.11        .
+    0.900       .   0.07*       .       .
+    0.800   0.07*   7.68        .       .
+    0.700   0.14        .       .       .
