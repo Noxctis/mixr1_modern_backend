@@ -55,6 +55,7 @@ struct TestOptions {
     double step_from_pct = 0.0;
     double step_to_pct = 0.0;
     double step_at_s = 3.0;
+    double max_duty_pct = 100.0; // hard cap on the PI output in % duty (water safety: the speed cannot exceed what this duty gives)
     bool start_at_zero = false;  // keep the motor off during the 250 ms preparation and switch it on exactly when the log starts (records the ramp from rest)
 };
 
@@ -125,6 +126,8 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.step_mode = true;
         } else if (argument.rfind("--step-at=", 0) == 0) {
             options.step_at_s = std::stod(argument.substr(10));
+        } else if (argument.rfind("--max-duty=", 0) == 0) {
+            options.max_duty_pct = std::stod(argument.substr(11));
         } else if (argument == "--start-at-zero") {
             options.start_at_zero = true;
         } else if (argument.rfind("--wait-rest=", 0) == 0) {
@@ -144,7 +147,7 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
         if (options.step_from_pct < 0.0 || options.step_from_pct > 100.0 || options.step_to_pct < 0.0 || options.step_to_pct > 100.0 ||
             options.step_at_s <= 0.0 || options.step_at_s >= options.duration_sec) return false;
     }
-    return options.duration_sec > 0.0 && options.target_rpm >= 0.0 &&
+    return options.duration_sec > 0.0 && options.target_rpm >= 0.0 && options.max_duty_pct > 0.0 && options.max_duty_pct <= 100.0 &&
            options.fixed_pwm >= 0 && options.fixed_pwm <= 4095;
 }
 
@@ -229,6 +232,7 @@ int run_test(const TestOptions& options) {
 
     kinematics.reset(encoder.get_sync_snapshot());
     controller.reset();
+    controller.set_max_pwm(options.max_duty_pct / 100.0 * 4095.0);
     if (options.start_at_zero) motor.set_pwm(current_pwm);          // the motor starts exactly at t = 0 of the log
 
     const auto start = std::chrono::steady_clock::now();

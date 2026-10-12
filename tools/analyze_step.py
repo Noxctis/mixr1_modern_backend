@@ -62,7 +62,12 @@ def load_step_csv(path):
     t = df[tcol].to_numpy(float)
     rpm = df[rcol].to_numpy(float)
     pwm = df[pcol].to_numpy(float) if pcol else None
-    return t, rpm, pwm
+    meta = {"fifo_active": None, "late_p99_us": float("nan")}                 # what the daemon itself recorded (None = the file does not say)
+    if "fifoactive" in cols:
+        meta["fifo_active"] = str(df[cols["fifoactive"]].iloc[0]).strip().lower() == "true"
+    if "lateus" in cols:
+        meta["late_p99_us"] = float(np.nanpercentile(df[cols["lateus"]].to_numpy(float), 99))
+    return t, rpm, pwm, meta
 
 
 def parse_levels(path, pwm):
@@ -77,7 +82,7 @@ def parse_levels(path, pwm):
 
 
 # ============================================================================================ the fit
-def fit_fopdt(t, rpm, t_step, two_mode=False):
+def fit_fopdt(t, rpm, t_step, two_mode=False, fast_tau=None):
     """Fit y0 + K(1-exp(-A(t-theta))) to one step. Returns a dict (or raises ValueError)."""
     tr = t - t_step
     pre = (tr >= -0.8) & (tr < -0.05)
@@ -85,7 +90,11 @@ def fit_fopdt(t, rpm, t_step, two_mode=False):
         raise ValueError("need at least ~0.2 s of baseline before the step")
     y0 = float(np.median(rpm[pre]))
     noise = max(float(np.std(rpm[pre])), 0.3)
-    base_slope = float(np.polyfit(tr[pre], rpm[pre], 1)[0])                    # RPM per second before the step: should be ~0
+    pre_long = (tr >= -3.0) & (tr < -0.05)                                     # a longer window makes the slope estimate ~8x less noisy
+    pw = pre_long if pre_long.sum() >= 150 else pre
+    base_slope = float(np.polyfit(tr[pw], rpm[pw], 1)[0])                      # RPM per second before the step: should be ~0
+    sxx = float(np.sum((tr[pw] - tr[pw].mean()) ** 2))
+    base_slope_se = float(np.std(rpm[pw] - np.polyval(np.polyfit(tr[pw], rpm[pw], 1), tr[pw])) / np.sqrt(max(sxx, 1e-9)))
     post = tr >= 0
     if post.sum() < 30:
         raise ValueError("record too short after the step")
@@ -107,10 +116,10 @@ def fit_fopdt(t, rpm, t_step, two_mode=False):
         return model(p, ts) - ys
 
     if two_mode:
-        kf, af, ks, as_, th, fitc = two_mode_core(ts, ys, y0, noise, dss)
+        kf, af, ks, as_, th, fitc = two_mode_core(ts, ys, y0, noise, dss, fast_tau)
         res = fitc - ys
         sst = float(np.sum((ys[ts > 0] - np.mean(ys[ts > 0])) ** 2))
-        return dict(base_slope=base_slope, y0=y0, y_final=y_final, K=kf, A=af, theta=th, K_se=float("nan"), A_se=float("nan"), theta_se=float("nan"),
+        return dict(base_slope=base_slope, base_slope_se=base_slope_se, y0=y0, y_final=y_final, K=kf, A=af, theta=th, K_se=float("nan"), A_se=float("nan"), theta_se=float("nan"),
                     R2=1 - float(res[ts > 0] @ res[ts > 0]) / sst if sst > 0 else float("nan"), rmse=float(np.sqrt(np.mean(res[ts > 0] ** 2))), noise=noise,
                     ts=ts, ys=ys, fit=fitc, t_step=t_step, Ks=ks, As=as_)
     lo_k, hi_k = sorted((0.2 * dss, 3.0 * dss))
@@ -137,11 +146,11 @@ def fit_fopdt(t, rpm, t_step, two_mode=False):
         se = np.full(3, np.nan)
     sst = float(np.sum((ys[ts > 0] - np.mean(ys[ts > 0])) ** 2))
     r2 = 1 - float(res[ts > 0] @ res[ts > 0]) / sst if sst > 0 else np.nan
-    return dict(base_slope=base_slope, y0=y0, y_final=y_final, K=float(p[0]), A=float(p[1]), theta=float(p[2]), K_se=float(se[0]), A_se=float(se[1]), theta_se=float(se[2]),
+    return dict(base_slope=base_slope, base_slope_se=base_slope_se, y0=y0, y_final=y_final, K=float(p[0]), A=float(p[1]), theta=float(p[2]), K_se=float(se[0]), A_se=float(se[1]), theta_se=float(se[2]),
                 R2=float(r2), rmse=float(np.sqrt(np.mean(res[ts > 0] ** 2))), noise=noise, ts=ts, ys=ys, fit=model(p, ts), t_step=t_step)
 
 
-def two_mode_core(ts, ys, y0, noise, dss):
+def two_mode_core(ts, ys, y0, noise, dss, fast_tau=None):
     """Fit y0 + Kf(1-exp(-Af(t-theta))) + Ks(1-exp(-As(t-theta))): a FAST mode (motor + impeller) and a SLOW mode (the water spinning up).
     Works on the sign-normalised signal so down steps are handled. Returns (Kf, Af, Ks, As, theta) in the original sign and the fitted curve."""
     sgn = 1.0 if dss >= 0 else -1.0
@@ -156,9 +165,11 @@ def two_mode_core(ts, ys, y0, noise, dss):
     for th0 in (0.0, 0.03, 0.06):
         for ks in (0.25, 0.5, 0.75):
             for as0 in (0.25, 1.0):
-                x0 = [adss * (1 - ks), 20.0, adss * ks, as0, th0]
+                af0 = 1.0 / fast_tau if fast_tau else 20.0
+                lo_af, hi_af = (af0 * 0.999, af0 * 1.001) if fast_tau else (3.0, 400.0)         # --fast-tau: the fast lag cannot be resolved at 100 Hz, so fix it
+                x0 = [adss * (1 - ks), af0, adss * ks, as0, th0]
                 try:
-                    r = least_squares(lambda p: model(p, ts) - z, x0, bounds=([0.0, 3.0, 0.0, 0.02, 0.0], [1.5 * adss, 400.0, 1.5 * adss, 3.0, 0.3]),
+                    r = least_squares(lambda p: model(p, ts) - z, x0, bounds=([0.0, lo_af, 0.0, 0.02, 0.0], [1.5 * adss, hi_af, 1.5 * adss, 3.0, 0.3]),
                                       loss="soft_l1", f_scale=1.5 * noise)
                 except Exception:                                      # noqa: BLE001
                     continue
@@ -181,7 +192,7 @@ def startup_duty(path):
     return float(m.group(1))
 
 
-def fit_startup(t, rpm, until, two_mode=False):
+def fit_startup(t, rpm, until, two_mode=False, fast_tau=None):
     """Fit K(1-exp(-A(t-theta))) to the ramp from rest (speed 0 at t = 0)."""
     sel = (t >= 0) & ((t <= until) if until else (t >= 0))
     ts, ys = t[sel], rpm[sel]
@@ -193,7 +204,7 @@ def fit_startup(t, rpm, until, two_mode=False):
     if y_final < 5 * noise:
         raise ValueError(f"the speed stayed near zero ({y_final:.1f} RPM): duty below the friction dead zone?")
     if two_mode:
-        kf, af, ks, as_, th, fitc = two_mode_core(ts, ys, 0.0, noise, y_final)
+        kf, af, ks, as_, th, fitc = two_mode_core(ts, ys, 0.0, noise, y_final, fast_tau)
         res = fitc - ys
         sst = float(np.sum((ys - ys.mean()) ** 2))
         return dict(base_slope=0.0, y0=0.0, y_final=y_final, K=kf, A=af, theta=th, K_se=float("nan"), A_se=float("nan"), theta_se=float("nan"),
@@ -260,6 +271,74 @@ def margins(kp, ki, alpha, K, tau, theta):
     return float(pm), float(gm), float(OMEGA[i])
 
 
+def margins2(kp, ki, alpha, Kf, tauf, theta, Ks, taus):
+    """Margins of the PI loop on the two-mode plant  G = (Kf/(tauf s+1) + Ks/(taus s+1)) * exp(-s theta)  with the feedback filter alpha."""
+    s = 1j * OMEGA
+    L = (kp + ki / s) * (Kf / (tauf * s + 1) + Ks / (taus * s + 1)) * np.exp(-s * theta) * (alpha / (1 - (1 - alpha) * np.exp(-s * LOOP_T)))
+    mag, ph = np.abs(L), np.unwrap(np.angle(L))
+    cross = np.where((mag[:-1] >= 1) & (mag[1:] < 1))[0]
+    if len(cross) == 0:
+        return float("nan"), float("nan"), float("nan")
+    i = cross[-1]
+    j = np.where((ph[:-1] > -np.pi) & (ph[1:] <= -np.pi))[0]
+    return (-20 * np.log10(mag[j[0]]) if len(j) else float("inf")), 180.0 + np.degrees(ph[i]), float(OMEGA[i])
+
+
+def imc_design(df, args):
+    """IMC-PI (Rivera) for the FAST part of the water plant, checked against the scatter of the measured plants.
+       Fast part: K_f e^(-theta s)/(tau_f s + 1); IMC filter time constant lambda -> Kp = (tau_f + theta/2)/(K_f (lambda + theta/2)), Ki = 1/(K_f (lambda + theta/2)).
+       The fast lag tau_f cannot be resolved at 100 Hz, so it is FIXED (--fast-tau, default 20 ms); the slow part (water spin-up) is kept in the margin check.
+       RECOMMENDED = the fastest lambda whose WORST-CASE gain margin >= --min-gm and phase margin >= --min-pm over the envelope of the measured plants."""
+    lines = []
+    tauf = args.fast_tau if args.fast_tau else 0.02
+    bad = df["R2"].lt(0.4)
+    if "warning" in df.columns:
+        bad = bad | df["warning"].fillna("").astype(str).str.contains("drifting")
+    use = df[~bad]
+    lines.append("\nIMC DESIGN FOR THE WATER PLANT (fast part, with the slow water spin-up kept in the stability check)")
+    excl = df[bad]
+    if len(use) < 2:
+        use, excl = df, df.iloc[0:0]
+        lines.append("  (fewer than 2 good fits: using all of them, treat the result as a rough guide)")
+    for r in excl.itertuples():
+        lines.append(f"  excluded: {r.file}  (R2 {r.R2:.2f}{', base level still drifting' if 'drifting' in str(getattr(r, 'warning', '')) else ''})")
+    kf, th = use["K_plant"].to_numpy(float), use["delay_s"].to_numpy(float)
+    ks, ts = use["K_slow_plant"].to_numpy(float), use["tau_slow_s"].to_numpy(float)
+    Kn, thn, Ksn, tsn = float(np.median(kf)), float(np.median(th)), float(np.median(ks)), float(np.median(ts))
+    lines.append(f"  {len(use)} usable fits.  Nominal plant: K_fast {Kn:.3f} RPM/count (range {kf.min():.3f}-{kf.max():.3f}), dead time {thn * 1000:.0f} ms, fast lag fixed at {tauf * 1000:.0f} ms,")
+    lines.append(f"  slow part K {Ksn:.3f} with tau {tsn:.1f} s (range K {ks.min():.3f}-{ks.max():.3f}, tau {ts.min():.1f}-{ts.max():.1f} s).")
+    lines.append(f"  Worst case checked: fast gain {kf.max():.3f}, TOTAL effective delay up to {args.design_delay * 1000:.0f} ms treated as a PURE delay (dead time + fast lag + speed-estimate latency), slow part at both extremes.")
+    tau_wc = 0.005                                           # worst case: ALL of the effective delay is a pure delay (more severe than part lag, part delay)
+    env = [(Kf, tauf, float(th.min()), Ks_, ts_) for Kf in (kf.min(), kf.max()) for Ks_, ts_ in ((ks.min(), ts.max()), (ks.max(), ts.min()))]
+    env += [(Kf, tau_wc, max(args.design_delay - tau_wc, 0.0), Ks_, ts_) for Kf in (kf.min(), kf.max()) for Ks_, ts_ in ((ks.min(), ts.max()), (ks.max(), ts.min()))]
+    rows, rec = [], None
+    cur = [margins2(args.current_kp, args.current_ki, args.alpha, *c) for c in env]
+    rows.append(dict(design="YOUR CURRENT GAINS", lam=float("nan"), Kp=args.current_kp, Ki=args.current_ki, gm_nom=margins2(args.current_kp, args.current_ki, args.alpha, Kn, tauf, thn, Ksn, tsn)[0],
+                     pm_nom=margins2(args.current_kp, args.current_ki, args.alpha, Kn, tauf, thn, Ksn, tsn)[1], gm_worst=min(x[0] for x in cur), pm_worst=min(x[1] for x in cur),
+                     wc=margins2(args.current_kp, args.current_ki, args.alpha, Kn, tauf, thn, Ksn, tsn)[2]))
+    for lam in (0.04, 0.06, 0.07, 0.08, 0.09, 0.10, 0.12, 0.15, 0.20, 0.30, 0.50):
+        kp = (tauf + thn / 2) / (Kn * (lam + thn / 2))
+        ki = 1.0 / (Kn * (lam + thn / 2))
+        nom = margins2(kp, ki, args.alpha, Kn, tauf, thn, Ksn, tsn)
+        wc = [margins2(kp, ki, args.alpha, *c) for c in env]
+        row = dict(design=f"IMC lambda = {lam:.2f} s", lam=lam, Kp=kp, Ki=ki, gm_nom=nom[0], pm_nom=nom[1], gm_worst=min(x[0] for x in wc), pm_worst=min(x[1] for x in wc), wc=nom[2])
+        rows.append(row)
+        if rec is None and row["gm_worst"] >= args.min_gm and row["pm_worst"] >= args.min_pm:
+            rec = row
+    lines.append("")
+    lines.append(fmt_tab([[r["design"], f"{r['Kp']:.3f}", f"{r['Ki']:.2f}", f"{r['gm_nom']:.1f}", f"{r['pm_nom']:.0f}", f"{r['gm_worst']:.1f}", f"{r['pm_worst']:.0f}", f"{r['wc']:.1f}"] for r in rows],
+                         ["design", "Kp", "Ki", "GM dB (nominal)", "PM deg (nominal)", "GM dB (WORST case)", "PM deg (WORST)", "crossover rad/s"]))
+    lines.append("")
+    if rec is not None:
+        lines.append(f">>> RECOMMENDED (fastest IMC design with worst-case gain margin >= {args.min_gm:g} dB and phase margin >= {args.min_pm:g} deg):  "
+                     f"Kp = {rec['Kp']:.3f}   Ki = {rec['Ki']:.2f}   (lambda = {rec['lam']:.2f} s, filter alpha = {args.alpha:g})")
+    else:
+        best = max(rows[1:], key=lambda r: r["gm_worst"])
+        lines.append(f">>> No IMC design met the margin targets (worst-case GM >= {args.min_gm:g} dB, PM >= {args.min_pm:g} deg). Most robust tried: Kp = {best['Kp']:.3f}, Ki = {best['Ki']:.2f}.")
+    lines.append("    Treat this as a STARTING POINT: confirm it with the closed-loop test (run_matrix.sh) and the tank insert/remove test.")
+    return lines, rows
+
+
 def candidates(K, tau, theta, floor):
     th = max(theta, floor)
     out = [("Your formula  (Kp = 1/K, Ki = Kp*A)", 1.0 / K, 1.0 / K / tau)]
@@ -274,10 +353,10 @@ def candidates(K, tau, theta, floor):
 
 # ============================================================================================ one file
 def analyse_file(path, label, args):
-    t, rpm, pwm = load_step_csv(path)
+    t, rpm, pwm, meta = load_step_csv(path)
     if args.startup:                                                  # the ramp from rest to the base duty
         duty = startup_duty(path)
-        fit = fit_startup(t, rpm, args.t_step if args.t_step_given else None, args.two_mode)
+        fit = fit_startup(t, rpm, args.t_step if args.t_step_given else None, args.two_mode, args.fast_tau)
         counts = duty / 100.0 * ADC
         K_plant, tau = fit["K"] / counts, 1.0 / fit["A"]
         row = dict(label=label, file=os.path.basename(path), direction="start", base_pct=0.0, step_pct=duty, baseline_rpm=0.0, final_rpm=fit["y_final"], delta_rpm=fit["K"],
@@ -286,9 +365,10 @@ def analyse_file(path, label, args):
                    noise_rpm=fit["noise"], A_legacy_no_delay=float("nan"), warning="", Kp_legacy=1.0 / K_plant, Ki_legacy=fit["A"] / K_plant)
         if "Ks" in fit:
             row.update(K_slow_plant=fit["Ks"] / counts, A_slow=fit["As"], tau_slow_s=1.0 / fit["As"], K_dc_plant=(fit["K"] + fit["Ks"]) / counts)
+        row.update(fifo_active=meta["fifo_active"], late_p99_us=meta["late_p99_us"])
         return row, fit, (t, rpm)
     base_pct, step_pct = parse_levels(path, pwm)
-    fit = fit_fopdt(t, rpm, args.t_step, args.two_mode)
+    fit = fit_fopdt(t, rpm, args.t_step, args.two_mode, args.fast_tau)
     d_counts = (step_pct - base_pct) / 100.0 * ADC
     if abs(d_counts) < 1:
         raise ValueError("base and step levels are equal")
@@ -300,7 +380,7 @@ def analyse_file(path, label, args):
     warn = ""
     if early.sum() > 3 and abs(np.mean(rpm[early]) - fit["y0"]) > 6 * fit["noise"]:
         warn = "speed already changing before the step instant - check --t-step"
-    if abs(fit["base_slope"]) > max(0.005 * abs(fit["y0"]), 1.5):
+    if abs(fit["base_slope"]) > max(0.005 * abs(fit["y0"]), 1.5) and abs(fit["base_slope"]) > 3.0 * fit.get("base_slope_se", 0.0):
         warn = (warn + "; " if warn else "") + f"the base level was still drifting ({fit['base_slope']:+.1f} RPM/s) before the step: record with a longer hold (the fit will be biased)"
     row = dict(label=label, file=os.path.basename(path), direction="up" if step_pct > base_pct else "down", base_pct=base_pct, step_pct=step_pct,
                baseline_rpm=fit["y0"], final_rpm=fit["y_final"], delta_rpm=fit["K"], K_plant=K_plant, K_plant_se=abs(fit["K_se"] / d_counts),
@@ -311,6 +391,7 @@ def analyse_file(path, label, args):
     row.update(Kp_legacy=legacy_kp, Ki_legacy=legacy_kp * fit["A"])
     if "Ks" in fit:
         row.update(K_slow_plant=fit["Ks"] / d_counts, A_slow=fit["As"], tau_slow_s=1.0 / fit["As"], K_dc_plant=(fit["K"] + fit["Ks"]) / d_counts)
+    row.update(fifo_active=meta["fifo_active"], late_p99_us=meta["late_p99_us"])
     return row, fit, (t, rpm)
 
 
@@ -370,6 +451,16 @@ def report_label(label, rows, args, outdir, lines):
     K, A, th = float(med.K_plant), float(med.pole_A), float(med.delay_s)
     tau = 1.0 / A
     lines.append(f"\n=== {label}:  {len(df)} step file(s) ===")
+    if "fifo_active" in df.columns:
+        known = df.fifo_active.dropna()
+        if len(known):
+            n_on = int(known.astype(bool).sum())
+            late = df.late_p99_us.dropna()
+            lines.append(f"Real-time scheduling (from the daemon's own record): SCHED_FIFO active in {n_on} of {len(known)} file(s)"
+                         + (f"; 99th-percentile loop lateness {late.max():.0f} us (the loop period is 10000 us)" if len(late) else "")
+                         + ("" if n_on == len(known) else "   <- some runs had NO real-time priority: timing and speed estimates are noisier"))
+        else:
+            lines.append("Real-time scheduling: these files do not record it (the FIFO column in tuning_table.csv is then only a guess from the file name).")
     tab = [[r.file[:34], r.direction, f"{r.base_pct:g}->{r.step_pct:g}", f"{r.baseline_rpm:.0f}->{r.final_rpm:.0f}", f"{r.K_plant:.3f}", f"{r.pole_A:.1f}",
             f"{r.delay_s * 1000:.0f}", f"{r.R2:.3f}", f"{r.A_legacy_no_delay:.1f}"] for r in df.itertuples()]
     lines.append(fmt_tab(tab, ["file", "dir", "duty %", "RPM", "K_plant", "A (1/s)", "delay ms", "R2", "A if no delay"]))
@@ -399,6 +490,12 @@ def report_label(label, rows, args, outdir, lines):
     bias = float(np.nanmedian(df.A_legacy_no_delay)) / A if df.A_legacy_no_delay.notna().any() else float("nan")
     if np.isfinite(bias) and abs(bias - 1) > 0.08:
         lines.append(f"The old no-dead-time fit would have read A about {abs(1 - bias) * 100:.0f} % {'low' if bias < 1 else 'high'} on this data.")
+    if "K_slow_plant" in df.columns:
+        imc_lines, imc_rows = imc_design(df, args)
+        lines += imc_lines
+        pd.DataFrame(imc_rows).to_csv(os.path.join(outdir, f"imc_gains_{re.sub(r'[^A-Za-z0-9]+', '_', label)}.csv"), index=False)
+        lines.append("\n(The single-pole 'Your formula / IMC / SIMC' rows are not shown in two-mode: they depend on the fast pole, which 100 Hz data cannot resolve.)")
+        return dict(label=label, K=K, A=A, theta=th, tau=tau, df=df)
     th_eff = max(th, args.min_delay)
     cur = margins(args.current_kp, args.current_ki, args.alpha, K, tau, th_eff)
     lines.append(f"\nGAINS ON THIS PLANT   (feedback filter alpha = {args.alpha:g}; effective delay {th_eff * 1000:.0f} ms)")
@@ -491,6 +588,11 @@ def main():
     ap.add_argument("--out", default="step_analysis")
     ap.add_argument("--t-step", type=float, default=None, help="time of the PWM step inside the file (s), default 1.0; with --startup: end of the start-up window")
     ap.add_argument("--two-mode", action="store_true", help="fit a FAST and a SLOW exponential (use when the speed keeps creeping for seconds after the quick response, e.g. water spinning up)")
+    ap.add_argument("--fast-tau", type=float, default=None, help="with --two-mode: fix the FAST lag (s) instead of fitting it (the 100 Hz data cannot resolve it); e.g. 0.02. Makes the other numbers far more stable")
+    ap.add_argument("--design-delay", type=float, default=0.06, help="worst-case TOTAL effective delay (s) to keep stable at (dead time + fast lag + speed-estimate latency); default 0.06")
+    ap.add_argument("--min-gm", type=float, default=6.0, help="gain margin (dB) the recommended IMC design must keep in the worst case")
+    ap.add_argument("--min-pm", type=float, default=45.0, help="phase margin (deg) the recommended IMC design must keep in the worst case")
+    ap.add_argument("--from-table", default=None, metavar="tuning_table.csv", help="skip the fitting: run only the IMC design from an existing tuning_table.csv made with --two-mode")
     ap.add_argument("--startup", action="store_true", help="fit the RAMP FROM REST at the start of each file (map_*.csv or run_steps files) instead of the step")
     ap.add_argument("--alpha", type=float, default=1.0, help="feedback filter alpha assumed for the margin predictions")
     ap.add_argument("--current-kp", type=float, default=DEF_KP)
@@ -504,6 +606,20 @@ def main():
     if args.t_step is None:
         args.t_step = 1.0
 
+    if args.from_table:
+        tbl = pd.read_csv(args.from_table)
+        need = ["K_plant", "delay_s", "K_slow_plant", "tau_slow_s", "R2", "file"]
+        miss = [c for c in need if c not in tbl.columns]
+        if miss:
+            sys.exit(f"{args.from_table} needs a table made with --two-mode (missing columns {miss})")
+        os.makedirs(args.out, exist_ok=True)
+        lines, rows = imc_design(tbl, args)
+        text = "\n".join(lines)
+        print(text)
+        pd.DataFrame(rows).to_csv(os.path.join(args.out, "imc_gains.csv"), index=False)
+        open(os.path.join(args.out, "imc_design.txt"), "w").write(text + "\n")
+        print(f"\n[done] IMC design written to '{args.out}/'")
+        return
     groups = {}
     tokens = args.inputs or ["water_raw_fifo_*.csv"]
     for tok in tokens:
@@ -558,7 +674,7 @@ def main():
     cols_old = ["Test_Region", "Mode", "Controller", "FIFO_Enabled", "Baseline_PWM_pct", "Step_PWM_pct", "Baseline_RPM", "Pole_A", "Rise_Time_s", "Settling_Time_s", "Bandwidth_Hz", "Kp", "Ki"]
     df = pd.DataFrame(all_rows)
     out = pd.DataFrame({"Test_Region": df.base_pct.map(lambda x: f"{x:g}%") + " to " + df.step_pct.map(lambda x: f"{x:g}%"), "Mode": df.label, "Controller": "OpenLoop",
-                        "FIFO_Enabled": df.file.str.lower().str.contains("fifo").astype(int), "Baseline_PWM_pct": df.base_pct, "Step_PWM_pct": df.step_pct,
+                        "FIFO_Enabled": [(int(f) if f is not None and f == f else int("fifo" in n.lower())) for f, n in zip(df.fifo_active, df.file)], "Baseline_PWM_pct": df.base_pct, "Step_PWM_pct": df.step_pct,
                         "Baseline_RPM": df.baseline_rpm.round(2), "Pole_A": df.pole_A.round(4), "Rise_Time_s": df.rise_10_90_s.round(4), "Settling_Time_s": df.settle_2pct_s.round(4),
                         "Bandwidth_Hz": df.bandwidth_hz.round(4), "Kp": df.Kp_legacy.round(4), "Ki": df.Ki_legacy.round(4)})
     out = pd.concat([out, df.drop(columns=["label", "base_pct", "step_pct", "baseline_rpm", "pole_A", "rise_10_90_s", "settle_2pct_s", "bandwidth_hz", "Kp_legacy", "Ki_legacy"]).round(5)], axis=1)

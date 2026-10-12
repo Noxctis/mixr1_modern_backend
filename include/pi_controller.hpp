@@ -11,6 +11,7 @@ private:
 public:
     PIController() = default;
     void reset();
+    void set_max_pwm(double counts) { max_pwm = counts < 0.0 ? 0.0 : (counts > 4095.0 ? 4095.0 : counts); }   // hard output cap (e.g. a water-safe maximum duty)
     int compute(double setpoint_rpm, double current_rpm, double dt);
 
     // The RPM value the controller is actually acting on (after the feedback filter).

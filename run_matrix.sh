@@ -9,6 +9,8 @@
 #   fast  5 Kp x 5 alpha  =  25 settings
 #   full  9 Kp x 9 alpha  =  81 settings        (default)
 #   wide 10 Kp x  9 alpha =  90 settings        (same as full, plus Kp 1.8, 2.0, 2.5 ABOVE the baseline)
+#   imc   8 Kp x  7 Ki x 2 alpha = 112 settings (Kp AND Ki varied around the IMC design for the water plant; 56 settings with --alphas "1.0")
+#         Ki is only varied when you give --kis (or use GRID=imc); otherwise Ki stays at KI as before
 #   max  12 Kp x 12 alpha = 144 settings
 #   or your own:  KPS="1.5641 1.2 0.8" ALPHAS="1.0 0.5 0.3"
 #   or an explicit list:  CONFIGS_FILE=path   (one setting per line:  name kp ki alpha)
@@ -16,7 +18,8 @@
 # Every option can ALSO be a flag after the numbers (flags survive sudo, environment variables may not):
 #   sudo ./run_matrix.sh 360 20 1 --out water_baffled --pause 15
 #   sudo ./run_matrix.sh 360 20 5 --configs water_baffled/confirm_list.txt --out confirm
-#   flags: --out --pause --grid --configs --kps --alphas --wait-rest --abort-rpm --foreground
+#   flags: --out --pause --grid --configs --kps --kis --alphas --wait-rest --abort-rpm --max-duty --foreground
+#   --max-duty 30 = hard cap on the PI output (% duty): the speed can never exceed what that duty gives, whatever the gains (use it when a runaway would spill water)
 # Other env overrides:
 #   BIN=./mixr1_daemon  FLAGS="--fifo"  PAUSE=4  STREAM=0|1  KI=41.2249
 #   ABORT_RPM=<rpm>   safety: stop the motor and flag the run if speed exceeds this (default 2 x target; 0 = off)
@@ -78,11 +81,13 @@ while [ $# -gt 0 ]; do
     --grid)       GRID="${2:?--grid needs fast|full|wide|max}"; shift 2 ;;
     --configs)    CONFIGS_FILE="${2:?--configs needs a settings file}"; shift 2 ;;
     --kps)        KPS="${2:?--kps needs a quoted list}"; shift 2 ;;
+    --kis)        KIS="${2:?--kis needs a quoted list}"; shift 2 ;;
     --alphas)     ALPHAS="${2:?--alphas needs a quoted list}"; shift 2 ;;
     --wait-rest)  WAIT_REST="${2:?--wait-rest needs seconds}"; shift 2 ;;
     --abort-rpm)  ABORT_RPM="${2:?--abort-rpm needs an RPM}"; shift 2 ;;
+    --max-duty)   MAX_DUTY="${2:?--max-duty needs a percent}"; shift 2 ;;
     --foreground) DETACH=0; shift ;;
-    -*)           echo "Unknown option '$1'. Options: --out --pause --grid --configs --kps --alphas --wait-rest --abort-rpm --foreground"; exit 1 ;;
+    -*)           echo "Unknown option '$1'. Options: --out --pause --grid --configs --kps --kis --alphas --wait-rest --abort-rpm --max-duty --foreground"; exit 1 ;;
     *)            POS+=("$1"); shift ;;
   esac
 done
@@ -129,18 +134,23 @@ if [ -n "${CONFIGS_FILE:-}" ]; then
 else
   case "$GRID" in
     fast) D_KPS="$BASE_KP 1.2 1.0 0.8 0.6";                                   D_ALPHAS="1.0 0.7 0.5 0.3 0.2" ;;
+    imc)  D_KPS="$BASE_KP 1.25 1.0 0.9 0.8 0.7 0.6 0.5";  D_KIS="60 50 $KI 38.5 31 26 20";  D_ALPHAS="1.0 0.8" ;;
     wide) D_KPS="2.5 2.0 1.8 $BASE_KP 1.4 1.2 1.0 0.8 0.6 0.5";                D_ALPHAS="1.0 0.8 0.7 0.6 0.5 0.4 0.3 0.2 0.15" ;;
     max)  D_KPS="$BASE_KP 1.4 1.3 1.2 1.1 1.0 0.9 0.8 0.7 0.6 0.5 0.4";       D_ALPHAS="1.0 0.9 0.8 0.7 0.6 0.5 0.45 0.4 0.3 0.25 0.2 0.15" ;;
     *)    D_KPS="$BASE_KP 1.4 1.2 1.0 0.9 0.8 0.7 0.6 0.5";                   D_ALPHAS="1.0 0.8 0.7 0.6 0.5 0.4 0.3 0.2 0.15" ;;
   esac
-  KPS="${KPS:-$D_KPS}"; ALPHAS="${ALPHAS:-$D_ALPHAS}"
+  KPS="${KPS:-$D_KPS}"; ALPHAS="${ALPHAS:-$D_ALPHAS}"; KIS="${KIS:-${D_KIS:-$KI}}"
+  nki=$(echo $KIS | wc -w)
   i=0
   for kp in $KPS; do
-    for al in $ALPHAS; do
-      i=$((i + 1))
-      if [ "$kp" = "$BASE_KP" ] && [ "$al" = "1.0" ]; then name="A_baseline"
-      else name=$(printf "G%02d_kp%s_a%s" "$i" "$kp" "$al"); fi
-      CONFIGS+=("$name $kp $KI $al")
+    for ki in $KIS; do
+      for al in $ALPHAS; do
+        i=$((i + 1))
+        if [ "$kp" = "$BASE_KP" ] && [ "$ki" = "$KI" ] && [ "$al" = "1.0" ]; then name="A_baseline"
+        elif [ "$nki" -gt 1 ]; then name=$(printf "G%03d_kp%s_ki%s_a%s" "$i" "$kp" "$ki" "$al")
+        else name=$(printf "G%02d_kp%s_a%s" "$i" "$kp" "$al"); fi
+        CONFIGS+=("$name $kp $ki $al")
+      done
     done
   done
 fi
@@ -159,6 +169,11 @@ if [ "$ABORT_RPM" != "0" ]; then
        exit 1; fi
 fi
 STREAM_FLAG="--no-stream"; [ "$STREAM" = "1" ] && STREAM_FLAG="--stream"
+MAX_DUTY="${MAX_DUTY:-}"; DUTY_FLAG=""
+if [ -n "$MAX_DUTY" ]; then
+  if grep -qa -- "--max-duty" "$BIN"; then DUTY_FLAG="--max-duty=$MAX_DUTY"
+  else echo "This daemon build has no --max-duty. Copy the new src/main.cpp and include/pi_controller.hpp and run make."; exit 1; fi
+fi
 WAIT_REST="${WAIT_REST:-60}"; REST_FLAG=""
 if [ "$WAIT_REST" != "0" ]; then
   if grep -qa -- "--wait-rest" "$BIN"; then REST_FLAG="--wait-rest=$WAIT_REST"
@@ -179,7 +194,8 @@ total=$(( N * REPEATS + anchors ))
 mins=$(awk -v t="$total" -v d="$DUR" -v p="$PAUSE" 'BEGIN{printf "%d", t*(d+p+2)/60}')
 if [ -n "${CONFIGS_FILE:-}" ]; then echo "Settings: $N taken from $CONFIGS_FILE   repeats=$REPEATS  anchors=$anchors  total runs=$total"
 else echo "Grid=$GRID  settings=$N  repeats=$REPEATS  anchors=$anchors  total runs=$total"; fi
-echo "Target=$TARGET RPM  duration=${DUR}s  pause=${PAUSE}s  Ki fixed at $KI  abort limit=${ABORT_RPM} RPM"
+if [ -z "${CONFIGS_FILE:-}" ] && [ "$(echo ${KIS:-$KI} | wc -w)" -gt 1 ]; then KI_TXT="Ki varied: ${KIS}"; elif [ -n "${CONFIGS_FILE:-}" ]; then KI_TXT="Ki as listed in the settings file"; else KI_TXT="Ki fixed at $KI"; fi
+echo "Target=$TARGET RPM  duration=${DUR}s  pause=${PAUSE}s  ${KI_TXT}  abort limit=${ABORT_RPM} RPM"
 echo "Estimated time: ${mins} min   (Ctrl+C any time; re-run with OUT=$OUT to continue)"
 echo "Output folder: $OUT"
 if [ "${NOWAIT:-0}" != "1" ]; then
@@ -230,10 +246,12 @@ noise = sum(spreads) / len(spreads) if spreads else float('nan')
 
 def line(r):
     d = '' if (base is None or r is base or not base['pwm_jitter_pct']) else f"{(r['pwm_jitter_pct'] / base['pwm_jitter_pct'] - 1) * 100:+5.0f}%"
-    return (f"{r['name']:<24}{r['n']:>2} {r['kp']:>6.2f} {r['alpha']:>6.2f} {r['pwm_jitter_pct']:>8.3f} {d:>6} {r['rpm_std']:>7.2f} "
+    return (f"{r['name']:<24}{r['n']:>2} {r['kp']:>6.2f} {r['ki']:>6.1f} {r['alpha']:>6.2f} {r['pwm_jitter_pct']:>8.3f} {d:>6} {r['rpm_std']:>7.2f} "
             f"{r['overshoot_pct']:>6.2f} {r['settle5_s']:>8.2f}")
-hdr = f"{'setting':<24}{'n':>2} {'kp':>6} {'alpha':>6} {'pwmJit%':>8} {'vs A':>6} {'rpmStd':>7} {'ovr%':>6} {'settle_s':>8}"
-L = [f"{len(rows)} settings finished.  Ki fixed at {ki0:g}.  Acceptable = overshoot <= {max_ovr:g} % and settling <= {max_settle:g} s.",
+hdr = f"{'setting':<24}{'n':>2} {'kp':>6} {'ki':>6} {'alpha':>6} {'pwmJit%':>8} {'vs A':>6} {'rpmStd':>7} {'ovr%':>6} {'settle_s':>8}"
+kis = sorted({round(r['ki'], 2) for r in rows})
+ki_txt = f"Ki fixed at {kis[0]:g}" if len(kis) == 1 else f"Ki varies between settings ({kis[0]:g} to {kis[-1]:g}; see the ki column)"
+L = [f"{len(rows)} settings finished.  {ki_txt}.  Acceptable = overshoot <= {max_ovr:g} % and settling <= {max_settle:g} s.",
      f"Typical repeat-to-repeat spread of PWM jitter: {noise:.3f} % duty -> differences smaller than this are NOT real.", "",
      f"=== BEST ACCEPTABLE SETTINGS (lowest PWM jitter), top {top} ===", hdr, "-" * len(hdr)]
 L += [line(r) for r in feas[:top]] or ["  (none meet the limits - relax MAX_OVERSHOOT / MAX_SETTLE)"]
@@ -244,6 +262,7 @@ L += ["", "=== ALL SETTINGS ranked by PWM jitter (top 20; check overshoot!) ==="
 g = [r for r in rows if abs(r['ki'] - ki0) < 0.05]
 kps = sorted({round(r['kp'], 4) for r in g}, reverse=True); als = sorted({round(r['alpha'], 3) for r in g}, reverse=True)
 look = {(round(r['kp'], 4), round(r['alpha'], 3)): r for r in g}
+kis = sorted({round(r['ki'], 2) for r in rows})
 def grid(title, key, fmt):
     t = ["", f"=== {title} (rows: Kp, columns: alpha; * = acceptable) ===", "   Kp/alpha" + "".join(f"{a:>8g}" for a in als)]
     for k in kps:
@@ -255,6 +274,23 @@ def grid(title, key, fmt):
     return t
 if len(kps) > 1 and len(als) > 1:
     L += grid("PWM jitter, % duty", 'pwm_jitter_pct', "%.3f") + grid("Startup overshoot, %", 'overshoot_pct', "%.1f") + grid("Settling time to +-5 %, s", 'settle5_s', "%.2f")
+# Ki varies: one Kp x Ki matrix per alpha
+if len(kis) > 1:
+    def grid2(sub, a_, title, key, fmt):
+        kps2 = sorted({round(r['kp'], 4) for r in sub}, reverse=True); kis2 = sorted({round(r['ki'], 2) for r in sub}, reverse=True)
+        lk = {(round(r['kp'], 4), round(r['ki'], 2)): r for r in sub}
+        t = ["", f"=== {title}, alpha = {a_:g} (rows: Kp, columns: Ki; * = acceptable) ===", "   Kp \\ Ki" + "".join(f"{x:>8g}" for x in kis2)]
+        for k in kps2:
+            cells = []
+            for x in kis2:
+                r = lk.get((k, x))
+                cells.append(f"{((fmt % r[key]) + ('*' if ok(r) else ' ')) if r else '.':>8}")
+            t.append(f"{k:>9.3f}" + "".join(cells))
+        return t
+    for a_ in sorted({round(r['alpha'], 3) for r in rows}, reverse=True):
+        sub = [r for r in rows if round(r['alpha'], 3) == a_]
+        if len({round(r['kp'], 4) for r in sub}) > 1 and len({round(r['ki'], 2) for r in sub}) > 1:
+            L += grid2(sub, a_, "PWM jitter, % duty", 'pwm_jitter_pct', "%.3f") + grid2(sub, a_, "Startup overshoot, %", 'overshoot_pct', "%.1f") + grid2(sub, a_, "Settling time to +-5 %, s", 'settle5_s', "%.2f")
 open(os.path.join(out, 'summary.txt'), 'w').write("\n".join(L) + "\n")
 print("\n" + "\n".join(L))
 
@@ -296,7 +332,7 @@ run_one() {  # name kp ki alpha r
   if grep -qx "$name $r" "$DONE"; then echo "   (already done, skipping)"; return 0; fi
   local output res ab
   output=$("$BIN" --test --pi --fixed $FLAGS $STREAM_FLAG --target="$TARGET" --duration="$DUR" \
-             --kp="$kp" --ki="$ki" --alpha="$alpha" $ABORT_FLAG $REST_FLAG --csv="$csv" 2>&1)
+             --kp="$kp" --ki="$ki" --alpha="$alpha" $ABORT_FLAG $REST_FLAG $DUTY_FLAG --csv="$csv" 2>&1)
   if printf '%s\n' "$output" | grep -q "shaft still turning"; then
     echo "   !! the shaft was still turning after $WAIT_REST s - this run did NOT start from rest (listed in not_at_rest.txt)"; echo "$name r$r" >> "$OUT/not_at_rest.txt"
   fi

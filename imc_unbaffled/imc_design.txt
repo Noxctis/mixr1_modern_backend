@@ -1,0 +1,25 @@
+
+IMC DESIGN FOR THE WATER PLANT (fast part, with the slow water spin-up kept in the stability check)
+  excluded: mid_unbaffled_mid_r1_19_22.csv  (R2 0.12)
+  excluded: mid_unbaffled_mid_r1_22_19.csv  (R2 0.75, base level still drifting)
+  4 usable fits.  Nominal plant: K_fast 0.308 RPM/count (range 0.251-0.349), dead time 9 ms, fast lag fixed at 20 ms,
+  slow part K 0.137 with tau 4.3 s (range K 0.109-0.169, tau 3.4-7.6 s).
+  Worst case checked: fast gain 0.349, TOTAL effective delay up to 60 ms treated as a PURE delay (dead time + fast lag + speed-estimate latency), slow part at both extremes.
+
+             design     Kp     Ki  GM dB (nominal)  PM deg (nominal)  GM dB (WORST case)  PM deg (WORST)  crossover rad/s
+-------------------  -----  -----  ---------------  ----------------  ------------------  --------------  ---------------
+ YOUR CURRENT GAINS  1.564  41.22             18.3                95                 4.1              64             13.8
+IMC lambda = 0.04 s  1.784  73.20             16.6                83                 1.0              18             23.5
+IMC lambda = 0.06 s  1.230  50.46             19.9                85                 4.2              48             15.9
+IMC lambda = 0.07 s  1.065  43.68             21.1                86                 5.5              55             13.7
+IMC lambda = 0.08 s  0.938  38.50             22.2                86                 6.6              60             12.0
+IMC lambda = 0.09 s  0.839  34.42             23.2                87                 7.6              63             10.7
+IMC lambda = 0.10 s  0.759  31.12             24.0                87                 8.4              66              9.7
+IMC lambda = 0.12 s  0.637  26.12             25.6                87                 9.9              70              8.1
+IMC lambda = 0.15 s  0.513  21.04             27.4                87                11.8              74              6.5
+IMC lambda = 0.20 s  0.387  15.89             29.9                88                14.3              77              4.9
+IMC lambda = 0.30 s  0.260  10.67             33.3                87                17.7              80              3.3
+IMC lambda = 0.50 s  0.157   6.44             37.7                87                22.1              80              2.0
+
+>>> RECOMMENDED (fastest IMC design with worst-case gain margin >= 6 dB and phase margin >= 45 deg):  Kp = 0.938   Ki = 38.50   (lambda = 0.08 s, filter alpha = 1)
+    Treat this as a STARTING POINT: confirm it with the closed-loop test (run_matrix.sh) and the tank insert/remove test.
