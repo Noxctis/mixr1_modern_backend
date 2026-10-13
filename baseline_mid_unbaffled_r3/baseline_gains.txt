@@ -1,0 +1,1 @@
+kp=2.3587 ki=47.1794   # rule: Kp = 1/K, Ki = Kp/tau   (IMC with lambda = tau and the dead time ignored); steps 15%, 20%, 25% (~350 RPM)
