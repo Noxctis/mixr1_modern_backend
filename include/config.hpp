@@ -45,6 +45,12 @@ namespace Config {
     constexpr unsigned int PIN_M1_INA = 17;              
     constexpr unsigned int PIN_M1_INB = 27;              
     constexpr unsigned int PIN_M1_PWM = 13;              
+    // --- I2C buses (Linux /dev/i2c-N) ---
+    // Each device is looked for on its preferred bus first, then on the other one, so the daemon also works if you move a device.
+    constexpr int I2C_BUS_HARDWARE = 1;                  // the Pi's hardware I2C: GPIO 2 = SDA, GPIO 3 = SCL
+    constexpr int I2C_BUS_EXTRA    = 3;                  // extra bus: GPIO 8 = SDA, GPIO 7 = SCL  (dtoverlay=i2c-gpio,bus=3,i2c_gpio_sda=8,i2c_gpio_scl=7)
+    constexpr int I2C_BUS_DISPLAY  = I2C_BUS_HARDWARE;   // preferred bus of the OLED / LCD
+    constexpr int I2C_BUS_POWER    = I2C_BUS_EXTRA;      // preferred bus of the wattmeter (INA219)
     constexpr int I2C_LCD_ADDR = 0x27;
     constexpr int I2C_OLED_ADDR = 0x3C;                  
     constexpr DisplayType DISPLAY_TYPE = DisplayType::SSD1306_128x64;

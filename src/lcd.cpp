@@ -90,7 +90,7 @@ void LCD1602::send_lcd4(int value, bool rs) const {
     usleep(50);
 }
 
-LCD1602::LCD1602(int pi, Config::DisplayType type, int i2c_addr) : pi_handle(pi), addr(i2c_addr) {
+LCD1602::LCD1602(int pi, Config::DisplayType type, int i2c_addr, int i2c_bus) : pi_handle(pi), addr(i2c_addr) {
     if (type == Config::DisplayType::LCD1602) {
         driver_type = DriverType::LCD_CHAR;
         rows = 2;
@@ -108,7 +108,7 @@ LCD1602::LCD1602(int pi, Config::DisplayType type, int i2c_addr) : pi_handle(pi)
         addr = i2c_addr;
     }
 
-    i2c_handle = i2c_open(pi_handle, 1, addr, 0);
+    i2c_handle = i2c_open(pi_handle, static_cast<unsigned>(i2c_bus), addr, 0);
     if (i2c_handle < 0) return;
 
     if (driver_type == DriverType::LCD_CHAR) {

@@ -30,6 +30,7 @@
 #include "network.hpp"
 #include "ec11.hpp"
 #include "powermeter.hpp"
+#include "i2c_util.hpp"
 
 std::atomic<bool> run_loop{true};
 
@@ -61,6 +62,7 @@ struct TestOptions {
     // Wattmeter (DFRobot SEN0291 / INA219) on I2C bus 1: logs bus voltage, current and power next to every sample. OFF unless you pass --power.
     bool power = false;              // OFF by default: enable with --power (test runs only; the normal daemon never touches the wattmeter)
     int power_addr = 0x45;
+    int power_bus = -1;              // -1 = auto-detect (Config::I2C_BUS_POWER first, then the other bus); --power-bus=N forces one
     int power_div = 5;               // read the wattmeter every N-th loop (5 -> 20 Hz): keeps the control loop timing undisturbed
     double power_shunt_ohm = 0.010;
     double power_i_gain = 1.0;       // manual calibration against a multimeter: current_mA = gain * reading + offset
@@ -141,6 +143,8 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.power = true;
         } else if (argument == "--no-power") {
             options.power = false;
+        } else if (argument.rfind("--power-bus=", 0) == 0) {
+            options.power_bus = std::stoi(argument.substr(12));
         } else if (argument.rfind("--power-addr=", 0) == 0) {
             options.power_addr = std::stoi(argument.substr(13), nullptr, 0);          // accepts 0x45 or 69
         } else if (argument.rfind("--power-div=", 0) == 0) {
@@ -194,11 +198,17 @@ int run_test(const TestOptions& options) {
     PIController controller;
     std::unique_ptr<PowerMeter> meter;
     if (options.power) {
-        meter = std::make_unique<PowerMeter>(pi, 1, options.power_addr, options.power_shunt_ohm, options.power_i_gain, options.power_i_offset_ma, options.power_v_gain);
-        if (meter->available()) {
-            std::cout << "[TEST] Wattmeter (INA219) found at 0x" << std::hex << options.power_addr << std::dec << ": logging bus_v, current_ma, power_w\n";
+        const int power_bus = (options.power_bus >= 0)
+            ? options.power_bus
+            : find_i2c_bus(pi, options.power_addr, Config::I2C_BUS_POWER, {Config::I2C_BUS_HARDWARE, Config::I2C_BUS_EXTRA});
+        if (power_bus >= 0) meter = std::make_unique<PowerMeter>(pi, power_bus, options.power_addr, options.power_shunt_ohm, options.power_i_gain, options.power_i_offset_ma, options.power_v_gain);
+        if (meter && meter->available()) {
+            std::cout << "[TEST] Wattmeter (INA219) found at 0x" << std::hex << options.power_addr << std::dec << " on /dev/i2c-" << power_bus << ": logging bus_v, current_ma, power_w\n";
         } else {
-            std::cout << "[TEST] No wattmeter answered at 0x" << std::hex << options.power_addr << std::dec << ": continuing without power columns\n";
+            std::cout << "[TEST] No wattmeter answered at 0x" << std::hex << options.power_addr << std::dec;
+            if (options.power_bus >= 0) std::cout << " on /dev/i2c-" << options.power_bus;
+            else std::cout << " on /dev/i2c-" << Config::I2C_BUS_HARDWARE << " or /dev/i2c-" << Config::I2C_BUS_EXTRA << " (check the wiring, the pull-ups and i2cdetect -y <bus>)";
+            std::cout << ": continuing without power columns\n";
             meter.reset();
         }
     }
@@ -569,9 +579,12 @@ int main(int argc, char** argv) {
     bool debug_motor = false;                       // --debug-motor: print the PWM the daemon commands (about once per second)
     double dbg_loop_max_ms = 0.0, dbg_lcd_max_ms = 0.0;   // --debug-motor timing probes (loop period, OLED redraw time)
     bool no_lcd = false;                            // --no-lcd: do not touch the I2C display at all (isolates a hung I2C bus / display)
+    int lcd_bus_forced = -1;                        // --lcd-bus=N: use /dev/i2c-N for the display (default: auto-detect)
     for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--debug-motor") debug_motor = true;
-        if (std::string(argv[i]) == "--no-lcd") no_lcd = true;
+        const std::string a = argv[i];
+        if (a == "--debug-motor") debug_motor = true;
+        if (a == "--no-lcd") no_lcd = true;
+        if (a.rfind("--lcd-bus=", 0) == 0) lcd_bus_forced = std::stoi(a.substr(10));
     }
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -645,8 +658,23 @@ int main(int argc, char** argv) {
     AMT102Encoder encoder(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
     MotorController motor(pi);
     std::cout << "[MIXR-1] Motor driver initialised: commanded PWM = 0 %.  (start with --debug-motor to print every PWM the daemon commands)\n";
-    if (no_lcd) std::cout << "[MIXR-1] --no-lcd: the I2C display is NOT used.\n";
-    LCD1602 lcd(pi, Config::DISPLAY_TYPE, no_lcd ? 0xFFFF : Config::I2C_OLED_ADDR);       // an invalid address makes i2c_open fail at once: every display call becomes a no-op
+    const int display_addr = (Config::DISPLAY_TYPE == Config::DisplayType::SSD1306_128x64) ? Config::I2C_OLED_ADDR : Config::I2C_LCD_ADDR;
+    int display_bus = Config::I2C_BUS_DISPLAY;
+    if (no_lcd) {
+        std::cout << "[MIXR-1] --no-lcd: the I2C display is NOT used.\n";
+    } else {
+        display_bus = (lcd_bus_forced >= 0) ? lcd_bus_forced
+                                            : find_i2c_bus(pi, display_addr, Config::I2C_BUS_DISPLAY, {Config::I2C_BUS_HARDWARE, Config::I2C_BUS_EXTRA});
+        if (display_bus >= 0 && i2c_device_answers(pi, display_bus, display_addr)) {
+            std::cout << "[MIXR-1] Display found at 0x" << std::hex << display_addr << std::dec << " on /dev/i2c-" << display_bus << ".\n";
+        } else {
+            std::cout << "[MIXR-1] No display answered at 0x" << std::hex << display_addr << std::dec << " on /dev/i2c-" << Config::I2C_BUS_HARDWARE << " or /dev/i2c-" << Config::I2C_BUS_EXTRA
+                      << ": running WITHOUT a display (a missing display would otherwise stall the loop with failing I2C writes).\n";
+            no_lcd = true;
+            display_bus = Config::I2C_BUS_DISPLAY;
+        }
+    }
+    LCD1602 lcd(pi, Config::DISPLAY_TYPE, no_lcd ? 0xFFFF : display_addr, display_bus);       // an invalid address makes i2c_open fail at once: every display call becomes a no-op
     EC11Input ec11(pi, Config::PIN_EC11_A, Config::PIN_EC11_B, Config::PIN_EC11_SW);
     PIController pi_control;
 

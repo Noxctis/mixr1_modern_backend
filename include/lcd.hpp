@@ -29,7 +29,8 @@ private:
 public:
     LCD1602(int pi,
             Config::DisplayType type = Config::DISPLAY_TYPE,
-            int i2c_addr = Config::I2C_OLED_ADDR);
+            int i2c_addr = Config::I2C_OLED_ADDR,
+            int i2c_bus = Config::I2C_BUS_DISPLAY);
     ~LCD1602();
     void clear();
     void set_cursor(int row, int col);
