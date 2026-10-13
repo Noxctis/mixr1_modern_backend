@@ -18,6 +18,9 @@
 # Every option can ALSO be a flag after the numbers (flags survive sudo, environment variables may not):
 #   sudo ./run_matrix.sh 360 20 1 --out water_baffled --pause 15
 #   sudo ./run_matrix.sh 360 20 5 --configs water_baffled/confirm_list.txt --out confirm
+#   --base-kp X --base-ki Y   NEW BASELINE (or --baseline-file F, which reads  kp=... ki=...  from textbook_baseline.py): the 81-setting grid (GRID=full) is rebuilt
+#                             around it with Ki FIXED at the baseline Ki and Kp BOTH BELOW AND ABOVE the baseline Kp: Kp = baseline x 0.25 0.4 0.55 0.7 0.85 1.0 1.2 1.45 1.75
+#                             (change with --kp-ratios "..."), alpha 1.0 (= no filter, the baseline) down to 0.15 (alpha cannot go above 1). Baseline cell = A_baseline.
 #   flags: --out --pause --grid --configs --kps --kis --alphas --wait-rest --abort-rpm --max-duty --foreground
 #   --max-duty 30 = hard cap on the PI output (% duty): the speed can never exceed what that duty gives, whatever the gains (use it when a runaway would spill water)
 # Other env overrides:
@@ -82,12 +85,16 @@ while [ $# -gt 0 ]; do
     --configs)    CONFIGS_FILE="${2:?--configs needs a settings file}"; shift 2 ;;
     --kps)        KPS="${2:?--kps needs a quoted list}"; shift 2 ;;
     --kis)        KIS="${2:?--kis needs a quoted list}"; shift 2 ;;
+    --base-kp)    BASE_KP="${2:?--base-kp needs a number}"; BASELINE_GIVEN=1; shift 2 ;;
+    --base-ki)    KI="${2:?--base-ki needs a number}"; BASELINE_GIVEN=1; shift 2 ;;
+    --baseline-file) BASELINE_FILE="${2:?--baseline-file needs a file}"; BASELINE_GIVEN=1; shift 2 ;;
+    --kp-ratios)  KP_RATIOS="${2:?--kp-ratios needs a quoted list}"; shift 2 ;;
     --alphas)     ALPHAS="${2:?--alphas needs a quoted list}"; shift 2 ;;
     --wait-rest)  WAIT_REST="${2:?--wait-rest needs seconds}"; shift 2 ;;
     --abort-rpm)  ABORT_RPM="${2:?--abort-rpm needs an RPM}"; shift 2 ;;
     --max-duty)   MAX_DUTY="${2:?--max-duty needs a percent}"; shift 2 ;;
     --foreground) DETACH=0; shift ;;
-    -*)           echo "Unknown option '$1'. Options: --out --pause --grid --configs --kps --kis --alphas --wait-rest --abort-rpm --max-duty --foreground"; exit 1 ;;
+    -*)           echo "Unknown option '$1'. Options: --out --pause --grid --configs --kps --kis --base-kp --base-ki --baseline-file --alphas --wait-rest --abort-rpm --max-duty --foreground"; exit 1 ;;
     *)            POS+=("$1"); shift ;;
   esac
 done
@@ -114,7 +121,22 @@ ANCHOR_EVERY="${ANCHOR_EVERY:-20}"
 MAX_OVERSHOOT="${MAX_OVERSHOOT:-5}"
 MAX_SETTLE="${MAX_SETTLE:-0.3}"
 TOP="${TOP:-8}"
-BASE_KP=1.5641
+BASE_KP="${BASE_KP:-1.5641}"
+OLD_BASE_KP=1.5641; OLD_KI=41.2249
+if [ -n "${BASELINE_FILE:-}" ]; then
+  [ -f "$BASELINE_FILE" ] || { echo "Baseline file not found: $BASELINE_FILE"; exit 1; }
+  _kp=$(grep -oE 'kp=[0-9.]+' "$BASELINE_FILE" | head -1 | cut -d= -f2); _ki=$(grep -oE 'ki=[0-9.]+' "$BASELINE_FILE" | head -1 | cut -d= -f2)
+  { [ -n "$_kp" ] && [ -n "$_ki" ]; } || { echo "$BASELINE_FILE must contain  kp=<number> ki=<number>"; exit 1; }
+  BASE_KP="$_kp"; KI="$_ki"
+fi
+for _v in "$BASE_KP" "$KI"; do [[ "$_v" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "baseline gains must be numbers (got '$_v')"; exit 1; }; done
+scale_list() {   # scale every entry of a preset list by $2/$3, but keep the baseline entry itself exactly
+  local list="$1" new="$2" old="$3" keep="$4" out="" v
+  for v in $list; do
+    if [ "$v" = "$keep" ]; then out="$out $new"; else out="$out $(awk -v v="$v" -v n="$new" -v o="$old" 'BEGIN{printf "%.4g", v * n / o}')"; fi
+  done
+  echo $out
+}
 
 [ -x "$BIN" ] || { echo "Cannot find/execute $BIN (run from the folder with the daemon, or set BIN=...)"; exit 1; }
 
@@ -139,6 +161,12 @@ else
     max)  D_KPS="$BASE_KP 1.4 1.3 1.2 1.1 1.0 0.9 0.8 0.7 0.6 0.5 0.4";       D_ALPHAS="1.0 0.9 0.8 0.7 0.6 0.5 0.45 0.4 0.3 0.25 0.2 0.15" ;;
     *)    D_KPS="$BASE_KP 1.4 1.2 1.0 0.9 0.8 0.7 0.6 0.5";                   D_ALPHAS="1.0 0.8 0.7 0.6 0.5 0.4 0.3 0.2 0.15" ;;
   esac
+  if [ "${BASELINE_GIVEN:-0}" = 1 ] && { [ "$GRID" = full ] || [ -z "$GRID" ]; }; then
+    KP_RATIOS="${KP_RATIOS:-0.25 0.4 0.55 0.7 0.85 1.0 1.2 1.45 1.75}"
+    D_KPS=$(for q in $(echo $KP_RATIOS | tr ' ' '\n' | sort -gr); do awk -v q="$q" -v b="$BASE_KP" 'BEGIN{ if (q == 1) printf "%s ", b; else printf "%.4g ", q * b }'; done)
+    D_KPS=$(echo $D_KPS)
+  elif [ "$BASE_KP" != "$OLD_BASE_KP" ]; then D_KPS=$(scale_list "$D_KPS" "$BASE_KP" "$OLD_BASE_KP" "$BASE_KP" | sed "s/^ //"); fi
+  if [ "$KI" != "$OLD_KI" ] && [ -n "${D_KIS:-}" ]; then D_KIS=$(scale_list "$D_KIS" "$KI" "$OLD_KI" "$KI" | sed "s/^ //"); fi
   KPS="${KPS:-$D_KPS}"; ALPHAS="${ALPHAS:-$D_ALPHAS}"; KIS="${KIS:-${D_KIS:-$KI}}"
   nki=$(echo $KIS | wc -w)
   i=0
@@ -195,6 +223,8 @@ mins=$(awk -v t="$total" -v d="$DUR" -v p="$PAUSE" 'BEGIN{printf "%d", t*(d+p+2)
 if [ -n "${CONFIGS_FILE:-}" ]; then echo "Settings: $N taken from $CONFIGS_FILE   repeats=$REPEATS  anchors=$anchors  total runs=$total"
 else echo "Grid=$GRID  settings=$N  repeats=$REPEATS  anchors=$anchors  total runs=$total"; fi
 if [ -z "${CONFIGS_FILE:-}" ] && [ "$(echo ${KIS:-$KI} | wc -w)" -gt 1 ]; then KI_TXT="Ki varied: ${KIS}"; elif [ -n "${CONFIGS_FILE:-}" ]; then KI_TXT="Ki as listed in the settings file"; else KI_TXT="Ki fixed at $KI"; fi
+[ "$BASE_KP" != "$OLD_BASE_KP" ] || [ "$KI" != "$OLD_KI" ] && echo "NEW BASELINE: Kp ${BASE_KP}, Ki ${KI}${BASELINE_FILE:+  (from $BASELINE_FILE)}. Ki stays FIXED at the baseline Ki; Kp goes below AND above the baseline; alpha from 1.0 down"
+[ -z "${CONFIGS_FILE:-}" ] && echo "Kp values: ${KPS:-$D_KPS}    Ki: ${KIS:-${D_KIS:-$KI}}    alpha: ${ALPHAS:-$D_ALPHAS}"
 echo "Target=$TARGET RPM  duration=${DUR}s  pause=${PAUSE}s  ${KI_TXT}  abort limit=${ABORT_RPM} RPM"
 echo "Estimated time: ${mins} min   (Ctrl+C any time; re-run with OUT=$OUT to continue)"
 echo "Output folder: $OUT"
@@ -231,9 +261,12 @@ for ln in open(raw):
     kv = {k: float(v) for k, v in (x.split('=') for x in p[1:])}
     groups.setdefault(p[0], []).append(kv)
 cols = ['kp', 'ki', 'alpha', 'pwm_jitter_pct', 'pwm_std_pct', 'rpm_std', 'sse', 'overshoot_pct', 'settle5_s']
+opt_cols = ['rise10_90_s', 'settle2_s']          # only in results from the newer daemon
 rows = []
 for name, runs in groups.items():
     a = {c: sum(r[c] for r in runs) / len(runs) for c in cols}
+    for c in opt_cols:
+        a[c] = sum(r[c] for r in runs) / len(runs) if all(c in r for r in runs) else float('nan')
     a['name'], a['n'] = name, len(runs)
     a['spread'] = (max(r['pwm_jitter_pct'] for r in runs) - min(r['pwm_jitter_pct'] for r in runs)) if len(runs) > 1 else float('nan')
     rows.append(a)
@@ -246,9 +279,10 @@ noise = sum(spreads) / len(spreads) if spreads else float('nan')
 
 def line(r):
     d = '' if (base is None or r is base or not base['pwm_jitter_pct']) else f"{(r['pwm_jitter_pct'] / base['pwm_jitter_pct'] - 1) * 100:+5.0f}%"
-    return (f"{r['name']:<24}{r['n']:>2} {r['kp']:>6.2f} {r['ki']:>6.1f} {r['alpha']:>6.2f} {r['pwm_jitter_pct']:>8.3f} {d:>6} {r['rpm_std']:>7.2f} "
+    rise = f"{r['rise10_90_s']:>7.2f}" if r['rise10_90_s'] == r['rise10_90_s'] else f"{'-':>7}"
+    return (f"{r['name']:<24}{r['n']:>2} {r['kp']:>6.2f} {r['ki']:>6.1f} {r['alpha']:>6.2f} {r['pwm_jitter_pct']:>8.3f} {d:>6} {r['rpm_std']:>7.2f} {rise} "
             f"{r['overshoot_pct']:>6.2f} {r['settle5_s']:>8.2f}")
-hdr = f"{'setting':<24}{'n':>2} {'kp':>6} {'ki':>6} {'alpha':>6} {'pwmJit%':>8} {'vs A':>6} {'rpmStd':>7} {'ovr%':>6} {'settle_s':>8}"
+hdr = f"{'setting':<24}{'n':>2} {'kp':>6} {'ki':>6} {'alpha':>6} {'pwmJit%':>8} {'vs A':>6} {'rpmStd':>7} {'rise10-90':>7} {'ovr%':>6} {'settle_s':>8}"
 kis = sorted({round(r['ki'], 2) for r in rows})
 ki_txt = f"Ki fixed at {kis[0]:g}" if len(kis) == 1 else f"Ki varies between settings ({kis[0]:g} to {kis[-1]:g}; see the ki column)"
 L = [f"{len(rows)} settings finished.  {ki_txt}.  Acceptable = overshoot <= {max_ovr:g} % and settling <= {max_settle:g} s.",

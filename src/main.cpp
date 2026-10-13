@@ -421,6 +421,29 @@ int run_test(const TestOptions& options) {
                 }
             }
 
+            // Rise time 10-90 % of the target (first crossing of a 5-sample moving average; -1 = never reached) and settling to +/-2 %.
+            auto movavg = [&](size_t i) {
+                const size_t lo = i >= 2 ? i - 2 : 0, hi = std::min(n - 1, i + 2);
+                double acc = 0.0;
+                for (size_t k = lo; k <= hi; ++k) acc += rpm_samples[k];
+                return acc / static_cast<double>(hi - lo + 1);
+            };
+            double t10 = -1.0, t90 = -1.0;
+            for (size_t i = 0; i < n; ++i) {
+                const double m = movavg(i);
+                if (t10 < 0.0 && m >= 0.1 * options.target_rpm) t10 = time_samples[i];
+                if (t90 < 0.0 && m >= 0.9 * options.target_rpm) { t90 = time_samples[i]; break; }
+            }
+            const double rise_s = (t10 >= 0.0 && t90 >= 0.0) ? (t90 - t10) : -1.0;
+            const double band2 = 0.02 * options.target_rpm;
+            double settle2_s = 0.0;
+            for (size_t i = n; i-- > 0;) {
+                if (std::abs(rpm_samples[i] - options.target_rpm) > band2) {
+                    settle2_s = (i == n - 1) ? -1.0 : time_samples[i];
+                    break;
+                }
+            }
+
             std::cout << std::fixed << std::setprecision(3)
                       << "[RESULT] kp=" << Config::GLOBAL_KP
                       << " ki=" << Config::GLOBAL_KI
@@ -434,6 +457,8 @@ int run_test(const TestOptions& options) {
                       << " pwm_jitter_pct=" << pwm_jitter_pct
                       << " overshoot_pct=" << overshoot_pct
                       << " settle5_s=" << settle_s
+                      << " rise10_90_s=" << rise_s
+                      << " settle2_s=" << settle2_s
                       << " aborted=" << (aborted ? 1 : 0) << '\n';
         }
     }
