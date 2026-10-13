@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <atomic>
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 
 extern std::atomic<bool> run_loop;
 
@@ -15,6 +17,44 @@ void TelemetryServer::disconnect_client() {
     if (client_socket >= 0) close(client_socket);
     client_socket = -1;
     ext_requested = false;
+    send_fail_streak = 0;
+    rx_buffer.clear();
+}
+
+// A dashboard that sleeps, loses Wi-Fi or is killed leaves a half-dead TCP connection. Without these settings the daemon never notices,
+// keeps the old session forever and never serves the restarted dashboard (and a full send buffer would eventually block the 100 Hz loop).
+void TelemetryServer::adopt_client(int fd) {
+    int flag = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+    setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &flag, sizeof(flag));
+    int idle = 5, interval = 2, count = 3;                      // a silent peer is declared dead after about 5 + 2 x 3 = 11 s
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
+    unsigned int user_timeout_ms = 10000;                       // unacknowledged data for 10 s -> the connection is dropped
+    setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &user_timeout_ms, sizeof(user_timeout_ms));
+    int sndbuf = 16384;                                         // small buffer: a peer that stops reading is noticed within seconds
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+    rx_buffer.clear();
+    ext_requested = false;
+    send_fail_streak = 0;
+}
+
+// Never blocks the control loop. A peer that is gone or not reading is dropped (the main loop then falls back to standalone, motor target 0).
+bool TelemetryServer::send_to_client(const std::string& packet) {
+    if (client_socket < 0) return false;
+    const ssize_t n = send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL | MSG_DONTWAIT);
+    if (n == static_cast<ssize_t>(packet.length())) { send_fail_streak = 0; return true; }
+    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+        std::cout << "[MIXR-1] Dashboard connection lost (" << std::strerror(errno) << "): dropped. Motor falls back to standalone (0).\n";
+        disconnect_client();
+        return false;
+    }
+    if (++send_fail_streak > 300) {                             // about 3 s of a peer that does not read
+        std::cout << "[MIXR-1] Dashboard stopped reading for 3 s: dropped. Motor falls back to standalone (0).\n";
+        disconnect_client();
+    }
+    return false;
 }
 
 TelemetryServer::~TelemetryServer() { 
@@ -48,11 +88,7 @@ bool TelemetryServer::wait_for_client() {
         if (select(server_fd + 1, &readfds, nullptr, nullptr, &tv) > 0) {
             if (FD_ISSET(server_fd, &readfds)) {
                 client_socket = accept(server_fd, nullptr, nullptr);
-                
-                int flag = 1;
-                setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
-                rx_buffer.clear();
-                ext_requested = false;
+                if (client_socket >= 0) adopt_client(client_socket);
                 return client_socket >= 0;
             }
         }
@@ -61,18 +97,25 @@ bool TelemetryServer::wait_for_client() {
 }
 
 bool TelemetryServer::poll_for_client() {
-    if (client_socket >= 0) return true;
     fd_set readfds;
     FD_ZERO(&readfds);
     FD_SET(server_fd, &readfds);
     struct timeval tv{0, 0};
-    if (select(server_fd + 1, &readfds, nullptr, nullptr, &tv) > 0 && FD_ISSET(server_fd, &readfds)) {
+    const bool pending = (select(server_fd + 1, &readfds, nullptr, nullptr, &tv) > 0 && FD_ISSET(server_fd, &readfds));
+    if (client_socket >= 0) {
+        if (pending) {
+            // A NEW dashboard is knocking while an old session is still registered: the old one is stale (the dashboard was restarted,
+            // the PC slept, the Wi-Fi dropped). Drop it now; the new connection is accepted on the next loop, as a clean new session.
+            std::cout << "[MIXR-1] New dashboard connection: dropping the previous session.\n";
+            disconnect_client();
+            return false;
+        }
+        return true;
+    }
+    if (pending) {
         client_socket = accept(server_fd, nullptr, nullptr);
         if (client_socket >= 0) {
-            int flag = 1;
-            setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
-            rx_buffer.clear();
-            ext_requested = false;
+            adopt_client(client_socket);
             std::cout << "[MIXR-1] Dashboard Connected.\n";
             return true;
         }
@@ -84,19 +127,19 @@ bool TelemetryServer::has_client() const {
     return client_socket >= 0;
 }
 
-bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long revolutions) const {
+bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long revolutions) {
     if (client_socket < 0) return false;
     std::string packet = std::to_string(raw_rpm) + "," + std::to_string(filtered_rpm) + "," + std::to_string(revolutions) + "\n";
-    return send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0;
+    return send_to_client(packet);
 }
 
 bool TelemetryServer::send_packet_ext(double raw_rpm, double feedback_rpm, long long revolutions,
-                                      double pwm_pct, double target_rpm, double elapsed_s) const {
+                                      double pwm_pct, double target_rpm, double elapsed_s) {
     if (client_socket < 0) return false;
     std::string packet = std::to_string(raw_rpm) + "," + std::to_string(feedback_rpm) + "," +
                          std::to_string(revolutions) + "," + std::to_string(pwm_pct) + "," +
                          std::to_string(target_rpm) + "," + std::to_string(elapsed_s) + "\n";
-    return send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL) > 0;
+    return send_to_client(packet);
 }
 
 bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, bool& pi_mode) {
@@ -110,12 +153,19 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
             chunk[bytes] = '\0';
             rx_buffer += chunk;
         } else if (bytes == 0) {
+            std::cout << "[MIXR-1] Dashboard disconnected.\n";
             disconnect_client();
-            break;
+            return updated;
         } else {
+            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                std::cout << "[MIXR-1] Dashboard connection error (" << std::strerror(errno) << "): dropped.\n";
+                disconnect_client();
+                return updated;
+            }
             break;
         }
     }
+    if (rx_buffer.size() > 4096) rx_buffer.clear();                // garbage without a newline must not grow forever
 
     size_t pos;
     while ((pos = rx_buffer.find('\n')) != std::string::npos) {

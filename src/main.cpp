@@ -17,6 +17,8 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <sched.h>
+#include <fcntl.h>
+#include <sys/file.h>
 
 #include "config.hpp"
 #include "process_monitor.hpp"
@@ -27,6 +29,7 @@
 #include "lcd.hpp"
 #include "network.hpp"
 #include "ec11.hpp"
+#include "powermeter.hpp"
 
 std::atomic<bool> run_loop{true};
 
@@ -55,6 +58,14 @@ struct TestOptions {
     double step_from_pct = 0.0;
     double step_to_pct = 0.0;
     double step_at_s = 3.0;
+    // Wattmeter (DFRobot SEN0291 / INA219) on I2C bus 1: logs bus voltage, current and power next to every sample. OFF unless you pass --power.
+    bool power = false;              // OFF by default: enable with --power (test runs only; the normal daemon never touches the wattmeter)
+    int power_addr = 0x45;
+    int power_div = 5;               // read the wattmeter every N-th loop (5 -> 20 Hz): keeps the control loop timing undisturbed
+    double power_shunt_ohm = 0.010;
+    double power_i_gain = 1.0;       // manual calibration against a multimeter: current_mA = gain * reading + offset
+    double power_i_offset_ma = 0.0;
+    double power_v_gain = 1.0;
     double max_duty_pct = 100.0; // hard cap on the PI output in % duty (water safety: the speed cannot exceed what this duty gives)
     bool start_at_zero = false;  // keep the motor off during the 250 ms preparation and switch it on exactly when the log starts (records the ramp from rest)
 };
@@ -126,6 +137,22 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.step_mode = true;
         } else if (argument.rfind("--step-at=", 0) == 0) {
             options.step_at_s = std::stod(argument.substr(10));
+        } else if (argument == "--power") {
+            options.power = true;
+        } else if (argument == "--no-power") {
+            options.power = false;
+        } else if (argument.rfind("--power-addr=", 0) == 0) {
+            options.power_addr = std::stoi(argument.substr(13), nullptr, 0);          // accepts 0x45 or 69
+        } else if (argument.rfind("--power-div=", 0) == 0) {
+            options.power_div = std::max(1, std::stoi(argument.substr(12)));
+        } else if (argument.rfind("--power-shunt-ohm=", 0) == 0) {
+            options.power_shunt_ohm = std::stod(argument.substr(18));
+        } else if (argument.rfind("--power-i-gain=", 0) == 0) {
+            options.power_i_gain = std::stod(argument.substr(15));
+        } else if (argument.rfind("--power-i-offset-ma=", 0) == 0) {
+            options.power_i_offset_ma = std::stod(argument.substr(20));
+        } else if (argument.rfind("--power-v-gain=", 0) == 0) {
+            options.power_v_gain = std::stod(argument.substr(15));
         } else if (argument.rfind("--max-duty=", 0) == 0) {
             options.max_duty_pct = std::stod(argument.substr(11));
         } else if (argument == "--start-at-zero") {
@@ -165,6 +192,16 @@ int run_test(const TestOptions& options) {
     MotorController motor(pi);
     KinematicsEngine kinematics;
     PIController controller;
+    std::unique_ptr<PowerMeter> meter;
+    if (options.power) {
+        meter = std::make_unique<PowerMeter>(pi, 1, options.power_addr, options.power_shunt_ohm, options.power_i_gain, options.power_i_offset_ma, options.power_v_gain);
+        if (meter->available()) {
+            std::cout << "[TEST] Wattmeter (INA219) found at 0x" << std::hex << options.power_addr << std::dec << ": logging bus_v, current_ma, power_w\n";
+        } else {
+            std::cout << "[TEST] No wattmeter answered at 0x" << std::hex << options.power_addr << std::dec << ": continuing without power columns\n";
+            meter.reset();
+        }
+    }
     std::ofstream log(options.csv_path);
     if (!log) {
         std::cerr << "[TEST] Cannot open CSV: " << options.csv_path << '\n';
@@ -177,7 +214,9 @@ int run_test(const TestOptions& options) {
     const std::string intended_fifo = options.fifo ? "FIFO" : "NoFIFO";
     const std::string condition = intended_mode + "_" + intended_fifo;
 
-    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition,fb_rpm\n";
+    log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition,fb_rpm";
+    if (meter) log << ",bus_v,current_ma,power_w";
+    log << '\n';
     
     // ---- Live streaming (same TCP port/protocol as normal mode) ----
     TelemetryServer net;
@@ -228,7 +267,20 @@ int run_test(const TestOptions& options) {
     double current_target = options.target_rpm;
     motor.set_pwm(options.start_at_zero ? 0 : current_pwm);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    // Idle draw of the driver board with the motor OFF (only when the motor really is off here); also gives the first row a valid reading.
+    double idle_v = std::nan(""), idle_ma = std::nan("");
+    if (meter && (options.use_pi || options.start_at_zero || options.sweep)) {
+        double sv = 0.0, sa = 0.0;
+        int got = 0;
+        for (int k = 0; k < 5; ++k) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            double v = 0.0, ma = 0.0;
+            if (meter->read(v, ma)) { sv += v; sa += ma; ++got; }
+        }
+        if (got > 0) { idle_v = sv / got; idle_ma = sa / got; }
+    } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
 
     kinematics.reset(encoder.get_sync_snapshot());
     controller.reset();
@@ -245,6 +297,13 @@ int run_test(const TestOptions& options) {
     std::vector<double> errors;
     std::vector<double> pwm_samples;
     std::vector<double> time_samples;
+    std::vector<double> volt_samples;
+    std::vector<double> cur_samples;
+    double last_v = idle_v, last_ma = idle_ma;
+    if (meter && !(last_v == last_v)) {                      // no idle reading: take one now so the first rows are valid
+        double v = 0.0, ma = 0.0;
+        if (meter->read(v, ma)) { last_v = v; last_ma = ma; }
+    }
 
     const double total_duration = options.sweep ? options.duration_sec * 11.0 : options.duration_sec;
     
@@ -335,6 +394,11 @@ int run_test(const TestOptions& options) {
             }
         }
 
+        if (meter && (time_samples.size() % static_cast<size_t>(options.power_div)) == 0) {
+            double v = 0.0, ma = 0.0;
+            if (meter->read(v, ma)) { last_v = v; last_ma = ma; }
+        }
+
         const double error = current_target - state.exact_rpm;
         const int pwm_percent = options.sweep ? step_index * 10 : (current_pwm * 100) / 4095;
         log << std::fixed << std::setprecision(6) << elapsed << ',' << step_index << ',' << pwm_percent << ','
@@ -342,13 +406,17 @@ int run_test(const TestOptions& options) {
             << state.exact_rpm << ',' << state.ema_filtered_rpm << ',' << current_target << ','
             << current_pwm << ',' << error << ','
             << intended_mode << ',' << intended_fifo << ',' << (fifo_active ? "true" : "false") << ',' << condition << ','
-            << fb_rpm << '\n';
+            << fb_rpm;
+        if (meter) log << ',' << last_v << ',' << last_ma << ',' << (last_v * last_ma / 1000.0);
+        log << '\n';
         periods_us.push_back(period);
         late_us.push_back(lateness);
         rpm_samples.push_back(state.exact_rpm);
         errors.push_back(std::abs(error));
         pwm_samples.push_back(static_cast<double>(current_pwm));
         time_samples.push_back(elapsed);
+        volt_samples.push_back(last_v);
+        cur_samples.push_back(last_ma);
     }
 
     motor.stop_motor();
@@ -421,6 +489,22 @@ int run_test(const TestOptions& options) {
                 }
             }
 
+            // Electrical measurements over the same steady-state window (only when a wattmeter answered).
+            std::ostringstream pw;
+            if (meter && volt_samples.size() == n) {
+                double vm = 0.0, im = 0.0;
+                for (size_t i = ss; i < n; ++i) { vm += volt_samples[i]; im += cur_samples[i]; }
+                vm /= static_cast<double>(cnt);
+                im /= static_cast<double>(cnt);
+                double iv = 0.0;
+                for (size_t i = ss; i < n; ++i) iv += (cur_samples[i] - im) * (cur_samples[i] - im);
+                iv = std::sqrt(iv / static_cast<double>(cnt));
+                if (std::isfinite(vm) && std::isfinite(im)) {
+                    pw << std::fixed << std::setprecision(4) << " v_mean_V=" << vm << " i_mean_mA=" << im << " i_std_mA=" << iv << " p_mean_W=" << (vm * im / 1000.0)
+                       << " p_idle_W=" << ((idle_v == idle_v && idle_ma == idle_ma) ? idle_v * idle_ma / 1000.0 : -1.0);
+                }
+            }
+
             // Rise time 10-90 % of the target (first crossing of a 5-sample moving average; -1 = never reached) and settling to +/-2 %.
             auto movavg = [&](size_t i) {
                 const size_t lo = i >= 2 ? i - 2 : 0, hi = std::min(n - 1, i + 2);
@@ -459,13 +543,36 @@ int run_test(const TestOptions& options) {
                       << " settle5_s=" << settle_s
                       << " rise10_90_s=" << rise_s
                       << " settle2_s=" << settle2_s
+                      << pw.str()
                       << " aborted=" << (aborted ? 1 : 0) << '\n';
         }
     }
     return 0;
 }
 
+// Only ONE MIXR-1 process may drive the motor at a time. A detached run_matrix.sh keeps running after the terminal is closed, and a second
+// daemon started on top of it would fight it for the same pins. The lock is released automatically when the process exits or crashes.
+static void acquire_single_instance_lock() {
+    const int fd = open("/tmp/mixr1_daemon.lock", O_CREAT | O_RDWR, 0666);
+    if (fd < 0) return;                                           // cannot create the lock file: do not block the run
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        std::cerr << "[CRITICAL] Another MIXR-1 process is already running and controlling the motor. NOT starting.\n"
+                  << "  See what it is:  pgrep -a mixr1_daemon ; pgrep -af 'run_matrix|run_steps'\n"
+                  << "  Stop it:         sudo ./motor_off.sh\n";
+        std::exit(3);
+    }
+    // the descriptor stays open on purpose for the life of the process
+}
+
 int main(int argc, char** argv) {
+    acquire_single_instance_lock();
+    bool debug_motor = false;                       // --debug-motor: print the PWM the daemon commands (about once per second)
+    double dbg_loop_max_ms = 0.0, dbg_lcd_max_ms = 0.0;   // --debug-motor timing probes (loop period, OLED redraw time)
+    bool no_lcd = false;                            // --no-lcd: do not touch the I2C display at all (isolates a hung I2C bus / display)
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--debug-motor") debug_motor = true;
+        if (std::string(argv[i]) == "--no-lcd") no_lcd = true;
+    }
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg.rfind("--cpr=", 0) == 0) {
@@ -526,7 +633,8 @@ int main(int argc, char** argv) {
 
     auto network = std::make_unique<TelemetryServer>();
     if (!network->start_server(Config::TCP_PORT)) {
-        std::cerr << "CRITICAL: Port locked.\n";
+        std::cerr << "CRITICAL: port " << Config::TCP_PORT << " is already in use: another mixr1_daemon is running (or was SUSPENDED with Ctrl+Z; a suspended daemon keeps the port and the motor PWM).\n"
+                  << "  See it:  pgrep -a mixr1_daemon        Stop it:  sudo ./motor_off.sh\n";
         pigpio_stop(pi);
         return 1;
     }
@@ -536,7 +644,9 @@ int main(int argc, char** argv) {
     KinematicsEngine kinematics;
     AMT102Encoder encoder(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
     MotorController motor(pi);
-    LCD1602 lcd(pi, Config::DISPLAY_TYPE);
+    std::cout << "[MIXR-1] Motor driver initialised: commanded PWM = 0 %.  (start with --debug-motor to print every PWM the daemon commands)\n";
+    if (no_lcd) std::cout << "[MIXR-1] --no-lcd: the I2C display is NOT used.\n";
+    LCD1602 lcd(pi, Config::DISPLAY_TYPE, no_lcd ? 0xFFFF : Config::I2C_OLED_ADDR);       // an invalid address makes i2c_open fail at once: every display call becomes a no-op
     EC11Input ec11(pi, Config::PIN_EC11_A, Config::PIN_EC11_B, Config::PIN_EC11_SW);
     PIController pi_control;
 
@@ -573,6 +683,7 @@ int main(int argc, char** argv) {
         const auto current_time = std::chrono::steady_clock::now();
         std::chrono::duration<double> dt = current_time - last_time;
         last_time = current_time;
+        if (debug_motor) dbg_loop_max_ms = std::max(dbg_loop_max_ms, dt.count() * 1000.0);
 
         network->poll_for_client();
 
@@ -716,6 +827,25 @@ int main(int argc, char** argv) {
             motor.set_pwm(current_pwm);
         }
 
+        if (debug_motor) {
+            static int dbg_counter = 0;
+            static int dbg_last_pwm = -1;
+            const bool dbg_periodic = ((dbg_counter++ % 100) == 0);
+            if (dbg_periodic) {
+                std::cout << "[TIMING] loop period max " << std::fixed << std::setprecision(1) << dbg_loop_max_ms << " ms (ideal 10) | OLED redraw max "
+                          << dbg_lcd_max_ms << " ms  <- if this is large, the I2C display/bus is stalling the loop (and the dashboard)\n";
+                dbg_loop_max_ms = 0.0;
+                dbg_lcd_max_ms = 0.0;
+            }
+            if (dbg_periodic || std::abs(current_pwm - dbg_last_pwm) > 200) {
+                dbg_last_pwm = current_pwm;
+                std::cout << "[DEBUG] " << (dashboard_active ? "DASHBOARD" : "STANDALONE") << " | knob_target=" << standalone_target_rpm
+                          << " RPM, dashboard_target=" << (dashboard_pi_mode ? dashboard_target_rpm : static_cast<double>(dashboard_target_pwm_pct))
+                          << (dashboard_pi_mode ? " RPM" : " %PWM") << " | COMMANDED PWM = " << (current_pwm * 100 / 4095) << " % (" << current_pwm
+                          << " counts) | measured = " << state.exact_rpm << " RPM\n";
+            }
+        }
+
         if (dashboard_active) {
             bool sent;
             if (network->wants_ext()) {
@@ -727,10 +857,11 @@ int main(int argc, char** argv) {
             } else {
                 sent = network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder.get_revolutions());
             }
-            if (!sent) std::cout << "[MIXR-1] Dashboard send failed.\n";
+            (void)sent;      // a dead / stalled dashboard is dropped (and reported once) inside TelemetryServer; no per-loop message
         }
 
         if (update_lcd) {
+            const auto lcd_t0 = std::chrono::steady_clock::now();
             const double est_torque_nm = (static_cast<double>(current_pwm) / 4095.0) * Config::TORQUE_ESTIMATE_MAX_NM;
             std::ostringstream l1, l2, l3, l4;
             l1 << (dashboard_active ? "MODE2 DASHBOARD" : "MODE1 STANDALONE");
@@ -753,6 +884,7 @@ int main(int argc, char** argv) {
                     last_lines[i] = lines[i];
                 }
             }
+            dbg_lcd_max_ms = std::max(dbg_lcd_max_ms, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lcd_t0).count());
         }
     }
 
