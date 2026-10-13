@@ -19,8 +19,8 @@ namespace Config {
 // --- GLOBAL PI GAINS (1.0 rad/s Bandwidth) ---
     // inline (not constexpr) so they can be changed live (CMD:KP / CMD:KI) or via --kp= / --ki=.
     // Defaults below are the ORIGINAL tuning = the baseline. Update them after running tools/run_matrix.sh.
-    inline double GLOBAL_KP = 2.359;
-    inline double GLOBAL_KI = 47.178;
+    inline double GLOBAL_KP = 2.3587;
+    inline double GLOBAL_KI = 47.1785;
 
     // First-order low-pass on the PI *feedback* path:  y = a*x + (1-a)*y_prev
     // 1.0 = no filtering (baseline). Adviser suggested starting at 0.5 then tuning.
