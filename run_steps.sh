@@ -122,7 +122,8 @@ PY
   fi
   [ -n "${SUDO_USER:-}" ] && chown -R "$SUDO_USER" "$OUT" 2>/dev/null
   echo; echo "Files: $OUT"
-  echo "Next:  python3 tools/textbook_baseline.py \"$OUT/map_*.csv\" --work-rpm ${TARGET_RPM:-350} --out baseline_$LABEL     (reads K, dead time, tau and writes the baseline Kp, Ki)"
+  if [[ "$LABEL" =~ ^(.*)_r[0-9]+$ ]]; then BL="${BASH_REMATCH[1]}"; NEXT_GLOB="steps_${BL}_r*/map_*.csv"; else BL="$LABEL"; NEXT_GLOB="$OUT/map_*.csv"; fi
+  echo "Next (after ALL your repeats are done):  python3 tools/textbook_baseline.py \"$NEXT_GLOB\" --work-rpm ${TARGET_RPM:-350} --out baseline_$BL"
   exit 0
 fi
 

@@ -72,8 +72,11 @@ def analyse_file(path, smooth_n=5):
     tau_sk, theta_sk = 0.67 * (t85 - t35), max(1.3 * t35 - 0.29 * t85, 0.0)
     win = (t >= 0.3) & (t < 0.5)
     fast_share = float(np.median(y[win]) / yf * 100.0) if win.sum() > 4 else float("nan")
+    tau_quick = float("nan")                                                              # time constant of the QUICK stage alone: 63.2 % of its own plateau
+    if win.sum() > 4 and float(np.median(y[win])) > 5 * noise:
+        tau_quick = max(first_time(t, sm, 0.632 * float(np.median(y[win]))) - theta, 0.01)
     return dict(file=os.path.basename(path), duty_pct=u / 40.95, counts=u, final_rpm=yf, K=K, theta_s=theta, tau_s=tau, tau_sk_s=tau_sk, theta_sk_s=theta_sk, noise_rpm=noise,
-                fast_share_pct=fast_share, t=t, y=y, sm=sm)
+                fast_share_pct=fast_share, tau_quick_s=tau_quick, t=t, y=y, sm=sm)
 
 
 def gains(K, tau, theta, rule, lam_factor, lam_s=None):
@@ -98,6 +101,8 @@ def main():
     ap.add_argument("--all-steps", action="store_true", help="use EVERY step (median) instead of the ones nearest the working speed")
     ap.add_argument("--duties", default=None, help='use exactly these steps, e.g. "14 18 22" (duty %%)')
     ap.add_argument("--rule", default="yourformula", choices=("yourformula", "imc", "simc"))
+    ap.add_argument("--tau-method", default="total", choices=("total", "quick"),
+                    help="total = tau from 63.2 %% of the TOTAL change (the textbook reading, default); quick = tau from 63.2 %% of the QUICK stage only (steadier when the response has a slow tail)")
     ap.add_argument("--lambda-factor", type=float, default=1.0)
     ap.add_argument("--lambda-s", type=float, default=None, help="IMC closed-loop time constant in SECONDS (bandwidth = 1/lambda rad/s): --rule imc --lambda-s 1 designs for a 1 rad/s closed loop")
     ap.add_argument("--smooth-samples", type=int, default=5, help="samples averaged before reading the 63.2 %% point (the speed is sampled every 10 ms)")
@@ -126,15 +131,17 @@ def main():
         med = lambda k: float(np.median([x[k] for x in rs]))                       # noqa: E731
         taus_g = [x["tau_s"] for x in rs]
         rows.append(dict(file=f"{len(rs)} file(s)" if len(rs) > 1 else rs[0]["file"], duty_pct=float(dpct), counts=med("counts"), final_rpm=med("final_rpm"), K=med("K"), theta_s=med("theta_s"),
-                         tau_s=med("tau_s"), tau_sk_s=med("tau_sk_s"), theta_sk_s=med("theta_sk_s"), noise_rpm=med("noise_rpm"), fast_share_pct=med("fast_share_pct"),
+                         tau_s=med("tau_s"), tau_quick_s=med("tau_quick_s"), tau_sk_s=med("tau_sk_s"), theta_sk_s=med("theta_sk_s"), noise_rpm=med("noise_rpm"), fast_share_pct=med("fast_share_pct"),
                          n=len(rs), tau_repeat_spread=max(taus_g) / min(taus_g)))
     os.makedirs(args.out, exist_ok=True)
     print("\nFOPDT read from each open-loop step (K = final speed / duty step;  theta = time to the first clear response;  tau = (time to 63.2 % of the final speed) - theta)\n")
+    tau_key = "tau_quick_s" if args.tau_method == "quick" else "tau_s"
+    print(f"(time constant used below: {'63.2 % of the QUICK stage' if args.tau_method == 'quick' else '63.2 % of the TOTAL change'};  the other reading is shown in the last-but-one column)")
     print(f"{'duty':>5} {'final RPM':>9} {'K RPM/count':>11} {'theta ms':>9} {'tau s':>7} {'1/tau rad/s':>11} | {'S&K tau s':>9} {'S&K theta ms':>12} | {'quick stage at 0.3-0.5 s':>24} | {'runs':>4} | your formula: Kp, Ki")
     for r in rows:
-        kp, ki, _ = gains(r["K"], r["tau_s"], r["theta_s"], "yourformula", 1.0)
+        kp, ki, _ = gains(r["K"], r[tau_key], r["theta_s"], "yourformula", 1.0)
         r["kp_yf"], r["ki_yf"] = kp, ki
-        print(f"{r['duty_pct']:4.0f}% {r['final_rpm']:9.0f} {r['K']:11.3f} {r['theta_s'] * 1000:9.0f} {r['tau_s']:7.2f} {1 / r['tau_s']:11.2f} | {r['tau_sk_s']:9.2f} {r['theta_sk_s'] * 1000:12.0f} | "
+        print(f"{r['duty_pct']:4.0f}% {r['final_rpm']:9.0f} {r['K']:11.3f} {r['theta_s'] * 1000:9.0f} {r[tau_key]:7.2f} {1 / r[tau_key]:11.2f} | {r['tau_sk_s']:9.2f} {r['theta_sk_s'] * 1000:12.0f} | "
               f"{r['fast_share_pct']:21.0f} % | {r['n']:>4} | {kp:5.2f}, {ki:7.2f}")
     taus = np.array([r["tau_s"] for r in rows])
     spread = taus.max() / taus.min()
@@ -162,6 +169,11 @@ def main():
     if not near:
         sys.exit("none of the chosen steps exist in the data")
     near.sort(key=lambda r: r["duty_pct"])
+    edge = [r for r in near if r["fast_share_pct"] == r["fast_share_pct"] and abs(r["fast_share_pct"] - 63.2) < 5]
+    if edge and args.tau_method == "total":
+        print("\n!! ON THE EDGE: " + ", ".join(f"{r['duty_pct']:.0f}% (the quick stage delivers {r['fast_share_pct']:.1f} % of the final speed)" for r in edge)
+              + ". The 63.2 %-of-total reading jumps from about 0.05 s to about 1 s (Ki from ~47 to ~2) when that share falls below 63.2 %, so these steps are close to the cliff. "
+              "Kp = 1/K is steady; Ki is the uncertain one. Check with  --tau-method quick  (reads the quick stage on its own, no cliff) and with more repeats.")
     print("\nHOW THE BASELINE IS CHOSEN: every step above is a run from 0 to X % duty. For each run, K comes from its STEADY STATE (the last 3 s), and theta and tau from its early response.")
     print("  The numbers for every duty are in the table. The baseline is the MEDIAN over the steps whose steady-state speed is closest to the speed you will actually run at, because the plant is not")
     print("  exactly linear (K and tau change with speed) and the controller works at that speed. Use --all-steps to use every run, or --duties \"14 18 22\" to pick them yourself.")
@@ -170,11 +182,19 @@ def main():
     for rule in ("yourformula", "imc", "simc"):
         kps, kis = [], []
         for r in near:
-            kp, ki, desc = gains(r["K"], r["tau_s"], r["theta_s"], rule, args.lambda_factor, args.lambda_s)
+            kp, ki, desc = gains(r["K"], r[tau_key], r["theta_s"], rule, args.lambda_factor, args.lambda_s)
             kps.append(kp)
             kis.append(ki)
-        res[rule] = (float(np.median(kps)), float(np.median(kis)), desc)
-        print(f"  {rule:>12}:  Kp = {res[rule][0]:7.3f}   Ki = {res[rule][1]:8.3f}     [{desc}]")
+        if rule == "yourformula":
+            desc2 = "Kp = 1/K, Ki = Kp/tau   (pole-zero cancellation = IMC with lambda = tau and the dead time ignored; the professor's method)"
+        elif rule == "imc":
+            desc2 = ((f"IMC (Rivera): Kp = tau/(K (lambda + theta)), Ki = Kp/tau, lambda = {args.lambda_s:g} s for every step, i.e. closed-loop bandwidth about {1 / args.lambda_s:.3g} rad/s")
+                      if args.lambda_s else
+                      f"IMC (Rivera) with the dead time: Kp = tau/(K (lambda + theta)), Ki = Kp/tau, lambda = {args.lambda_factor:g} x tau of EACH step; median over the steps")
+        else:
+            desc2 = "SIMC tight (tau_c = theta): assumes the dead time is known exactly, which 100 Hz sampling cannot give: it is UNSTABLE on this plant in simulation, do not use"
+        res[rule] = (float(np.median(kps)), float(np.median(kis)), desc2)
+        print(f"  {rule:>12}:  Kp = {res[rule][0]:7.3f}   Ki = {res[rule][1]:8.3f}     [{res[rule][2]}]")
     kp, ki, desc = res[args.rule]
     loopgain = kp * float(np.median([r["K"] for r in near]))
     if loopgain > 4:
