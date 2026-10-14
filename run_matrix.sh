@@ -76,7 +76,6 @@ esac
 
 # ---------------------------------------------------------------- options as command-line flags (they survive sudo; environment variables often do not)
 ORIG_ARGS=("$@")
-ORIG_ARGS="$*"
 POS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -117,6 +116,10 @@ done
 BIN="${BIN:-./mixr1_daemon}"
 FLAGS="${FLAGS:---fifo}"
 [ "${POWER:-0}" = "1" ] && FLAGS="$FLAGS --power"          # POWER=1 records the wattmeter (voltage, current, power) in test runs; OFF by default
+if [ "${POWER:-0}" = "1" ] && ! grep -qa -- "--test-wattmeter" "$BIN" 2>/dev/null; then
+  echo "POWER=1 needs the NEW daemon (this build has no wattmeter support, and it would refuse --power: every run would write NO CSV)."
+  echo "Copy the new src/main.cpp, run:  make clean && make -j4   and try again."; exit 1
+fi
 PAUSE="${PAUSE:-4}"
 STREAM="${STREAM:-0}"
 KI="${KI:-41.2249}"
@@ -226,7 +229,7 @@ mkdir -p "$OUT"
   echo "date:    $(date -Is)"
   echo "host:    $(hostname)   kernel $(uname -r)"
   echo "daemon:  $BIN   sha256 $(sha256sum "$BIN" 2>/dev/null | cut -c1-16)   built $(stat -c %y "$BIN" 2>/dev/null | cut -c1-19)"
-  echo "command: $0 $ORIG_ARGS"
+  echo "command: $0 ${ORIG_ARGS[*]}"
   echo "flags:   $FLAGS $STREAM_FLAG $ABORT_FLAG $REST_FLAG $DUTY_FLAG $REFSTEP_FLAG"
   echo "note:    ${NOTE:-}      (set NOTE=\"water 24C, baffled, 200 mm\" in front of the command to record the conditions)"
 } > "$OUT/metadata.txt"

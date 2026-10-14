@@ -20,6 +20,7 @@
 set -u
 MODE="${1:-}"; [ $# -gt 0 ] && shift
 BIN="${BIN:-./mixr1_daemon}"; FLAGS="${FLAGS:---fifo}"
+[ "${POWER:-0}" = "1" ] && FLAGS="$FLAGS --power"          # POWER=1 records the wattmeter (voltage, current, power) in test runs; OFF by default
 LABEL="steps"; OUT=""; PAIRS=""; DUTIES="5 10 15 20 25 30 35"; REPEATS=3; HOLD=3; DUR=8; MAP_DUR=15; PAUSE=15; WAIT_REST=60; RPM_LIMIT=0; MAX_DUTY=35; TARGET_RPM=""
 
 while [ $# -gt 0 ]; do
@@ -47,12 +48,19 @@ OUT="${OUT:-steps_${LABEL}_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$OUT"
 
 over_max() { awk -v d="$1" -v m="$MAX_DUTY" 'BEGIN{exit !(d+0 > m+0)}'; }
-trap 'echo; echo "Interrupted - stopping."; [ -n "${SUDO_USER:-}" ] && chown -R "$SUDO_USER" "$OUT" 2>/dev/null; exit 130' INT TERM HUP
+trap 'echo; echo "Interrupted - stopping."; [ -n "${TICK_PID:-}" ] && kill "$TICK_PID" 2>/dev/null; [ -n "${SUDO_USER:-}" ] && chown -R "$SUDO_USER" "$OUT" 2>/dev/null; exit 130' INT TERM HUP
 
 run_daemon() {   # csv  extra-args...
   local csv=$1; shift
   local abort=""; [ "$RPM_LIMIT" != "0" ] && abort="--abort-rpm=$RPM_LIMIT"          # no speed stop unless you ask for one with --rpm-limit
-  "$BIN" --test --no-pi --fixed $FLAGS --no-stream --duration="$DUR" $abort --wait-rest="$WAIT_REST" --start-at-zero "$@" --csv="$csv" 2>&1
+  local t0=$SECONDS out
+  echo "     (waits up to ${WAIT_REST} s for the shaft to stop, then records for ${DUR} s; progress every 5 s)" >&2
+  ( while sleep 5; do echo "     ... $((SECONDS - t0)) s so far" >&2; done ) &
+  TICK_PID=$!
+  out=$("$BIN" --test --no-pi --fixed $FLAGS --no-stream --duration="$DUR" $abort --wait-rest="$WAIT_REST" --start-at-zero "$@" --csv="$csv" 2>&1)
+  kill "$TICK_PID" 2>/dev/null; wait "$TICK_PID" 2>/dev/null; TICK_PID=""
+  printf '%s\n' "$out" | grep -E '^\[TEST\] (shaft|WARNING|Wattmeter|No wattmeter|CSV)' | sed 's/^/     /' >&2          # what the daemon reported (rest wait, wattmeter ...)
+  printf '%s\n' "$out"
 }
 
 if [ "$MODE" = "map" ]; then
@@ -83,11 +91,21 @@ for (t, _), m in zip(rows, sm):
     if m >= 0.95 * vm:
         t95 = t
         break
-print(f"{d:g} {vm:.1f} {statistics.pstdev(vs):.2f} {slope:+.2f} {moving} {t95:.1f}")
+# electrical power over the same last 3 s, when the run was recorded with the wattmeter
+pw, cu = "-", "-"
+try:
+    rows2 = list(csv.DictReader(open(f)))
+    if rows2 and "power_w" in rows2[0]:
+        tailr = [r for r in rows2 if float(r["elapsed_s"]) >= dur - 3.0]
+        pw = f"{statistics.mean(float(r['power_w']) for r in tailr):.2f}"
+        cu = f"{statistics.mean(float(r['current_ma']) for r in tailr):.0f}"
+except Exception:
+    pass
+print(f"{d:g} {vm:.1f} {statistics.pstdev(vs):.2f} {slope:+.2f} {moving} {t95:.1f} {pw} {cu}")
 PY
     sleep "$PAUSE"
   done
-  echo; echo "duty %   mean RPM   noise (std)   drift RPM/s   settled?            time to 95 %"; awk '{printf "%6s   %8s   %11s   %11s   %-18s %8s s\n", $1, $2, $3, $4, ($5=="MOVING" ? "NO - still moving" : "yes"), $6}' "$OUT/map.txt"
+  echo; echo "duty %   mean RPM   noise (std)   drift RPM/s   settled?            time to 95 %   power W   current mA"; awk '{printf "%6s   %8s   %11s   %11s   %-18s %8s s   %7s   %9s\n", $1, $2, $3, $4, ($5=="MOVING" ? "NO - still moving" : "yes"), $6, $7, $8}' "$OUT/map.txt"
   awk '{ if ($6+0 > m) m = $6+0 } END { h = int((2*m + 4.99)/5)*5; if (h < 3) h = 3; printf "\nThe slowest duty needed %.1f s to reach 95 %% of its speed. For the step tests use --hold %d (twice that, rounded up) and --duration %d.\n", m, h, h + 20 }' "$OUT/map.txt"
   if grep -q MOVING "$OUT/map.txt"; then
     echo; echo "!! At least one duty was still changing at the end of its run (the speed or the water was still settling)."
