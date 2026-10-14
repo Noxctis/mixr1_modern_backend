@@ -76,6 +76,7 @@ esac
 
 # ---------------------------------------------------------------- options as command-line flags (they survive sudo; environment variables often do not)
 ORIG_ARGS=("$@")
+ORIG_ARGS="$*"
 POS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -93,8 +94,10 @@ while [ $# -gt 0 ]; do
     --wait-rest)  WAIT_REST="${2:?--wait-rest needs seconds}"; shift 2 ;;
     --abort-rpm)  ABORT_RPM="${2:?--abort-rpm needs an RPM}"; shift 2 ;;
     --max-duty)   MAX_DUTY="${2:?--max-duty needs a percent}"; shift 2 ;;
+    --ref-step-to) REF_STEP_TO="${2:?--ref-step-to needs an RPM}"; shift 2 ;;
+    --ref-step-at) REF_STEP_AT="${2:?--ref-step-at needs seconds}"; shift 2 ;;
     --foreground) DETACH=0; shift ;;
-    -*)           echo "Unknown option '$1'. Options: --out --pause --grid --configs --kps --kis --base-kp --base-ki --baseline-file --alphas --wait-rest --abort-rpm --max-duty --foreground"; exit 1 ;;
+    -*)           echo "Unknown option '$1'. Options: --out --pause --grid --configs --kps --kis --base-kp --base-ki --baseline-file --alphas --wait-rest --abort-rpm --max-duty --ref-step-to --ref-step-at --foreground"; exit 1 ;;
     *)            POS+=("$1"); shift ;;
   esac
 done
@@ -113,6 +116,7 @@ for pair in "TARGET_RPM:$TARGET" "DURATION_S:$DUR" "REPEATS:$REPEATS"; do
 done
 BIN="${BIN:-./mixr1_daemon}"
 FLAGS="${FLAGS:---fifo}"
+[ "${POWER:-0}" = "1" ] && FLAGS="$FLAGS --power"          # POWER=1 records the wattmeter (voltage, current, power) in test runs; OFF by default
 PAUSE="${PAUSE:-4}"
 STREAM="${STREAM:-0}"
 KI="${KI:-41.2249}"
@@ -202,6 +206,12 @@ if [ -n "$MAX_DUTY" ]; then
   if grep -qa -- "--max-duty" "$BIN"; then DUTY_FLAG="--max-duty=$MAX_DUTY"
   else echo "This daemon build has no --max-duty. Copy the new src/main.cpp and include/pi_controller.hpp and run make."; exit 1; fi
 fi
+# closed-loop REFERENCE STEP (small step around the operating point: never reaches the duty cap, so it measures the GAINS, not the cap)
+REFSTEP_FLAG=""
+if [ -n "${REF_STEP_TO:-}" ]; then
+  if grep -qa -- "--ref-step-to" "$BIN"; then REFSTEP_FLAG="--ref-step-to=$REF_STEP_TO --ref-step-at=${REF_STEP_AT:-15}"
+  else echo "This daemon build has no --ref-step-to. Copy the new src/main.cpp and run make."; exit 1; fi
+fi
 WAIT_REST="${WAIT_REST:-60}"; REST_FLAG=""
 if [ "$WAIT_REST" != "0" ]; then
   if grep -qa -- "--wait-rest" "$BIN"; then REST_FLAG="--wait-rest=$WAIT_REST"
@@ -211,6 +221,15 @@ fi
 # ---------------------------------------------------------------- output folder (ONE for everything)
 OUT="${OUT:-matrix_all_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$OUT"
+# traceability for the thesis: what exactly produced this folder
+{
+  echo "date:    $(date -Is)"
+  echo "host:    $(hostname)   kernel $(uname -r)"
+  echo "daemon:  $BIN   sha256 $(sha256sum "$BIN" 2>/dev/null | cut -c1-16)   built $(stat -c %y "$BIN" 2>/dev/null | cut -c1-19)"
+  echo "command: $0 $ORIG_ARGS"
+  echo "flags:   $FLAGS $STREAM_FLAG $ABORT_FLAG $REST_FLAG $DUTY_FLAG $REFSTEP_FLAG"
+  echo "note:    ${NOTE:-}      (set NOTE=\"water 24C, baffled, 200 mm\" in front of the command to record the conditions)"
+} > "$OUT/metadata.txt"
 RAW="$OUT/results_raw.txt"; DONE="$OUT/.done"; ABORTS="$OUT/aborted_runs.txt"; ORDER="$OUT/run_order.txt"
 touch "$RAW" "$DONE"
 cp "$0" "$OUT/run_matrix_used.sh" 2>/dev/null || true
@@ -258,10 +277,14 @@ groups = collections.OrderedDict()
 for ln in open(raw):
     p = ln.split()
     if not p: continue
-    kv = {k: float(v) for k, v in (x.split('=') for x in p[1:])}
+    kv = {}
+    for x in p[1:]:
+        k, _, v = x.partition('=')
+        try: kv[k] = float(v)
+        except ValueError: pass                      # text fields (power_status=ok ...) are not numbers
     groups.setdefault(p[0], []).append(kv)
 cols = ['kp', 'ki', 'alpha', 'pwm_jitter_pct', 'pwm_std_pct', 'rpm_std', 'sse', 'overshoot_pct', 'settle5_s']
-opt_cols = ['rise10_90_s', 'settle2_s']          # only in results from the newer daemon
+opt_cols = ['rise10_90_s', 'settle2_s', 'p_mean_W', 'i_mean_mA', 'v_mean_V', 'rs_overshoot_pct', 'rs_rise_s', 'rs_settle_s', 'rs_peak_duty_pct', 'rs_sat_s', 'rs_rpm_std', 'rs_pwm_jitter_pct']          # only in results from the newer daemon
 rows = []
 for name, runs in groups.items():
     a = {c: sum(r[c] for r in runs) / len(runs) for c in cols}
@@ -280,9 +303,10 @@ noise = sum(spreads) / len(spreads) if spreads else float('nan')
 def line(r):
     d = '' if (base is None or r is base or not base['pwm_jitter_pct']) else f"{(r['pwm_jitter_pct'] / base['pwm_jitter_pct'] - 1) * 100:+5.0f}%"
     rise = f"{r['rise10_90_s']:>7.2f}" if r['rise10_90_s'] == r['rise10_90_s'] else f"{'-':>7}"
-    return (f"{r['name']:<24}{r['n']:>2} {r['kp']:>6.2f} {r['ki']:>6.1f} {r['alpha']:>6.2f} {r['pwm_jitter_pct']:>8.3f} {d:>6} {r['rpm_std']:>7.2f} {rise} "
+    pwr = f"{r['p_mean_W']:>7.2f}" if r['p_mean_W'] == r['p_mean_W'] else f"{'-':>7}"
+    return (f"{r['name']:<24}{r['n']:>2} {r['kp']:>6.2f} {r['ki']:>6.1f} {r['alpha']:>6.2f} {r['pwm_jitter_pct']:>8.3f} {d:>6} {r['rpm_std']:>7.2f} {rise} {pwr} "
             f"{r['overshoot_pct']:>6.2f} {r['settle5_s']:>8.2f}")
-hdr = f"{'setting':<24}{'n':>2} {'kp':>6} {'ki':>6} {'alpha':>6} {'pwmJit%':>8} {'vs A':>6} {'rpmStd':>7} {'rise10-90':>7} {'ovr%':>6} {'settle_s':>8}"
+hdr = f"{'setting':<24}{'n':>2} {'kp':>6} {'ki':>6} {'alpha':>6} {'pwmJit%':>8} {'vs A':>6} {'rpmStd':>7} {'rise10-90':>7} {'power W':>7} {'ovr%':>6} {'settle_s':>8}"
 kis = sorted({round(r['ki'], 2) for r in rows})
 ki_txt = f"Ki fixed at {kis[0]:g}" if len(kis) == 1 else f"Ki varies between settings ({kis[0]:g} to {kis[-1]:g}; see the ki column)"
 L = [f"{len(rows)} settings finished.  {ki_txt}.  Acceptable = overshoot <= {max_ovr:g} % and settling <= {max_settle:g} s.",
@@ -325,6 +349,13 @@ if len(kis) > 1:
         sub = [r for r in rows if round(r['alpha'], 3) == a_]
         if len({round(r['kp'], 4) for r in sub}) > 1 and len({round(r['ki'], 2) for r in sub}) > 1:
             L += grid2(sub, a_, "PWM jitter, % duty", 'pwm_jitter_pct', "%.3f") + grid2(sub, a_, "Startup overshoot, %", 'overshoot_pct', "%.1f") + grid2(sub, a_, "Settling time to +-5 %, s", 'settle5_s', "%.2f")
+rs_rows = [r for r in rows if r.get('rs_overshoot_pct') == r.get('rs_overshoot_pct')]
+if rs_rows:
+    L += ["", "=== REFERENCE STEP (closed loop, small step around the operating point; valid = the PWM never hit the duty cap) ===",
+          f"{'setting':<24}{'n':>2} {'kp':>6} {'alpha':>6} {'overshoot%':>11} {'rise10-90':>9} {'settle_s':>8} {'peak duty%':>10} {'sat_s':>6}  valid", "-" * 100]
+    for r_ in sorted(rs_rows, key=lambda r_: r_['rs_overshoot_pct']):
+        L.append(f"{r_['name']:<24}{r_['n']:>2} {r_['kp']:>6.2f} {r_['alpha']:>6.2f} {r_['rs_overshoot_pct']:>11.1f} {r_['rs_rise_s']:>9.2f} {r_['rs_settle_s']:>8.2f} {r_['rs_peak_duty_pct']:>10.1f} {r_['rs_sat_s']:>6.2f}  "
+                 + ('yes' if r_['rs_sat_s'] <= 0.05 else 'NO (hit the cap)'))
 open(os.path.join(out, 'summary.txt'), 'w').write("\n".join(L) + "\n")
 print("\n" + "\n".join(L))
 
@@ -366,7 +397,7 @@ run_one() {  # name kp ki alpha r
   if grep -qx "$name $r" "$DONE"; then echo "   (already done, skipping)"; return 0; fi
   local output res ab
   output=$("$BIN" --test --pi --fixed $FLAGS $STREAM_FLAG --target="$TARGET" --duration="$DUR" \
-             --kp="$kp" --ki="$ki" --alpha="$alpha" $ABORT_FLAG $REST_FLAG $DUTY_FLAG --csv="$csv" 2>&1)
+             --kp="$kp" --ki="$ki" --alpha="$alpha" $ABORT_FLAG $REST_FLAG $DUTY_FLAG $REFSTEP_FLAG --csv="$csv" 2>&1)
   if printf '%s\n' "$output" | grep -q "shaft still turning"; then
     echo "   !! the shaft was still turning after $WAIT_REST s - this run did NOT start from rest (listed in not_at_rest.txt)"; echo "$name r$r" >> "$OUT/not_at_rest.txt"
   fi

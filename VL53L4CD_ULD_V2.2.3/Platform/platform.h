@@ -83,4 +83,17 @@ uint8_t VL53L4CD_WaitMs(Dev_t dev, uint32_t TimeMs);
  */
 uint8_t VL53L4CD_PlatformInit(void);
 
+/**
+ * @brief Choose the Linux I2C bus (/dev/i2c-N) that VL53L4CD_PlatformInit() opens.
+ * Order of priority: this call, then the environment variable MIXR_TOF_BUS, then the default bus 3
+ * (GPIO 8 = SDA, GPIO 7 = SCL, made with dtoverlay=i2c-gpio,bus=3,i2c_gpio_sda=8,i2c_gpio_scl=7).
+ * Returns 0 if the number is valid.
+ */
+int VL53L4CD_PlatformSetBus(int bus);
+
+/**
+ * @brief The bus opened by the last successful VL53L4CD_PlatformInit(), or -1.
+ */
+int VL53L4CD_PlatformGetBus(void);
+
 #endif  // _PLATFORM_H_

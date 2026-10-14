@@ -141,6 +141,9 @@ class Run:
     torque_v: np.ndarray | None = None
     torque_nm: np.ndarray | None = None
     pwm_cmd: int = 0
+    volts: np.ndarray | None = None          # wattmeter (INA219) columns, when the run was recorded with one
+    current_ma: np.ndarray | None = None
+    power_w: np.ndarray | None = None
 
 
 def load_run(path: str):
@@ -176,6 +179,8 @@ def load_run(path: str):
             return None
         r = Run(path, stem, kind, cfg, rep, t, rpm, pwm_raw * 100.0 / 4095.0, target=float(tgt[0]) if const_tgt else np.nan,
                 fb=df.fb_rpm.to_numpy(float) if "fb_rpm" in cols else None, pwm_cmd=int(pwm_raw[0]))
+        if {"bus_v", "current_ma", "power_w"} <= cols:
+            r.volts, r.current_ma, r.power_w = df.bus_v.to_numpy(float), df.current_ma.to_numpy(float), df.power_w.to_numpy(float)
         if "torque_nm" in cols and df.torque_nm.notna().any():
             r.torque_nm = df.torque_nm.to_numpy(float)
             r.torque_v = df.torque_v.to_numpy(float) if "torque_v" in cols else None
@@ -258,7 +263,10 @@ def pi_metrics(r: Run):
     settle2 = 0.0 if len(out2) == 0 else (-1.0 if out2[-1] == len(r.rpm) - 1 else float(r.t[out2[-1]]))
     return dict(jitter=pwm_jitter(r.pwm[ss]), pwm_std=float(np.std(r.pwm[ss])), rpm_std=float(np.std(r.rpm[ss])),
                 sse=float(tgt - np.mean(r.rpm[ss])), overshoot=float(max(0.0, (r.rpm.max() - tgt) / tgt * 100.0)),
-                settle=settle, pwm_mean=float(np.mean(r.pwm[ss])), rpm_mean=float(np.mean(r.rpm[ss])), rise=rise, settle2=settle2)
+                settle=settle, pwm_mean=float(np.mean(r.pwm[ss])), rpm_mean=float(np.mean(r.rpm[ss])), rise=rise, settle2=settle2,
+                power=float(np.nanmean(r.power_w[ss])) if (r.power_w is not None and np.isfinite(r.power_w[ss]).any()) else float("nan"),
+                current_ma=float(np.nanmean(r.current_ma[ss])) if (r.current_ma is not None and np.isfinite(r.current_ma[ss]).any()) else float("nan"),
+                volts=float(np.nanmean(r.volts[ss])) if (r.volts is not None and np.isfinite(r.volts[ss]).any()) else float("nan"))
 
 
 def loglog_fit(x, y):
@@ -328,7 +336,11 @@ def read_raw(path: str):
         if len(p) < 3 or "=" not in p[1]:
             continue
         try:
-            kv = {k: float(v) for k, v in (x.split("=") for x in p[1:])}
+            kv = {}
+            for x in p[1:]:
+                k_, _, v_ = x.partition("=")
+                try: kv[k_] = float(v_)
+                except ValueError: pass                  # text fields such as power_status
         except ValueError:
             continue
         kv["name"] = p[0]
@@ -373,7 +385,8 @@ def build_cfgs(pi_runs, raw_rows):
         key = norm(rw["name"])
         m = dict(jitter=rw["pwm_jitter_pct"], pwm_std=rw["pwm_std_pct"], rpm_std=rw["rpm_std"], sse=rw["sse"],
                  overshoot=rw["overshoot_pct"], settle=rw["settle5_s"], pwm_mean=rw["pwm_mean_pct"], rpm_mean=rw["rpm_mean"],
-                 rise=rw.get("rise10_90_s", float("nan")), settle2=rw.get("settle2_s", float("nan")))
+                 rise=rw.get("rise10_90_s", float("nan")), settle2=rw.get("settle2_s", float("nan")),
+                 power=rw.get("p_mean_W", float("nan")), current_ma=rw.get("i_mean_mA", float("nan")), volts=rw.get("v_mean_V", float("nan")))
         if key in by_norm:
             c = by_norm[key]
             c.kp, c.ki, c.alpha, c.known = rw["kp"], rw["ki"], rw["alpha"], True
@@ -959,7 +972,10 @@ def grid_slice(known, base, args, out, col_of, col_label, axes_title, fixed_text
            f"and settling \u2264 {args.max_settle:g} s ({len(feas)} of {len(known)})."
            + (f" Best acceptable setting: {best.name} (Kp {fg(best.kp)}, \u03b1 {fg(best.alpha)}), jitter {mean_m(best, 'jitter'):.3f} % duty, overshoot {mean_m(best, 'overshoot'):.1f} %." if best else " No setting met the limits."))
     out.comp(fig, f"10_grid_heatmaps{suffix}", cap)
-    for letter, (key, fmt, unit, ttl) in zip("abcdef", metrics):
+    metrics_ind = list(metrics)
+    if any(mean_m(c, "power") == mean_m(c, "power") for c in known):
+        metrics_ind += [("power", "%.2f", "Mean electrical power (W)", "(g) Mean power"), ("current_ma", "%.0f", "Mean motor-supply current (mA)", "(h) Mean current")]
+    for letter, (key, fmt, unit, ttl) in zip("abcdefgh", metrics_ind):
         out.single(f"10{letter}_grid_{key}{suffix}", lambda ax, key=key, fmt=fmt, unit=unit: d_heat(ax, kps, als, look, key, fmt, unit, base, args, ok_fn, aborted_cells, best=best, col_label=col_label, col_of=col_of),
                    title=ttl[4:] + f" over the {axes_title} grid{suffix.replace('_a', ', alpha ') if suffix else ''}", caption=cap, size=(max(10, 0.8 * ncols_ + 3), max(5.625, 0.42 * nrows_ + 2.6)))
     out.single(f"10e_grid_best_region{suffix}", lambda ax: d_heat(ax, kps, als, look, "jitter", "%.3f", "PWM jitter (% duty) of the acceptable settings", base, args, ok_fn, aborted_cells,
@@ -1003,6 +1019,9 @@ def grid_slice(known, base, args, out, col_of, col_label, axes_title, fixed_text
     pd.DataFrame(csv_rows).to_csv(os.path.join(out.dir, f"10_top_candidates{suffix}.csv"), index=False)
     spreads = [mean_m_sp for mean_m_sp in [max(r["jitter"] for r in c.rows) - min(r["jitter"] for r in c.rows) for c in known if len(c.rows) > 1]]
     noise = float(np.mean(spreads)) if spreads else float("nan")
+    if not data:
+        print('  [Grid] nothing to list (no acceptable setting and no baseline row): shortlist table skipped')
+        return True
     fig = make_table_fig(data, hdr, [.05, .21, .05, .05, .05, .08, .08, .08, .07, .09, .08, .10, .05],
                          f"Best acceptable settings on the {axes_title} grid{suffix.replace('_a', ', alpha ') if suffix else ''} (overshoot \u2264 {args.max_overshoot:g} %, settling \u2264 {args.max_settle:g} s), ranked by PWM jitter",
                          f"Repeat-to-repeat range of PWM jitter is about {noise:.3f} % duty: settings closer together than that cannot be told apart. Amber row = on the EDGE of the acceptable region "
@@ -1050,6 +1069,8 @@ def grid_section(cfgs, base, shown, args, out):
         csvr.append(dict(rank=0 if isb else (n if base else n + 1), name=c.name, kp=c.kp, ki=c.ki, alpha=c.alpha, jitter_pct=j, overshoot_pct=mean_m(c, "overshoot"), settle_s=mean_m(c, "settle"), rpm_std=rv, runs=len(c.rows)))
     pd.DataFrame(csvr).to_csv(os.path.join(out.dir, "10_top_candidates.csv"), index=False)
     hdr = ["Rank", "Setting", "Kp", "Ki", "\u03b1", "PWM jitter\n(% duty)", "vs baseline", "Overshoot\n(%)", "Settling\n(s)", "Speed ripple\n(RPM)", "ripple vs\nbaseline", "runs"]
+    if not data:
+        return
     fig = make_table_fig(data, hdr, [.05, .24, .06, .06, .06, .09, .09, .09, .08, .10, .09, .05],
                          f"Best acceptable settings over ALL Kp, Ki and \u03b1 tested (overshoot \u2264 {args.max_overshoot:g} %, settling \u2264 {args.max_settle:g} s), ranked by PWM jitter",
                          "Confirm the top few with more repeats; settings whose jitter differs by less than the repeat-to-repeat scatter cannot be told apart.", colors)
@@ -1103,7 +1124,7 @@ def pi_section(runs, raw_rows, args, out):
     pd.DataFrame([dict(id=c.id, config=c.name, kp=c.kp, ki=c.ki, alpha=c.alpha, runs=len(c.rows), source=c.source,
                        jitter_pct=mean_m(c, "jitter"), pwm_std_pct=mean_m(c, "pwm_std"), rpm_std=mean_m(c, "rpm_std"),
                        rpm_mean=mean_m(c, "rpm_mean"), mean_error_rpm=mean_m(c, "sse"),
-                       overshoot_pct=mean_m(c, "overshoot"), settle_s=mean_m(c, "settle"), rise_10_90_s=mean_m(c, "rise"), settle_2pct_s=mean_m(c, "settle2"),
+                       overshoot_pct=mean_m(c, "overshoot"), settle_s=mean_m(c, "settle"), rise_10_90_s=mean_m(c, "rise"), settle_2pct_s=mean_m(c, "settle2"), power_w=mean_m(c, "power"), current_ma=mean_m(c, "current_ma"), bus_v=mean_m(c, "volts"),
                        jitter_vs_baseline_pct=(mean_m(c, "jitter") / bj - 1) * 100 if (base and c.known) else np.nan,
                        rpm_std_vs_baseline_pct=(mean_m(c, "rpm_std") / bs - 1) * 100 if (base and c.known) else np.nan, **allpk[c.name])
                   for c in cfgs.values()]).sort_values("jitter_pct").to_csv(os.path.join(out.dir, "metrics_pi_configs.csv"), index=False)
@@ -1374,7 +1395,7 @@ def pi_section(runs, raw_rows, args, out):
     order = sorted(cfgs.values(), key=lambda c: (grp(c), -c.kp if grp(c) == 1 else 0, c.id))
     if big:                                       # a 80-row table is unreadable: baseline + the best acceptable settings (everything is in the CSV)
         order = ([base] if base else []) + [c for c in feas_all[:20]]
-    hdr = ["ID", "What changed", "Kp", "Ki", "Filter \u03b1", "PWM jitter\n(% duty)", "vs baseline", "Overshoot\n(%)", "Rise\n10\u201390 % (s)", "Settling to\n\u00b15 % (s)", "RPM std\n(RPM)", "RPM std\nvs baseline", "runs"]
+    hdr = ["ID", "What changed", "Kp", "Ki", "Filter \u03b1", "PWM jitter\n(% duty)", "vs baseline", "Overshoot\n(%)", "Rise\n10\u201390 % (s)", "Settling to\n\u00b15 % (s)", "RPM std\n(RPM)", "RPM std\nvs baseline", "Power\n(W)", "runs"]
     data_t = []
     for c in order:
         j = mean_m(c, "jitter")
@@ -1384,10 +1405,11 @@ def pi_section(runs, raw_rows, args, out):
                        ("1.0 (off)" if abs(c.alpha - 1) < 1e-6 else fg(c.alpha)) if c.known else "\u2014", f"{j:.3f}", vs,
                        f"{mean_m(c, 'overshoot'):.1f}", ("\u2014" if mean_m(c, "rise") != mean_m(c, "rise") else f"{mean_m(c, 'rise'):.2f}"), f"{mean_m(c, 'settle'):.2f}", f"{mean_m(c, 'rpm_std'):.2f}",
                        "\u2014" if (c is base or not base or not c.known) else ("\u2248 0 %" if abs(mean_m(c, "rpm_std") / bs - 1) < 0.005 else (f"{MINUS}{abs(mean_m(c, 'rpm_std') / bs - 1) * 100:.0f} %" if mean_m(c, "rpm_std") < bs else f"+{(mean_m(c, 'rpm_std') / bs - 1) * 100:.0f} %")),
+                       ("\u2014" if mean_m(c, "power") != mean_m(c, "power") else f"{mean_m(c, 'power'):.2f}"),
                        str(len(c.rows))])
     fig, ax = plt.subplots(figsize=(13.5, 0.42 * len(data_t) + 1.3))
     ax.axis("off")
-    tb = ax.table(cellText=data_t, colLabels=hdr, loc="upper center", cellLoc="center", colWidths=[.04, .17, .05, .05, .075, .085, .08, .08, .08, .085, .07, .085, .04])
+    tb = ax.table(cellText=data_t, colLabels=hdr, loc="upper center", cellLoc="center", colWidths=[.04, .16, .05, .05, .07, .08, .075, .075, .075, .08, .065, .08, .065, .04])
     tb.auto_set_font_size(False)
     tb.set_fontsize(11)
     tb.scale(1, 1.7)

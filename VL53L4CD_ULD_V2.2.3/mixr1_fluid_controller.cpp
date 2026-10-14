@@ -28,6 +28,7 @@
 #include <cmath>
 #include <csignal>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -45,6 +46,8 @@ extern "C" {
 
 // Declared explicitly in case an older platform.h is picked up first
 uint8_t VL53L4CD_PlatformInit(void);
+int VL53L4CD_PlatformSetBus(int bus);   // defined in the NEW Platform/platform.c
+int VL53L4CD_PlatformGetBus(void);      // (declared here too, so it works even if an old platform.h is picked up first)
 }
 
 namespace {
@@ -72,6 +75,8 @@ constexpr double kMaxVoltage = 12.0;
 // Sensor
 constexpr Dev_t    kSensorDev       = 0x52;  // same value as tof_cal; platform layer ignores it
 constexpr uint16_t kSensorId        = 0xEBAA;
+constexpr int      kI2cBusPreferred = 3;     // extra bus: GPIO 8 = SDA, GPIO 7 = SCL (dtoverlay=i2c-gpio,bus=3,i2c_gpio_sda=8,i2c_gpio_scl=7)
+constexpr int      kI2cBusAlternate = 1;     // the Pi's hardware bus; tried if the sensor is not found on bus 3
 constexpr uint16_t kTimingBudgetMs  = 200;   // MUST match tof_cal or the calibration is invalid
 constexpr int16_t  kDefaultOffsetMm = -26;   // used only if tof_offset.txt is missing
 constexpr int      kMaxSaneOffsetMm = 2000;
@@ -341,14 +346,47 @@ struct SensorMetrics {
     int requestedSamples = 0;
 };
 
+// Finds the I2C bus the sensor answers on (preferred bus first, then the other) and says which one it is.
+// MIXR_TOF_BUS=n in the environment forces exactly one bus. On success the platform layer is left open on that bus.
+bool selectToFBus(int& busOut) {
+    busOut = -1;
+    auto sensorAnswers = [](int bus) -> bool {
+        VL53L4CD_PlatformSetBus(bus);
+        if (VL53L4CD_PlatformInit() != 0) return false;
+        uint16_t id = 0;
+        return VL53L4CD_GetSensorId(cfg::kSensorDev, &id) == 0 && id == cfg::kSensorId;
+    };
+
+    const char* forced = std::getenv("MIXR_TOF_BUS");
+    if (forced && *forced) {                                   // the user chose the bus: use only that one
+        const int bus = std::atoi(forced);
+        if (sensorAnswers(bus)) {
+            busOut = VL53L4CD_PlatformGetBus();
+            std::cout << "VL53L4CD found on /dev/i2c-" << busOut << " (forced by MIXR_TOF_BUS).\n";
+            return true;
+        }
+        std::cerr << "VL53L4CD did not answer on /dev/i2c-" << bus << " (MIXR_TOF_BUS forces that bus).\n";
+        return false;
+    }
+    const int order[2] = {cfg::kI2cBusPreferred, cfg::kI2cBusAlternate};
+    for (int i = 0; i < 2; ++i) {
+        if (sensorAnswers(order[i])) {
+            busOut = VL53L4CD_PlatformGetBus();
+            std::cout << "VL53L4CD found on /dev/i2c-" << busOut << ".\n";
+            return true;
+        }
+    }
+    std::cerr << "VL53L4CD not detected on /dev/i2c-" << order[0] << " or /dev/i2c-" << order[1] << ".\n"
+              << "  * check the wiring (VCC, GND, SDA, SCL); the sensor must show up in:  i2cdetect -y 3   (address 0x29)\n"
+              << "  * the extra bus needs pull-ups (4.7 kOhm to 3.3 V on SDA and SCL) unless the module already has them\n";
+    return false;
+}
+
 class ToFSensor {
 public:
     // Same init sequence as tof_cal so calibration carries over.
     bool init(int16_t offsetMm) {
-        if (VL53L4CD_PlatformInit() != 0) {
-            std::cerr << "I2C initialization failed.\n";
-            return false;
-        }
+        if (!selectToFBus(busUsed_)) return false;                 // prints which bus the sensor was found on, or what to check
         uint16_t id = 0;
         if (VL53L4CD_GetSensorId(cfg::kSensorDev, &id) != 0 || id != cfg::kSensorId) {
             std::cerr << "VL53L4CD not detected (id=0x" << std::hex << id << std::dec << ").\n";
@@ -389,6 +427,7 @@ public:
     void stopRanging() { VL53L4CD_StopRanging(cfg::kSensorDev); }
 
     int offsetMm() const { return offsetMm_; }
+    int i2cBus() const { return busUsed_; }
 
     // Blocks until a new frame is ready. Returns false on timeout, bus error or emergency stop.
     bool readFrame(uint16_t& distanceMm, uint8_t& status) {
@@ -437,6 +476,7 @@ public:
 
 private:
     int offsetMm_ = 0;
+    int busUsed_ = -1;
 };
 
 // Reads the offset saved by tof_cal; falls back to the built-in default.

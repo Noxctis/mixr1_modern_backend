@@ -68,6 +68,11 @@ struct TestOptions {
     double power_i_gain = 1.0;       // manual calibration against a multimeter: current_mA = gain * reading + offset
     double power_i_offset_ma = 0.0;
     double power_v_gain = 1.0;
+    // Closed-loop REFERENCE STEP around the operating point: at ref_step_at seconds the target changes from target_rpm to ref_step_to.
+    // A small step (for example 300 -> 400 RPM) stays well below the duty cap, so the response shows what the GAINS do (a start from rest
+    // saturates the cap for about 1.3 s, which hides the gains). Metrics of the response are printed as rs_* in the [RESULT] line.
+    double ref_step_to = 0.0;
+    double ref_step_at = 15.0;
     double max_duty_pct = 100.0; // hard cap on the PI output in % duty (water safety: the speed cannot exceed what this duty gives)
     bool start_at_zero = false;  // keep the motor off during the 250 ms preparation and switch it on exactly when the log starts (records the ramp from rest)
 };
@@ -157,6 +162,10 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.power_i_offset_ma = std::stod(argument.substr(20));
         } else if (argument.rfind("--power-v-gain=", 0) == 0) {
             options.power_v_gain = std::stod(argument.substr(15));
+        } else if (argument.rfind("--ref-step-to=", 0) == 0) {
+            options.ref_step_to = std::stod(argument.substr(14));
+        } else if (argument.rfind("--ref-step-at=", 0) == 0) {
+            options.ref_step_at = std::stod(argument.substr(14));
         } else if (argument.rfind("--max-duty=", 0) == 0) {
             options.max_duty_pct = std::stod(argument.substr(11));
         } else if (argument == "--start-at-zero") {
@@ -177,6 +186,10 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
         options.sine_mode = false;
         if (options.step_from_pct < 0.0 || options.step_from_pct > 100.0 || options.step_to_pct < 0.0 || options.step_to_pct > 100.0 ||
             options.step_at_s <= 0.0 || options.step_at_s >= options.duration_sec) return false;
+    }
+    if (options.ref_step_to > 0.0 && !(options.use_pi && !options.sweep && !options.sine_mode && options.ref_step_at > 1.0 && options.ref_step_at < options.duration_sec - 3.0)) {
+        std::cerr << "--ref-step-to needs closed-loop (PI) mode with a fixed target, and --ref-step-at between 1 s and (duration - 3 s)\n";
+        return false;
     }
     return options.duration_sec > 0.0 && options.target_rpm >= 0.0 && options.max_duty_pct > 0.0 && options.max_duty_pct <= 100.0 &&
            options.fixed_pwm >= 0 && options.fixed_pwm <= 4095;
@@ -212,6 +225,11 @@ int run_test(const TestOptions& options) {
             meter.reset();
         }
     }
+    const char* power_status = options.power ? "absent" : "disabled";
+    if (meter) power_status = "ok";
+    long power_ok_reads = 0, power_fail_reads = 0;
+    int power_fail_streak = 0;
+    bool power_dropout = false;
     std::ofstream log(options.csv_path);
     if (!log) {
         std::cerr << "[TEST] Cannot open CSV: " << options.csv_path << '\n';
@@ -225,7 +243,7 @@ int run_test(const TestOptions& options) {
     const std::string condition = intended_mode + "_" + intended_fifo;
 
     log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition,fb_rpm";
-    if (meter) log << ",bus_v,current_ma,power_w";
+    log << ",bus_v,current_ma,power_w";                     // always present (empty when there is no wattmeter), so every CSV has the same columns
     log << '\n';
     
     // ---- Live streaming (same TCP port/protocol as normal mode) ----
@@ -387,6 +405,7 @@ int run_test(const TestOptions& options) {
             break;
         }
 
+        if (options.use_pi && options.ref_step_to > 0.0 && elapsed >= options.ref_step_at) current_target = options.ref_step_to;
         if (options.use_pi) {
             current_pwm = controller.compute(current_target, state.exact_rpm, period / 1000000.0);
             motor.set_pwm(current_pwm);
@@ -406,7 +425,12 @@ int run_test(const TestOptions& options) {
 
         if (meter && (time_samples.size() % static_cast<size_t>(options.power_div)) == 0) {
             double v = 0.0, ma = 0.0;
-            if (meter->read(v, ma)) { last_v = v; last_ma = ma; }
+            if (meter->read(v, ma)) {
+                last_v = v; last_ma = ma; ++power_ok_reads; power_fail_streak = 0;
+            } else {
+                ++power_fail_reads;
+                if (++power_fail_streak > 10) { last_v = std::nan(""); last_ma = std::nan(""); power_dropout = true; }   // do not keep writing a stale value
+            }
         }
 
         const double error = current_target - state.exact_rpm;
@@ -417,7 +441,8 @@ int run_test(const TestOptions& options) {
             << current_pwm << ',' << error << ','
             << intended_mode << ',' << intended_fifo << ',' << (fifo_active ? "true" : "false") << ',' << condition << ','
             << fb_rpm;
-        if (meter) log << ',' << last_v << ',' << last_ma << ',' << (last_v * last_ma / 1000.0);
+        if (meter && std::isfinite(last_v) && std::isfinite(last_ma)) log << ',' << last_v << ',' << last_ma << ',' << (last_v * last_ma / 1000.0);
+        else log << ",,,";
         log << '\n';
         periods_us.push_back(period);
         late_us.push_back(lateness);
@@ -463,7 +488,10 @@ int run_test(const TestOptions& options) {
     // ---- Step-response / jitter metrics (PI, fixed target only) ----
     // Steady-state window = last 40% of the run. Parsed by tools/run_matrix.sh via the [RESULT] tag.
     if (options.use_pi && !options.sweep && !options.sine_mode && options.target_rpm > 0.0) {
-        const size_t n = rpm_samples.size();
+        const size_t n_all = rpm_samples.size();
+        const bool ref_step = options.ref_step_to > 0.0;
+        size_t n = n_all;                                   // with a reference step, the startup / steady-state metrics use only the part BEFORE the step
+        if (ref_step) { n = 0; while (n < n_all && time_samples[n] < options.ref_step_at) ++n; }
         const size_t ss = static_cast<size_t>(static_cast<double>(n) * 0.6);
         const size_t cnt = n - ss;
         if (cnt > 2) {
@@ -499,19 +527,25 @@ int run_test(const TestOptions& options) {
                 }
             }
 
-            // Electrical measurements over the same steady-state window (only when a wattmeter answered).
+            // Electrical measurements over the same steady-state window. Gaps (no wattmeter, or a dropout) are skipped, never replaced by zeros.
             std::ostringstream pw;
-            if (meter && volt_samples.size() == n) {
-                double vm = 0.0, im = 0.0;
-                for (size_t i = ss; i < n; ++i) { vm += volt_samples[i]; im += cur_samples[i]; }
-                vm /= static_cast<double>(cnt);
-                im /= static_cast<double>(cnt);
-                double iv = 0.0;
-                for (size_t i = ss; i < n; ++i) iv += (cur_samples[i] - im) * (cur_samples[i] - im);
-                iv = std::sqrt(iv / static_cast<double>(cnt));
-                if (std::isfinite(vm) && std::isfinite(im)) {
-                    pw << std::fixed << std::setprecision(4) << " v_mean_V=" << vm << " i_mean_mA=" << im << " i_std_mA=" << iv << " p_mean_W=" << (vm * im / 1000.0)
-                       << " p_idle_W=" << ((idle_v == idle_v && idle_ma == idle_ma) ? idle_v * idle_ma / 1000.0 : -1.0);
+            {
+                const char* st = power_dropout ? "dropout" : power_status;
+                pw << " power_status=" << st;
+                if (options.power) pw << " power_reads_ok=" << power_ok_reads << " power_reads_fail=" << power_fail_reads;
+                if (meter && volt_samples.size() == n_all) {
+                    double vm = 0.0, im = 0.0;
+                    size_t k = 0;
+                    for (size_t i = ss; i < n; ++i) if (std::isfinite(volt_samples[i]) && std::isfinite(cur_samples[i])) { vm += volt_samples[i]; im += cur_samples[i]; ++k; }
+                    if (k > 2) {
+                        vm /= static_cast<double>(k);
+                        im /= static_cast<double>(k);
+                        double iv = 0.0;
+                        for (size_t i = ss; i < n; ++i) if (std::isfinite(cur_samples[i])) iv += (cur_samples[i] - im) * (cur_samples[i] - im);
+                        iv = std::sqrt(iv / static_cast<double>(k));
+                        pw << std::fixed << std::setprecision(4) << " v_mean_V=" << vm << " i_mean_mA=" << im << " i_std_mA=" << iv << " p_mean_W=" << (vm * im / 1000.0)
+                           << " p_idle_W=" << ((idle_v == idle_v && idle_ma == idle_ma) ? idle_v * idle_ma / 1000.0 : -1.0);
+                    }
                 }
             }
 
@@ -538,6 +572,60 @@ int run_test(const TestOptions& options) {
                 }
             }
 
+            // ---- closed-loop reference step: metrics of the response AFTER the step (5-sample moving average) ----
+            std::ostringstream rs;
+            if (ref_step && n < n_all) {
+                auto ma5 = [&](size_t i) {
+                    const size_t lo = i >= 2 ? i - 2 : 0, hi = std::min(n_all - 1, i + 2);
+                    double acc = 0.0;
+                    for (size_t k = lo; k <= hi; ++k) acc += rpm_samples[k];
+                    return acc / static_cast<double>(hi - lo + 1);
+                };
+                const double y_pre = rpm_mean;                                  // steady state just before the step
+                const size_t m0 = n;                                             // first sample after the step
+                const size_t m = n_all - m0;
+                const size_t fs = m0 + static_cast<size_t>(0.7 * static_cast<double>(m));   // final window = last 30 % of the post-step part
+                double y_fin = 0.0;
+                for (size_t i = fs; i < n_all; ++i) y_fin += rpm_samples[i];
+                y_fin /= static_cast<double>(n_all - fs);
+                const double delta = y_fin - y_pre;
+                if (m > 20 && std::abs(delta) > 5.0) {
+                    const double sgn = delta > 0.0 ? 1.0 : -1.0;
+                    double peak = y_fin;
+                    for (size_t i = m0; i < n_all; ++i) { const double v = ma5(i); if ((v - y_fin) * sgn > (peak - y_fin) * sgn) peak = v; }
+                    const double rs_os = std::max(0.0, (peak - y_fin) * sgn / std::abs(delta) * 100.0);
+                    double u10 = -1.0, u90 = -1.0;
+                    for (size_t i = m0; i < n_all; ++i) {
+                        const double f = (ma5(i) - y_pre) * sgn / std::abs(delta);
+                        if (u10 < 0.0 && f >= 0.1) u10 = time_samples[i];
+                        if (u90 < 0.0 && f >= 0.9) { u90 = time_samples[i]; break; }
+                    }
+                    const double band_rs = std::max(0.05 * std::abs(delta), 3.0);        // +-5 % of the step, but never tighter than 3 RPM (the speed noise)
+                    double rs_settle = 0.0;
+                    for (size_t i = n_all; i-- > m0;) {
+                        if (std::abs(ma5(i) - y_fin) > band_rs) { rs_settle = (i == n_all - 1) ? -1.0 : time_samples[i] - options.ref_step_at; break; }
+                    }
+                    const double cap_counts = options.max_duty_pct / 100.0 * 4095.0;     // did the step hit the duty cap? then it measures the cap, not the gains
+                    double peak_counts = 0.0, sat_s = 0.0;
+                    for (size_t i = m0; i < n_all; ++i) {
+                        peak_counts = std::max(peak_counts, pwm_samples[i]);
+                        if (pwm_samples[i] >= cap_counts - 2.0) sat_s += static_cast<double>(Config::LOOP_DELAY_US) * 1.0e-6;
+                    }
+                    double fr_var = 0.0, fp_mean = 0.0, fd_sq = 0.0;
+                    for (size_t i = fs; i < n_all; ++i) { fr_var += (rpm_samples[i] - y_fin) * (rpm_samples[i] - y_fin); fp_mean += pwm_samples[i]; }
+                    fp_mean /= static_cast<double>(n_all - fs);
+                    for (size_t i = fs + 1; i < n_all; ++i) { const double d2 = pwm_samples[i] - pwm_samples[i - 1]; fd_sq += d2 * d2; }
+                    rs << std::fixed << std::setprecision(3)
+                       << " rs_from_rpm=" << y_pre << " rs_to_rpm=" << y_fin
+                       << " rs_overshoot_pct=" << rs_os
+                       << " rs_rise_s=" << ((u10 >= 0.0 && u90 >= 0.0) ? (u90 - u10) : -1.0)
+                       << " rs_settle_s=" << rs_settle << " rs_band_rpm=" << band_rs
+                       << " rs_peak_duty_pct=" << (peak_counts * to_pct) << " rs_sat_s=" << sat_s
+                       << " rs_rpm_std=" << std::sqrt(fr_var / static_cast<double>(n_all - fs))
+                       << " rs_pwm_jitter_pct=" << (std::sqrt(fd_sq / static_cast<double>(n_all - fs - 1)) * to_pct);
+                }
+            }
+
             std::cout << std::fixed << std::setprecision(3)
                       << "[RESULT] kp=" << Config::GLOBAL_KP
                       << " ki=" << Config::GLOBAL_KI
@@ -553,6 +641,7 @@ int run_test(const TestOptions& options) {
                       << " settle5_s=" << settle_s
                       << " rise10_90_s=" << rise_s
                       << " settle2_s=" << settle2_s
+                      << rs.str()
                       << pw.str()
                       << " aborted=" << (aborted ? 1 : 0) << '\n';
         }
@@ -574,6 +663,117 @@ static void acquire_single_instance_lock() {
     // the descriptor stays open on purpose for the life of the process
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------
+// ./mixr1_daemon --test-wattmeter [--seconds=10] [--power-addr=0x45] [--power-bus=N] [--csv=wattmeter_test.csv]
+// Checks the DFRobot wattmeter (INA219) on its own: which bus answers, whether it behaves like an INA219, whether the readings are
+// plausible and stable, how long a read takes. It does NOT drive the motor. Exit code 0 = PASS, 1 = check the wiring, 2 = no pigpiod.
+// ---------------------------------------------------------------------------------------------------------------------------------
+static int run_wattmeter_test(int argc, char** argv) {
+    int addr = 0x45, forced_bus = -1;
+    double seconds = 10.0, shunt = 0.010, i_gain = 1.0, i_off = 0.0, v_gain = 1.0;
+    std::string csv_path = "wattmeter_test.csv";
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a.rfind("--seconds=", 0) == 0) seconds = std::max(2.0, std::stod(a.substr(10)));
+        else if (a.rfind("--power-addr=", 0) == 0) addr = std::stoi(a.substr(13), nullptr, 0);
+        else if (a.rfind("--power-bus=", 0) == 0) forced_bus = std::stoi(a.substr(12));
+        else if (a.rfind("--power-shunt-ohm=", 0) == 0) shunt = std::stod(a.substr(18));
+        else if (a.rfind("--power-i-gain=", 0) == 0) i_gain = std::stod(a.substr(15));
+        else if (a.rfind("--power-i-offset-ma=", 0) == 0) i_off = std::stod(a.substr(20));
+        else if (a.rfind("--power-v-gain=", 0) == 0) v_gain = std::stod(a.substr(15));
+        else if (a.rfind("--csv=", 0) == 0) csv_path = a.substr(6);
+    }
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
+    const int pi = pigpio_start(nullptr, nullptr);
+    if (pi < 0) { std::cerr << "[CRITICAL] cannot connect to pigpiod (start it with: sudo pigpiod)\n"; return 2; }
+
+    std::cout << "=== WATTMETER TEST (DFRobot SEN0291 = INA219 + 10 mOhm shunt), address 0x" << std::hex << addr << std::dec << " ===\n"
+              << "The motor is NOT driven. Leave it idle (or running by hand) while this runs.\n\nStep 1: which I2C bus answers?\n";
+    int bus = -1;
+    for (int b : {Config::I2C_BUS_HARDWARE, Config::I2C_BUS_EXTRA}) {
+        const bool ok = i2c_device_answers(pi, b, addr);
+        std::cout << "   /dev/i2c-" << b << "  0x" << std::hex << addr << std::dec << " : " << (ok ? "ANSWERS" : "no answer") << '\n';
+        if (ok && bus < 0) bus = b;
+    }
+    if (forced_bus >= 0) { bus = forced_bus; std::cout << "   (forced to /dev/i2c-" << bus << ")\n"; }
+    if (bus < 0 || !i2c_device_answers(pi, bus, addr)) {
+        std::cout << "\nRESULT: FAIL - no device at 0x" << std::hex << addr << std::dec << ".\n"
+                  << "  * check VCC (3.3 or 5 V), GND, SDA, SCL on the module, and that the SDA/SCL wires go to the right GPIOs (bus 3: GPIO 8 = SDA, GPIO 7 = SCL)\n"
+                  << "  * the extra bus needs pull-ups (4.7 kOhm to 3.3 V on SDA and SCL) unless the module already has them\n"
+                  << "  * check the DIP switch address (0x40 / 0x41 / 0x44 / 0x45): run  i2cdetect -y 1  and  i2cdetect -y 3  and use  --power-addr=0x..\n"
+                  << "  * check that  dtoverlay=i2c-gpio,bus=3,...  is active:  ls /dev/i2c-*\n";
+        pigpio_stop(pi);
+        return 1;
+    }
+    PowerMeter meter(pi, bus, addr, shunt, i_gain, i_off, v_gain);
+    std::cout << "\nStep 2: does it behave like an INA219 (configuration register write + read-back)? ";
+    if (!meter.available()) {
+        std::cout << "NO\n\nRESULT: FAIL - something answers at 0x" << std::hex << addr << std::dec << " on /dev/i2c-" << bus
+                  << " but it is not accepting the INA219 configuration (wrong chip at this address, or a noisy / marginal bus).\n";
+        pigpio_stop(pi);
+        return 1;
+    }
+    std::cout << "yes (found on /dev/i2c-" << bus << ")\n\nStep 3: reading for " << seconds << " s (10 reads per second; one line every 0.5 s)\n"
+              << "   t(s)    bus V     current mA    power W    read ms\n";
+    std::vector<double> tv, vv, iv, rv;
+    long fails = 0;
+    std::ofstream csv(csv_path);
+    csv << "time_s,bus_v,current_ma,power_w,read_ms,ok\n";
+    const auto t0 = std::chrono::steady_clock::now();
+    auto next = t0;
+    int printed = 0;
+    while (run_loop) {
+        next += std::chrono::milliseconds(100);
+        std::this_thread::sleep_until(next);
+        const auto a = std::chrono::steady_clock::now();
+        double v = 0.0, ma = 0.0;
+        const bool ok = meter.read(v, ma);
+        const double rms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count();
+        const double t = std::chrono::duration<double>(a - t0).count();
+        if (t > seconds) break;
+        if (ok) { tv.push_back(t); vv.push_back(v); iv.push_back(ma); rv.push_back(rms); } else { ++fails; }
+        csv << std::fixed << std::setprecision(3) << t << ',';
+        if (ok) csv << v << ',' << ma << ',' << (v * ma / 1000.0); else csv << ",,";
+        csv << ',' << rms << ',' << (ok ? 1 : 0) << '\n';
+        if (t >= 0.5 * printed) {
+            ++printed;
+            if (ok) std::cout << std::fixed << std::setprecision(2) << "  " << std::setw(5) << t << "  " << std::setw(8) << v << "  " << std::setw(11) << std::setprecision(0) << ma
+                              << "  " << std::setw(9) << std::setprecision(2) << (v * ma / 1000.0) << "  " << std::setw(8) << std::setprecision(2) << rms << '\n';
+            else std::cout << "  " << std::fixed << std::setprecision(2) << std::setw(5) << t << "   READ FAILED\n";
+        }
+    }
+    csv.close();
+    pigpio_stop(pi);
+    if (vv.size() < 5) { std::cout << "\nRESULT: FAIL - fewer than 5 successful reads (" << fails << " failed).\n"; return 1; }
+    auto stats = [](const std::vector<double>& x, double& mean, double& sd, double& mn, double& mx) {
+        mean = 0.0; for (double e : x) mean += e; mean /= static_cast<double>(x.size());
+        sd = 0.0; for (double e : x) sd += (e - mean) * (e - mean); sd = std::sqrt(sd / static_cast<double>(x.size()));
+        mn = *std::min_element(x.begin(), x.end()); mx = *std::max_element(x.begin(), x.end());
+    };
+    double vm, vs, vmin, vmax, im, is, imin, imax, rm, rsd, rmin, rmax;
+    stats(vv, vm, vs, vmin, vmax); stats(iv, im, is, imin, imax); stats(rv, rm, rsd, rmin, rmax);
+    std::cout << std::fixed << "\nSummary over " << vv.size() << " reads (" << fails << " failed):\n"
+              << std::setprecision(3) << "   bus voltage : mean " << vm << " V   std " << vs << "   min " << vmin << "   max " << vmax << '\n'
+              << std::setprecision(1) << "   current     : mean " << im << " mA  std " << is << "   min " << imin << "   max " << imax << '\n'
+              << std::setprecision(2) << "   power       : mean " << (vm * im / 1000.0) << " W\n"
+              << "   read time   : mean " << rm << " ms   max " << rmax << " ms\n\nChecks:\n";
+    bool pass = true;
+    auto check = [&](bool ok, const std::string& good, const std::string& bad) { std::cout << "   [" << (ok ? " OK " : "FAIL") << "] " << (ok ? good : bad) << '\n'; if (!ok) pass = false; };
+    check(fails == 0, "no failed reads", std::to_string(fails) + " reads failed: the bus is marginal (pull-ups? wire length? loose connector?)");
+    check(vm >= 0.5, "bus voltage present", "bus voltage is about 0 V: the module is not in series with a powered supply (supply + -> IN+, IN- -> the motor driver's +)");
+    check(vm <= 26.0, "bus voltage within the 26 V rating", "bus voltage above the module's 26 V rating");
+    check(im > -20.0, "current is not negative", "current is negative: IN+ and IN- are swapped");
+    check(std::abs(imax) < 8000.0 && std::abs(imin) < 8000.0, "current within the 8 A range", "current beyond the 8 A range");
+    check(vs < 0.05 && is < 20.0, "readings are stable (voltage std < 0.05 V, current std < 20 mA while idle)", "readings are noisy for a steady load: check grounding and wiring, or the motor was changing speed");
+    check(rm < 5.0 && rmax < 50.0, "reads are fast (do not disturb the control loop)", "reads are slow: the bus is slow or busy");
+    std::cout << "\n   idle current of the driver board: " << std::setprecision(1) << im << " mA at " << std::setprecision(2) << vm << " V.  Now run one step test to see the current rise with duty:\n"
+              << "       sudo env POWER=1 ./run_steps.sh map --label wmcheck --duties \"10 20\" --map-duration 10 --pause 10\n"
+              << "   (its table has 'power W' and 'current mA' columns; they must INCREASE with the duty)\n"
+              << "\nData written to " << csv_path << "\nRESULT: " << (pass ? "PASS" : "CHECK - see the FAIL lines above") << '\n';
+    return pass ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
     acquire_single_instance_lock();
     bool debug_motor = false;                       // --debug-motor: print the PWM the daemon commands (about once per second)
@@ -585,6 +785,9 @@ int main(int argc, char** argv) {
         if (a == "--debug-motor") debug_motor = true;
         if (a == "--no-lcd") no_lcd = true;
         if (a.rfind("--lcd-bus=", 0) == 0) lcd_bus_forced = std::stoi(a.substr(10));
+    }
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--test-wattmeter") return run_wattmeter_test(argc, argv);
     }
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
