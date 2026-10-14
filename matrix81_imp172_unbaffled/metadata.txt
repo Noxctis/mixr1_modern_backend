@@ -1,0 +1,6 @@
+date:    2026-10-14T20:42:15+08:00
+host:    mixr1   kernel 6.18.50+rpt-rpi-v8
+daemon:  ./mixr1_daemon   sha256 9df0ca4157605a8c   built 2026-10-14 20:38:16
+command: ./run_matrix.sh 350 40 1 --baseline-file baseline_imp172_unbaffled/baseline_gains.txt --out matrix81_imp172_unbaffled --pause 40 --max-duty 35
+flags:   --fifo --power --no-stream --abort-rpm=700 --wait-rest=60 --max-duty=35 
+note:    172 mm impeller, unbaffled, 90 mm water, 24 C      (set NOTE="water 24C, baffled, 200 mm" in front of the command to record the conditions)
