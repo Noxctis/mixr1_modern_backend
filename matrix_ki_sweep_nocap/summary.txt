@@ -1,0 +1,34 @@
+3 settings finished.  Ki varies between settings (6 to 88; see the ki column).  Acceptable = overshoot <= 5 % and settling <= 0.3 s.
+Typical repeat-to-repeat spread of PWM jitter: nan % duty -> differences smaller than this are NOT real.
+
+=== BEST ACCEPTABLE SETTINGS (lowest PWM jitter), top 8 ===
+setting                  n      kp      ki  alpha  pwmJit%   vs A  rpmStd rise10-90 power W   ovr% settle_s
+-----------------------------------------------------------------------------------------------------------
+  (none meet the limits - relax MAX_OVERSHOOT / MAX_SETTLE)
+
+=== ALL SETTINGS ranked by PWM jitter (top 20; check overshoot!) ===
+setting                  n      kp      ki  alpha  pwmJit%   vs A  rpmStd rise10-90 power W   ovr% settle_s
+-----------------------------------------------------------------------------------------------------------
+G004_kp2.629_ki6_a0.2    1   2.629       6   0.20    0.000           0.00   -1.00    0.00   0.00    -1.00
+G020_kp3.813_ki25_a0.2   1   3.813      25   0.20    0.104           5.46    0.91   48.70  28.88    24.96
+G012_kp2.629_ki88_a0.2   1   2.629      88   0.20    0.111           6.13    0.07   49.85  31.73    24.80
+
+=== PWM jitter, % duty, alpha = 0.2 (rows: Kp, columns: Ki; * = acceptable) ===
+   Kp \ Ki      88      25       6
+    3.813       .  0.104        .
+    2.629  0.111        .  0.000 
+
+=== Startup overshoot, %, alpha = 0.2 (rows: Kp, columns: Ki; * = acceptable) ===
+   Kp \ Ki      88      25       6
+    3.813       .   28.9        .
+    2.629   31.7        .    0.0 
+
+=== Settling time to +-5 %, s, alpha = 0.2 (rows: Kp, columns: Ki; * = acceptable) ===
+   Kp \ Ki      88      25       6
+    3.813       .  24.96        .
+    2.629  24.80        .  -1.00 
+
+=== REFERENCE STEP (closed loop, small step around the operating point; valid = the PWM never hit the duty cap) ===
+setting                  n     kp  alpha  overshoot% rise10-90 settle_s peak duty%  sat_s  valid
+----------------------------------------------------------------------------------------------------
+G020_kp3.813_ki25_a0.2   1   3.81   0.20        17.6      1.24     4.95       88.4   0.00  yes
