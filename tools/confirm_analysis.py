@@ -104,6 +104,8 @@ def main():
     ap.add_argument("--max-step-overshoot-rise", type=float, default=5.0, help="a setting is rejected if its step overshoot exceeds the baseline's by more than this many points")
     ap.add_argument("--max-settle-factor", type=float, default=1.5, help="a setting is rejected if its step settling time exceeds the baseline's by more than this factor")
     ap.add_argument("--max-ripple-rise-pct", type=float, default=15.0, help="a setting is rejected if its speed ripple exceeds the baseline's by more than this percentage")
+    ap.add_argument("--abs-step-overshoot", type=float, default=None, help="ABSOLUTE limit on the step overshoot (%% of the step); replaces the 'relative to baseline' overshoot rule")
+    ap.add_argument("--abs-step-settle", type=float, default=None, help="ABSOLUTE limit on the step settling time (s, +-5 %% of the step); replaces the 'relative to baseline' settling rule. A setting that never settles fails it")
     args = ap.parse_args()
     out = args.out or os.path.join(args.folders[0] if os.path.isdir(args.folders[0]) else os.path.dirname(args.folders[0]) or ".", "confirm")
     os.makedirs(out, exist_ok=True)
@@ -221,7 +223,13 @@ def main():
     P("  1. REJECT a setting with a glitch in more than 20 % of its runs, or whose reference step hit the duty cap.")
     P(f"  2. REJECT if its speed ripple (rpm_std) is more than {args.max_ripple_rise_pct:g} % above the baseline's.")
     if any(m[0] == "rs_overshoot_pct" for m in have):
-        P(f"  3. REJECT if its step overshoot is more than {args.max_step_overshoot_rise:g} points above the baseline's, or its step settling is more than {args.max_settle_factor:g}x the baseline's.")
+        if args.abs_step_overshoot is not None or args.abs_step_settle is not None:
+            lim = []
+            if args.abs_step_overshoot is not None: lim.append(f"step overshoot above {args.abs_step_overshoot:g} % of the step")
+            if args.abs_step_settle is not None: lim.append(f"step settling (+-5 %) longer than {args.abs_step_settle:g} s, or never settling")
+            P("  3. REJECT (YOUR targets, not relative to the baseline): " + "; ".join(lim) + ".")
+        else:
+            P(f"  3. REJECT if its step overshoot is more than {args.max_step_overshoot_rise:g} points above the baseline's, or its step settling is more than {args.max_settle_factor:g}x the baseline's.")
     P("  4. Among the rest, prefer the LOWEST PWM jitter; settings whose jitter differs by less than the minimum detectable difference are TIED,")
     P("     and a tie is broken by the lower step overshoot (if measured), then the lower speed ripple.")
     P("")
@@ -241,12 +249,23 @@ def main():
             why.append("every step run hit the duty cap (invalid)")
         if base.get("rpm_std") == base.get("rpm_std") and r.get("rpm_std", np.nan) == r.get("rpm_std", np.nan) and r["rpm_std"] > base["rpm_std"] * (1 + args.max_ripple_rise_pct / 100):
             why.append(f"speed ripple {r['rpm_std']:.2f} > baseline {base['rpm_std']:.2f} +{args.max_ripple_rise_pct:g} %")
-        if r.get("rs_overshoot_pct", np.nan) == r.get("rs_overshoot_pct", np.nan) and base.get("rs_overshoot_pct", np.nan) == base.get("rs_overshoot_pct", np.nan):
-            if r["rs_overshoot_pct"] > base["rs_overshoot_pct"] + args.max_step_overshoot_rise:
-                why.append(f"step overshoot {r['rs_overshoot_pct']:.1f} % vs baseline {base['rs_overshoot_pct']:.1f} %")
-        if r.get("rs_settle_s", np.nan) == r.get("rs_settle_s", np.nan) and base.get("rs_settle_s", np.nan) == base.get("rs_settle_s", np.nan) and base["rs_settle_s"] > 0:
-            if r["rs_settle_s"] > base["rs_settle_s"] * args.max_settle_factor:
-                why.append(f"step settling {r['rs_settle_s']:.2f} s vs baseline {base['rs_settle_s']:.2f} s")
+        use_abs = args.abs_step_overshoot is not None or args.abs_step_settle is not None
+        if use_abs:
+            if args.abs_step_overshoot is not None and r.get("rs_overshoot_pct", np.nan) == r.get("rs_overshoot_pct", np.nan) and r["rs_overshoot_pct"] > args.abs_step_overshoot:
+                why.append(f"step overshoot {r['rs_overshoot_pct']:.1f} % > your limit {args.abs_step_overshoot:g} %")
+            if args.abs_step_settle is not None:
+                st_ = r.get("rs_settle_s", np.nan)
+                if st_ != st_:
+                    why.append("never settled within the run (or the step hit the duty cap)")
+                elif st_ > args.abs_step_settle:
+                    why.append(f"step settling {st_:.2f} s > your limit {args.abs_step_settle:g} s")
+        else:
+            if r.get("rs_overshoot_pct", np.nan) == r.get("rs_overshoot_pct", np.nan) and base.get("rs_overshoot_pct", np.nan) == base.get("rs_overshoot_pct", np.nan):
+                if r["rs_overshoot_pct"] > base["rs_overshoot_pct"] + args.max_step_overshoot_rise:
+                    why.append(f"step overshoot {r['rs_overshoot_pct']:.1f} % vs baseline {base['rs_overshoot_pct']:.1f} %")
+            if r.get("rs_settle_s", np.nan) == r.get("rs_settle_s", np.nan) and base.get("rs_settle_s", np.nan) == base.get("rs_settle_s", np.nan) and base["rs_settle_s"] > 0:
+                if r["rs_settle_s"] > base["rs_settle_s"] * args.max_settle_factor:
+                    why.append(f"step settling {r['rs_settle_s']:.2f} s vs baseline {base['rs_settle_s']:.2f} s")
         if r.get("pwm_jitter_pct", np.nan) == r.get("pwm_jitter_pct", np.nan) and jb == jb:
             need = mdd_j if mdd_j == mdd_j else 0.0
             if jb - r["pwm_jitter_pct"] <= need:

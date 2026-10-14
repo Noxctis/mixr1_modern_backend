@@ -309,7 +309,7 @@ def fg(x):
 
 
 def fk(x):
-    return f"{x:.1f}"
+    return f"{x:.4g}"                      # 4 significant digits: Ki 1.454 or 47.18, never '1.5'
 
 
 def mn(s):
@@ -1010,7 +1010,7 @@ def grid_slice(known, base, args, out, col_of, col_label, axes_title, fixed_text
         nbok, nbtot = nb_stats(c)
         rv = mean_m(c, "rpm_std")
         rr = "\u2014" if (isb or not base or bsr != bsr) else (f"+{(rv / bsr - 1) * 100:.0f} %" if rv >= bsr else f"{MINUS}{(1 - rv / bsr) * 100:.0f} %")
-        data.append(["base" if isb else str(rank), c.name, f"{c.kp:.2f}", f"{c.ki:.1f}", fg(c.alpha), f"{j:.3f}", "\u2014" if isb or not base else f"{MINUS}{(1 - j / bj) * 100:.0f} %",
+        data.append(["base" if isb else str(rank), c.name, f"{c.kp:.4g}", f"{c.ki:.4g}", fg(c.alpha), f"{j:.3f}", "\u2014" if isb or not base else f"{MINUS}{(1 - j / bj) * 100:.0f} %",
                      f"{mean_m(c, 'overshoot'):.1f}", f"{mean_m(c, 'settle'):.2f}", f"{rv:.2f}", rr, "\u2014" if isb else f"{nbok} of {nbtot}", str(len(c.rows))])
         edge = (not isb) and nbtot > 0 and nbok < 0.75 * nbtot
         colors.append("#E3EAF4" if isb else ("#FDF2DC" if edge else "#E8F6EF"))
@@ -1063,7 +1063,7 @@ def grid_section(cfgs, base, shown, args, out):
         isb = base is not None and c is base
         j, rv = mean_m(c, "jitter"), mean_m(c, "rpm_std")
         rr = "\u2014" if (isb or not base or bsr != bsr) else (f"+{(rv / bsr - 1) * 100:.0f} %" if rv >= bsr else f"{MINUS}{(1 - rv / bsr) * 100:.0f} %")
-        data.append(["base" if isb else str(n if base else n + 1), c.name, f"{c.kp:.2f}", f"{c.ki:.1f}", fg(c.alpha), f"{j:.3f}", "\u2014" if isb or not base else f"{MINUS}{(1 - j / bj) * 100:.0f} %",
+        data.append(["base" if isb else str(n if base else n + 1), c.name, f"{c.kp:.4g}", f"{c.ki:.4g}", fg(c.alpha), f"{j:.3f}", "\u2014" if isb or not base else f"{MINUS}{(1 - j / bj) * 100:.0f} %",
                      f"{mean_m(c, 'overshoot'):.1f}", f"{mean_m(c, 'settle'):.2f}", f"{rv:.2f}", rr, str(len(c.rows))])
         colors.append("#E3EAF4" if isb else "#E8F6EF")
         csvr.append(dict(rank=0 if isb else (n if base else n + 1), name=c.name, kp=c.kp, ki=c.ki, alpha=c.alpha, jitter_pct=j, overshoot_pct=mean_m(c, "overshoot"), settle_s=mean_m(c, "settle"), rpm_std=rv, runs=len(c.rows)))
@@ -1401,7 +1401,7 @@ def pi_section(runs, raw_rows, args, out):
         j = mean_m(c, "jitter")
         what = "Baseline (original design)" if c is base else (label_of(c, base).split(": ", 1)[-1] if c.known else "(gains unknown: name the file kp..)")
         vs = "\u2014" if (c is base or not base or not c.known) else (f"{MINUS}{abs(j / bj - 1) * 100:.0f} %" if j < bj else f"+{(j / bj - 1) * 100:.0f} %")
-        data_t.append([c.id, what, f"{c.kp:.2f}" if c.known else "\u2014", f"{c.ki:.1f}" if c.known else "\u2014",
+        data_t.append([c.id, what, f"{c.kp:.4g}" if c.known else "\u2014", f"{c.ki:.4g}" if c.known else "\u2014",
                        ("1.0 (off)" if abs(c.alpha - 1) < 1e-6 else fg(c.alpha)) if c.known else "\u2014", f"{j:.3f}", vs,
                        f"{mean_m(c, 'overshoot'):.1f}", ("\u2014" if mean_m(c, "rise") != mean_m(c, "rise") else f"{mean_m(c, 'rise'):.2f}"), f"{mean_m(c, 'settle'):.2f}", f"{mean_m(c, 'rpm_std'):.2f}",
                        "\u2014" if (c is base or not base or not c.known) else ("\u2248 0 %" if abs(mean_m(c, "rpm_std") / bs - 1) < 0.005 else (f"{MINUS}{abs(mean_m(c, 'rpm_std') / bs - 1) * 100:.0f} %" if mean_m(c, "rpm_std") < bs else f"+{(mean_m(c, 'rpm_std') / bs - 1) * 100:.0f} %")),

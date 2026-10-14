@@ -174,6 +174,16 @@ def main():
         print("\n!! ON THE EDGE: " + ", ".join(f"{r['duty_pct']:.0f}% (the quick stage delivers {r['fast_share_pct']:.1f} % of the final speed)" for r in edge)
               + ". The 63.2 %-of-total reading jumps from about 0.05 s to about 1 s (Ki from ~47 to ~2) when that share falls below 63.2 %, so these steps are close to the cliff. "
               "Kp = 1/K is steady; Ki is the uncertain one. Check with  --tau-method quick  (reads the quick stage on its own, no cliff) and with more repeats.")
+    shares = [r["fast_share_pct"] for r in near if r["fast_share_pct"] == r["fast_share_pct"]]
+    if shares and float(np.median(shares)) < 58.0 and args.tau_method == "total":
+        kp_m = float(np.median([1.0 / r["K"] for r in near]))
+        ki_tot = float(np.median([(1.0 / r["K"]) / r["tau_s"] for r in near]))
+        qs = [(1.0 / r["K"]) / r["tau_quick_s"] for r in near if r["tau_quick_s"] == r["tau_quick_s"] and r["tau_quick_s"] > 0]
+        ki_q = float(np.median(qs)) if qs else float("nan")
+        print(f"\n!! TWO-STAGE PLANT: at these steps the quick stage delivers only {np.median(shares):.0f} % of the final speed (the rest is a slow creep of seconds).")
+        print(f"   The time constant therefore depends on WHICH stage you read: Ki = {ki_tot:.3g} from the total response (63.2 % of the whole change, the slow creep)")
+        print(f"   but Ki = {ki_q:.3g} from the quick stage alone -- a factor of {ki_q / ki_tot:.0f}. Neither single number is 'the' answer: with ONE time constant the method cannot describe this plant.")
+        print(f"   Kp = 1/K = {kp_m:.3g} is steady. Decide Ki with a short Ki sweep (see the advice in the thesis procedure), not from one reading.")
     print("\nHOW THE BASELINE IS CHOSEN: every step above is a run from 0 to X % duty. For each run, K comes from its STEADY STATE (the last 3 s), and theta and tau from its early response.")
     print("  The numbers for every duty are in the table. The baseline is the MEDIAN over the steps whose steady-state speed is closest to the speed you will actually run at, because the plant is not")
     print("  exactly linear (K and tau change with speed) and the controller works at that speed. Use --all-steps to use every run, or --duties \"14 18 22\" to pick them yourself.")
@@ -186,7 +196,7 @@ def main():
             kps.append(kp)
             kis.append(ki)
         if rule == "yourformula":
-            desc2 = "Kp = 1/K, Ki = Kp/tau   (pole-zero cancellation = IMC with lambda = tau and the dead time ignored; the professor's method)"
+            desc2 = "Kp = 1/K, Ki = Kp/tau   (pole-zero cancellation = IMC with lambda = tau and the dead time ignored; this formula reproduces the ORIGINAL air gains 1.5641 / 41.2249 for K = 0.6393, A = 26.36 /s; whether it is the method your professor wants is for them to confirm)"
         elif rule == "imc":
             desc2 = ((f"IMC (Rivera): Kp = tau/(K (lambda + theta)), Ki = Kp/tau, lambda = {args.lambda_s:g} s for every step, i.e. closed-loop bandwidth about {1 / args.lambda_s:.3g} rad/s")
                       if args.lambda_s else

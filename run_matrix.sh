@@ -37,15 +37,151 @@
 #   ./run_matrix.sh status [folder]       is it running? how many runs are done? last log lines
 #   tail -f <folder>/run.log              watch it live (Ctrl+C only stops the watching)
 #   sudo ./run_matrix.sh stop [folder]    stop it cleanly (motor off, summary of finished runs written)
+#   MAX_OVERSHOOT=13 MAX_SETTLE=20 ./run_matrix.sh summary <folder>    RE-RANK finished results with other limits (seconds; nothing is re-run)
 # DETACH=0 keeps it in the foreground instead (then Ctrl+C or a dropped connection stops it cleanly).
 #
 # Keep the physical conditions identical for the whole run (same load, e.g. impeller in water).
 # Unattended motor runs: keep the tank secure and someone nearby; the speed limit (ABORT_RPM) protects against runaways.
 set -u
 
+# ---------------------------------------------------------------- summary (also runs on Ctrl+C / exit)
+summarize() {
+  trap - EXIT
+  # the daemon ran under sudo: give the folder back to the normal user so mixr_figures.py can write into it
+  [ -n "${SUDO_USER:-}" ] && chown -R "$SUDO_USER" "$OUT" 2>/dev/null
+  [ -s "$RAW" ] || { echo "No finished runs to summarise."; return; }
+  python3 - "$RAW" "$OUT" "$MAX_OVERSHOOT" "$MAX_SETTLE" "$TOP" "$KI" "$TARGET" "$DUR" << 'PY'
+import sys, os, collections
+raw, out, max_ovr, max_settle, top, ki0 = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), int(sys.argv[5]), float(sys.argv[6])
+tgt_arg, dur_arg = sys.argv[7], sys.argv[8]
+groups = collections.OrderedDict()
+for ln in open(raw):
+    p = ln.split()
+    if not p: continue
+    kv = {}
+    for x in p[1:]:
+        k, _, v = x.partition('=')
+        try: kv[k] = float(v)
+        except ValueError: pass                      # text fields (power_status=ok ...) are not numbers
+    groups.setdefault(p[0], []).append(kv)
+cols = ['kp', 'ki', 'alpha', 'pwm_jitter_pct', 'pwm_std_pct', 'rpm_std', 'sse', 'overshoot_pct', 'settle5_s']
+opt_cols = ['rise10_90_s', 'settle2_s', 'p_mean_W', 'i_mean_mA', 'v_mean_V', 'rs_overshoot_pct', 'rs_rise_s', 'rs_settle_s', 'rs_peak_duty_pct', 'rs_sat_s', 'rs_rpm_std', 'rs_pwm_jitter_pct']          # only in results from the newer daemon
+rows = []
+for name, runs in groups.items():
+    a = {c: sum(r[c] for r in runs) / len(runs) for c in cols}
+    for c in opt_cols:
+        a[c] = sum(r[c] for r in runs) / len(runs) if all(c in r for r in runs) else float('nan')
+    a['name'], a['n'] = name, len(runs)
+    a['spread'] = (max(r['pwm_jitter_pct'] for r in runs) - min(r['pwm_jitter_pct'] for r in runs)) if len(runs) > 1 else float('nan')
+    rows.append(a)
+base = next((r for r in rows if r['name'] == 'A_baseline'), None)
+ok = lambda r: r['overshoot_pct'] <= max_ovr and 0 <= r['settle5_s'] <= max_settle
+feas = sorted([r for r in rows if ok(r)], key=lambda r: r['pwm_jitter_pct'])
+allr = sorted(rows, key=lambda r: r['pwm_jitter_pct'])
+spreads = [r['spread'] for r in rows if r['n'] > 1 and r['spread'] == r['spread']]
+noise = sum(spreads) / len(spreads) if spreads else float('nan')
+
+def g4(x):
+    return f"{x:.4g}"            # 4 significant digits: Kp 2.629, Ki 1.454 (47.18), Kp 0.6573 - never 'Ki 1.5'
+
+def line(r):
+    d = '' if (base is None or r is base or not base['pwm_jitter_pct']) else f"{(r['pwm_jitter_pct'] / base['pwm_jitter_pct'] - 1) * 100:+5.0f}%"
+    rise = f"{r['rise10_90_s']:>7.2f}" if r['rise10_90_s'] == r['rise10_90_s'] else f"{'-':>7}"
+    pwr = f"{r['p_mean_W']:>7.2f}" if r['p_mean_W'] == r['p_mean_W'] else f"{'-':>7}"
+    return (f"{r['name']:<24}{r['n']:>2} {g4(r['kp']):>7} {g4(r['ki']):>7} {r['alpha']:>6.2f} {r['pwm_jitter_pct']:>8.3f} {d:>6} {r['rpm_std']:>7.2f} {rise} {pwr} "
+            f"{r['overshoot_pct']:>6.2f} {r['settle5_s']:>8.2f}")
+hdr = f"{'setting':<24}{'n':>2} {'kp':>7} {'ki':>7} {'alpha':>6} {'pwmJit%':>8} {'vs A':>6} {'rpmStd':>7} {'rise10-90':>7} {'power W':>7} {'ovr%':>6} {'settle_s':>8}"
+kis = sorted({round(r['ki'], 4) for r in rows})
+ki_txt = f"Ki fixed at {kis[0]:g}" if len(kis) == 1 else f"Ki varies between settings ({kis[0]:g} to {kis[-1]:g}; see the ki column)"
+L = [f"{len(rows)} settings finished.  {ki_txt}.  Acceptable = overshoot <= {max_ovr:g} % and settling <= {max_settle:g} s.",
+     f"Typical repeat-to-repeat spread of PWM jitter: {noise:.3f} % duty -> differences smaller than this are NOT real.", "",
+     f"=== BEST ACCEPTABLE SETTINGS (lowest PWM jitter), top {top} ===", hdr, "-" * len(hdr)]
+L += [line(r) for r in feas[:top]] or ["  (none meet the limits - relax MAX_OVERSHOOT / MAX_SETTLE)"]
+if base: L += ["", "baseline for reference:", line(base)]
+L += ["", "=== ALL SETTINGS ranked by PWM jitter (top 20; check overshoot!) ===", hdr, "-" * len(hdr)] + [line(r) for r in allr[:20]]
+
+# grid views: Kp (rows) x alpha (columns), only settings that used the fixed Ki
+g = [r for r in rows if abs(r['ki'] - ki0) < 0.05]
+kps = sorted({round(r['kp'], 4) for r in g}, reverse=True); als = sorted({round(r['alpha'], 3) for r in g}, reverse=True)
+look = {(round(r['kp'], 4), round(r['alpha'], 3)): r for r in g}
+kis = sorted({round(r['ki'], 2) for r in rows})
+def grid(title, key, fmt):
+    t = ["", f"=== {title} (rows: Kp, columns: alpha; * = acceptable) ===", "   Kp/alpha" + "".join(f"{a:>8g}" for a in als)]
+    for k in kps:
+        cells = []
+        for a in als:
+            r = look.get((k, a))
+            cells.append(f"{((fmt % r[key]) + ('*' if ok(r) else ' ')) if r else '.':>8}")
+        t.append(f"{k:>9.3f}" + "".join(cells))
+    return t
+if len(kps) > 1 and len(als) > 1:
+    L += grid("PWM jitter, % duty", 'pwm_jitter_pct', "%.3f") + grid("Startup overshoot, %", 'overshoot_pct', "%.1f") + grid("Settling time to +-5 %, s", 'settle5_s', "%.2f")
+# Ki varies: one Kp x Ki matrix per alpha
+if len(kis) > 1:
+    def grid2(sub, a_, title, key, fmt):
+        kps2 = sorted({round(r['kp'], 4) for r in sub}, reverse=True); kis2 = sorted({round(r['ki'], 2) for r in sub}, reverse=True)
+        lk = {(round(r['kp'], 4), round(r['ki'], 2)): r for r in sub}
+        t = ["", f"=== {title}, alpha = {a_:g} (rows: Kp, columns: Ki; * = acceptable) ===", "   Kp \\ Ki" + "".join(f"{x:>8g}" for x in kis2)]
+        for k in kps2:
+            cells = []
+            for x in kis2:
+                r = lk.get((k, x))
+                cells.append(f"{((fmt % r[key]) + ('*' if ok(r) else ' ')) if r else '.':>8}")
+            t.append(f"{k:>9.3f}" + "".join(cells))
+        return t
+    for a_ in sorted({round(r['alpha'], 3) for r in rows}, reverse=True):
+        sub = [r for r in rows if round(r['alpha'], 3) == a_]
+        if len({round(r['kp'], 4) for r in sub}) > 1 and len({round(r['ki'], 2) for r in sub}) > 1:
+            L += grid2(sub, a_, "PWM jitter, % duty", 'pwm_jitter_pct', "%.3f") + grid2(sub, a_, "Startup overshoot, %", 'overshoot_pct', "%.1f") + grid2(sub, a_, "Settling time to +-5 %, s", 'settle5_s', "%.2f")
+rs_rows = [r for r in rows if r.get('rs_overshoot_pct') == r.get('rs_overshoot_pct')]
+if rs_rows:
+    L += ["", "=== REFERENCE STEP (closed loop, small step around the operating point; valid = the PWM never hit the duty cap) ===",
+          f"{'setting':<24}{'n':>2} {'kp':>6} {'alpha':>6} {'overshoot%':>11} {'rise10-90':>9} {'settle_s':>8} {'peak duty%':>10} {'sat_s':>6}  valid", "-" * 100]
+    for r_ in sorted(rs_rows, key=lambda r_: r_['rs_overshoot_pct']):
+        L.append(f"{r_['name']:<24}{r_['n']:>2} {r_['kp']:>6.2f} {r_['alpha']:>6.2f} {r_['rs_overshoot_pct']:>11.1f} {r_['rs_rise_s']:>9.2f} {r_['rs_settle_s']:>8.2f} {r_['rs_peak_duty_pct']:>10.1f} {r_['rs_sat_s']:>6.2f}  "
+                 + ('yes' if r_['rs_sat_s'] <= 0.05 else 'NO (hit the cap)'))
+open(os.path.join(out, 'summary.txt'), 'w').write("\n".join(L) + "\n")
+print("\n" + "\n".join(L))
+
+# the shortlist, in the format that CONFIGS_FILE reads: re-run it with more repeats to confirm
+conf = ([base] if base else []) + [r for r in feas[:top] if r is not base]
+exact = {}                                     # the daemon prints 3 decimals; the shortlist must use the exact tested values
+try:
+    for ln in open(os.path.join(out, 'settings_tested.txt')):
+        p = ln.split()
+        if len(p) == 4: exact[p[0]] = p[1:]
+except OSError:
+    pass
+with open(os.path.join(out, 'confirm_list.txt'), 'w') as f:
+    f.write("# name kp ki alpha   (confirm with:  sudo ./run_matrix.sh %s %s 5 --configs %s/confirm_list.txt --out %s_confirm)\n" % (tgt_arg, dur_arg, out, out))
+    for r in conf:
+        kp, ki, al = exact.get(r['name'], [f"{r['kp']:g}", f"{r['ki']:g}", f"{r['alpha']:g}"])
+        f.write(f"{r['name']} {kp} {ki} {al}\n")
+print(f"\nShortlist written to {out}/confirm_list.txt")
+PY
+  if [ -s "$ABORTS" ]; then echo; echo "Runs stopped by the speed limit (flagged, left out of the results): see $ABORTS"; fi
+  echo "All results: $OUT   (feed this folder to mixr_figures.py)"
+  if [ "${SUMMARY_ONLY:-0}" != 1 ]; then echo "[$(date '+%F %T')] run ended"; rm -f "$OUT/run.pid"; fi
+}
+
 # ---------------------------------------------------------------- subcommands: status / stop
 latest_folder() { ls -dt matrix_* 2>/dev/null | head -1; }
 case "${1:-}" in
+  summary)
+    d="${2:-$(latest_folder)}"; d="${d%/}"
+    [ -s "${d:-/nonexistent}/results_raw.txt" ] || { echo "No results_raw.txt in '${d:-}' (give the folder: ./run_matrix.sh summary <folder>)"; exit 1; }
+    pid=""; [ -f "$d/run.pid" ] && pid=$(cat "$d/run.pid")
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then echo "A run is still active in $d: wait for it, or stop it first."; exit 1; fi
+    SUMMARY_ONLY=1; OUT="$d"; RAW="$d/results_raw.txt"; ABORTS="$d/aborted_runs.txt"
+    first=$(head -1 "$RAW")
+    TARGET=$(echo "$first" | grep -o ' target=[0-9.]*' | head -1 | cut -d= -f2 | sed 's/\.0*$//')
+    KI=$(echo "$first" | grep -o ' ki=[0-9.]*' | head -1 | cut -d= -f2)
+    DUR=$(grep -m1 -o 'duration=[0-9.]*' "$d/run.log" 2>/dev/null | head -1 | cut -d= -f2); DUR="${DUR:-?}"
+    # the limits: from the environment, else the ones this run used (limits.txt), else the defaults
+    lim() { v=$(grep -m1 "^$1=" "$d/limits.txt" 2>/dev/null | cut -d= -f2); echo "${v:-$2}"; }
+    MAX_OVERSHOOT="${MAX_OVERSHOOT:-$(lim max_overshoot 5)}"; MAX_SETTLE="${MAX_SETTLE:-$(lim max_settle 0.3)}"; TOP="${TOP:-$(lim top 8)}"
+    echo "Re-ranking $d with MAX_OVERSHOOT=$MAX_OVERSHOOT MAX_SETTLE=$MAX_SETTLE (nothing is re-run; the motor is not touched)"
+    summarize; exit 0 ;;
   status)
     d="${2:-$(latest_folder)}"; [ -d "${d:-/nonexistent}" ] || { echo "No run folder found (give it: ./run_matrix.sh status <folder>)"; exit 1; }
     pid=""; [ -f "$d/run.pid" ] && pid=$(cat "$d/run.pid")
@@ -266,123 +402,6 @@ if [ "${MIXR_DETACHED:-0}" != "1" ] && [ "${DETACH:-1}" = "1" ] && command -v se
   exit 0
 fi
 
-# ---------------------------------------------------------------- summary (also runs on Ctrl+C / exit)
-summarize() {
-  trap - EXIT
-  # the daemon ran under sudo: give the folder back to the normal user so mixr_figures.py can write into it
-  [ -n "${SUDO_USER:-}" ] && chown -R "$SUDO_USER" "$OUT" 2>/dev/null
-  [ -s "$RAW" ] || { echo "No finished runs to summarise."; return; }
-  python3 - "$RAW" "$OUT" "$MAX_OVERSHOOT" "$MAX_SETTLE" "$TOP" "$KI" "$TARGET" "$DUR" << 'PY'
-import sys, os, collections
-raw, out, max_ovr, max_settle, top, ki0 = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), int(sys.argv[5]), float(sys.argv[6])
-tgt_arg, dur_arg = sys.argv[7], sys.argv[8]
-groups = collections.OrderedDict()
-for ln in open(raw):
-    p = ln.split()
-    if not p: continue
-    kv = {}
-    for x in p[1:]:
-        k, _, v = x.partition('=')
-        try: kv[k] = float(v)
-        except ValueError: pass                      # text fields (power_status=ok ...) are not numbers
-    groups.setdefault(p[0], []).append(kv)
-cols = ['kp', 'ki', 'alpha', 'pwm_jitter_pct', 'pwm_std_pct', 'rpm_std', 'sse', 'overshoot_pct', 'settle5_s']
-opt_cols = ['rise10_90_s', 'settle2_s', 'p_mean_W', 'i_mean_mA', 'v_mean_V', 'rs_overshoot_pct', 'rs_rise_s', 'rs_settle_s', 'rs_peak_duty_pct', 'rs_sat_s', 'rs_rpm_std', 'rs_pwm_jitter_pct']          # only in results from the newer daemon
-rows = []
-for name, runs in groups.items():
-    a = {c: sum(r[c] for r in runs) / len(runs) for c in cols}
-    for c in opt_cols:
-        a[c] = sum(r[c] for r in runs) / len(runs) if all(c in r for r in runs) else float('nan')
-    a['name'], a['n'] = name, len(runs)
-    a['spread'] = (max(r['pwm_jitter_pct'] for r in runs) - min(r['pwm_jitter_pct'] for r in runs)) if len(runs) > 1 else float('nan')
-    rows.append(a)
-base = next((r for r in rows if r['name'] == 'A_baseline'), None)
-ok = lambda r: r['overshoot_pct'] <= max_ovr and 0 <= r['settle5_s'] <= max_settle
-feas = sorted([r for r in rows if ok(r)], key=lambda r: r['pwm_jitter_pct'])
-allr = sorted(rows, key=lambda r: r['pwm_jitter_pct'])
-spreads = [r['spread'] for r in rows if r['n'] > 1 and r['spread'] == r['spread']]
-noise = sum(spreads) / len(spreads) if spreads else float('nan')
-
-def line(r):
-    d = '' if (base is None or r is base or not base['pwm_jitter_pct']) else f"{(r['pwm_jitter_pct'] / base['pwm_jitter_pct'] - 1) * 100:+5.0f}%"
-    rise = f"{r['rise10_90_s']:>7.2f}" if r['rise10_90_s'] == r['rise10_90_s'] else f"{'-':>7}"
-    pwr = f"{r['p_mean_W']:>7.2f}" if r['p_mean_W'] == r['p_mean_W'] else f"{'-':>7}"
-    return (f"{r['name']:<24}{r['n']:>2} {r['kp']:>6.2f} {r['ki']:>6.1f} {r['alpha']:>6.2f} {r['pwm_jitter_pct']:>8.3f} {d:>6} {r['rpm_std']:>7.2f} {rise} {pwr} "
-            f"{r['overshoot_pct']:>6.2f} {r['settle5_s']:>8.2f}")
-hdr = f"{'setting':<24}{'n':>2} {'kp':>6} {'ki':>6} {'alpha':>6} {'pwmJit%':>8} {'vs A':>6} {'rpmStd':>7} {'rise10-90':>7} {'power W':>7} {'ovr%':>6} {'settle_s':>8}"
-kis = sorted({round(r['ki'], 2) for r in rows})
-ki_txt = f"Ki fixed at {kis[0]:g}" if len(kis) == 1 else f"Ki varies between settings ({kis[0]:g} to {kis[-1]:g}; see the ki column)"
-L = [f"{len(rows)} settings finished.  {ki_txt}.  Acceptable = overshoot <= {max_ovr:g} % and settling <= {max_settle:g} s.",
-     f"Typical repeat-to-repeat spread of PWM jitter: {noise:.3f} % duty -> differences smaller than this are NOT real.", "",
-     f"=== BEST ACCEPTABLE SETTINGS (lowest PWM jitter), top {top} ===", hdr, "-" * len(hdr)]
-L += [line(r) for r in feas[:top]] or ["  (none meet the limits - relax MAX_OVERSHOOT / MAX_SETTLE)"]
-if base: L += ["", "baseline for reference:", line(base)]
-L += ["", "=== ALL SETTINGS ranked by PWM jitter (top 20; check overshoot!) ===", hdr, "-" * len(hdr)] + [line(r) for r in allr[:20]]
-
-# grid views: Kp (rows) x alpha (columns), only settings that used the fixed Ki
-g = [r for r in rows if abs(r['ki'] - ki0) < 0.05]
-kps = sorted({round(r['kp'], 4) for r in g}, reverse=True); als = sorted({round(r['alpha'], 3) for r in g}, reverse=True)
-look = {(round(r['kp'], 4), round(r['alpha'], 3)): r for r in g}
-kis = sorted({round(r['ki'], 2) for r in rows})
-def grid(title, key, fmt):
-    t = ["", f"=== {title} (rows: Kp, columns: alpha; * = acceptable) ===", "   Kp/alpha" + "".join(f"{a:>8g}" for a in als)]
-    for k in kps:
-        cells = []
-        for a in als:
-            r = look.get((k, a))
-            cells.append(f"{((fmt % r[key]) + ('*' if ok(r) else ' ')) if r else '.':>8}")
-        t.append(f"{k:>9.3f}" + "".join(cells))
-    return t
-if len(kps) > 1 and len(als) > 1:
-    L += grid("PWM jitter, % duty", 'pwm_jitter_pct', "%.3f") + grid("Startup overshoot, %", 'overshoot_pct', "%.1f") + grid("Settling time to +-5 %, s", 'settle5_s', "%.2f")
-# Ki varies: one Kp x Ki matrix per alpha
-if len(kis) > 1:
-    def grid2(sub, a_, title, key, fmt):
-        kps2 = sorted({round(r['kp'], 4) for r in sub}, reverse=True); kis2 = sorted({round(r['ki'], 2) for r in sub}, reverse=True)
-        lk = {(round(r['kp'], 4), round(r['ki'], 2)): r for r in sub}
-        t = ["", f"=== {title}, alpha = {a_:g} (rows: Kp, columns: Ki; * = acceptable) ===", "   Kp \\ Ki" + "".join(f"{x:>8g}" for x in kis2)]
-        for k in kps2:
-            cells = []
-            for x in kis2:
-                r = lk.get((k, x))
-                cells.append(f"{((fmt % r[key]) + ('*' if ok(r) else ' ')) if r else '.':>8}")
-            t.append(f"{k:>9.3f}" + "".join(cells))
-        return t
-    for a_ in sorted({round(r['alpha'], 3) for r in rows}, reverse=True):
-        sub = [r for r in rows if round(r['alpha'], 3) == a_]
-        if len({round(r['kp'], 4) for r in sub}) > 1 and len({round(r['ki'], 2) for r in sub}) > 1:
-            L += grid2(sub, a_, "PWM jitter, % duty", 'pwm_jitter_pct', "%.3f") + grid2(sub, a_, "Startup overshoot, %", 'overshoot_pct', "%.1f") + grid2(sub, a_, "Settling time to +-5 %, s", 'settle5_s', "%.2f")
-rs_rows = [r for r in rows if r.get('rs_overshoot_pct') == r.get('rs_overshoot_pct')]
-if rs_rows:
-    L += ["", "=== REFERENCE STEP (closed loop, small step around the operating point; valid = the PWM never hit the duty cap) ===",
-          f"{'setting':<24}{'n':>2} {'kp':>6} {'alpha':>6} {'overshoot%':>11} {'rise10-90':>9} {'settle_s':>8} {'peak duty%':>10} {'sat_s':>6}  valid", "-" * 100]
-    for r_ in sorted(rs_rows, key=lambda r_: r_['rs_overshoot_pct']):
-        L.append(f"{r_['name']:<24}{r_['n']:>2} {r_['kp']:>6.2f} {r_['alpha']:>6.2f} {r_['rs_overshoot_pct']:>11.1f} {r_['rs_rise_s']:>9.2f} {r_['rs_settle_s']:>8.2f} {r_['rs_peak_duty_pct']:>10.1f} {r_['rs_sat_s']:>6.2f}  "
-                 + ('yes' if r_['rs_sat_s'] <= 0.05 else 'NO (hit the cap)'))
-open(os.path.join(out, 'summary.txt'), 'w').write("\n".join(L) + "\n")
-print("\n" + "\n".join(L))
-
-# the shortlist, in the format that CONFIGS_FILE reads: re-run it with more repeats to confirm
-conf = ([base] if base else []) + [r for r in feas[:top] if r is not base]
-exact = {}                                     # the daemon prints 3 decimals; the shortlist must use the exact tested values
-try:
-    for ln in open(os.path.join(out, 'settings_tested.txt')):
-        p = ln.split()
-        if len(p) == 4: exact[p[0]] = p[1:]
-except OSError:
-    pass
-with open(os.path.join(out, 'confirm_list.txt'), 'w') as f:
-    f.write("# name kp ki alpha   (confirm with:  sudo ./run_matrix.sh %s %s 5 --configs %s/confirm_list.txt --out %s_confirm)\n" % (tgt_arg, dur_arg, out, out))
-    for r in conf:
-        kp, ki, al = exact.get(r['name'], [f"{r['kp']:g}", f"{r['ki']:g}", f"{r['alpha']:g}"])
-        f.write(f"{r['name']} {kp} {ki} {al}\n")
-print(f"\nShortlist written to {out}/confirm_list.txt")
-PY
-  if [ -s "$ABORTS" ]; then echo; echo "Runs stopped by the speed limit (flagged, left out of the results): see $ABORTS"; fi
-  echo "All results: $OUT   (feed this folder to mixr_figures.py)"
-  echo "[$(date '+%F %T')] run ended"
-  rm -f "$OUT/run.pid"
-}
 trap summarize EXIT
 if [ "${MIXR_DETACHED:-0}" = "1" ]; then
   echo $$ > "$OUT/run.pid"
