@@ -226,7 +226,7 @@ while [ $# -gt 0 ]; do
     --kps)        KPS="${2:?--kps needs a quoted list}"; shift 2 ;;
     --kis)        KIS="${2:?--kis needs a quoted list}"; shift 2 ;;
     --base-kp)    BASE_KP="${2:?--base-kp needs a number}"; BASELINE_GIVEN=1; shift 2 ;;
-    --base-ki)    KI="${2:?--base-ki needs a number}"; BASELINE_GIVEN=1; shift 2 ;;
+    --base-ki)    KI="${2:?--base-ki needs a number}"; BASELINE_GIVEN=1; KI_EXPLICIT=1; shift 2 ;;
     --baseline-file) BASELINE_FILE="${2:?--baseline-file needs a file}"; BASELINE_GIVEN=1; shift 2 ;;
     --kp-ratios)  KP_RATIOS="${2:?--kp-ratios needs a quoted list}"; shift 2 ;;
     --alphas)     ALPHAS="${2:?--alphas needs a quoted list}"; shift 2 ;;
@@ -277,7 +277,7 @@ if [ -n "${BASELINE_FILE:-}" ]; then
   [ -f "$BASELINE_FILE" ] || { echo "Baseline file not found: $BASELINE_FILE"; exit 1; }
   _kp=$(grep -oE 'kp=[0-9.]+' "$BASELINE_FILE" | head -1 | cut -d= -f2); _ki=$(grep -oE 'ki=[0-9.]+' "$BASELINE_FILE" | head -1 | cut -d= -f2)
   { [ -n "$_kp" ] && [ -n "$_ki" ]; } || { echo "$BASELINE_FILE must contain  kp=<number> ki=<number>"; exit 1; }
-  BASE_KP="$_kp"; KI="$_ki"
+  BASE_KP="$_kp"; [ "${KI_EXPLICIT:-0}" = 1 ] || KI="$_ki"   # --base-ki overrides the file's Ki
 fi
 for _v in "$BASE_KP" "$KI"; do [[ "$_v" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "baseline gains must be numbers (got '$_v')"; exit 1; }; done
 scale_list() {   # scale every entry of a preset list by $2/$3, but keep the baseline entry itself exactly

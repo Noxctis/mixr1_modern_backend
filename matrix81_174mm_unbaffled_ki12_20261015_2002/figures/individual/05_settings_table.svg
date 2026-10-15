@@ -6,7 +6,7 @@
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2026-10-15T21:20:44.246905</dc:date>
+    <dc:date>2026-10-15T21:33:15.974012</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -2066,7 +2066,7 @@ z
 " style="fill: #e3eaf4; stroke: #bbbbbb; stroke-linejoin: miter"/>
     </g>
     <g id="text_20">
-     <!-- 0.166 -->
+     <!-- 0.194 -->
      <g transform="translate(303.678 60.923907) scale(0.11 -0.11)">
       <defs>
        <path id="LiberationSerif-Bold-2e" d="M 800 -91 
@@ -2080,41 +2080,32 @@ Q 1319 213 1169 61
 Q 1019 -91 800 -91 
 z
 " transform="scale(0.015625)"/>
-       <path id="LiberationSerif-Bold-36" d="M 3013 1300 
-Q 3013 641 2672 289 
-Q 2331 -63 1703 -63 
-Q 984 -63 601 484 
-Q 219 1031 219 2069 
-Q 219 2744 420 3234 
-Q 622 3725 984 3981 
-Q 1347 4238 1819 4238 
-Q 2306 4238 2759 4103 
-L 2759 3150 
-L 2488 3150 
-L 2353 3756 
-Q 2138 3919 1881 3919 
-Q 1569 3919 1373 3519 
-Q 1178 3119 1144 2400 
-Q 1484 2547 1819 2547 
-Q 2391 2547 2702 2225 
-Q 3013 1903 3013 1300 
+       <path id="LiberationSerif-Bold-34" d="M 2663 828 
+L 2663 0 
+L 1822 0 
+L 1822 828 
+L 88 828 
+L 88 1338 
+L 1975 4213 
+L 2663 4213 
+L 2663 1469 
+L 3081 1469 
+L 3081 828 
+L 2663 828 
 z
-M 1691 253 
-Q 1919 253 2006 500 
-Q 2094 747 2094 1241 
-Q 2094 1681 1972 1918 
-Q 1850 2156 1609 2156 
-Q 1378 2156 1138 2084 
-L 1138 2069 
-Q 1138 253 1691 253 
+M 1822 2709 
+Q 1822 3059 1853 3372 
+L 606 1469 
+L 1822 1469 
+L 1822 2709 
 z
 " transform="scale(0.015625)"/>
       </defs>
       <use xlink:href="#LiberationSerif-Bold-30"/>
       <use xlink:href="#LiberationSerif-Bold-2e" transform="translate(50 0)"/>
       <use xlink:href="#LiberationSerif-Bold-31" transform="translate(75 0)"/>
-      <use xlink:href="#LiberationSerif-Bold-36" transform="translate(125 0)"/>
-      <use xlink:href="#LiberationSerif-Bold-36" transform="translate(175 0)"/>
+      <use xlink:href="#LiberationSerif-Bold-39" transform="translate(125 0)"/>
+      <use xlink:href="#LiberationSerif-Bold-34" transform="translate(175 0)"/>
      </g>
     </g>
     <g id="patch_22">
@@ -2229,8 +2220,8 @@ z
 " style="fill: #e3eaf4; stroke: #bbbbbb; stroke-linejoin: miter"/>
     </g>
     <g id="text_24">
-     <!-- 4.32 -->
-     <g transform="translate(536.1845 60.923907) scale(0.11 -0.11)">
+     <!-- 14.58 -->
+     <g transform="translate(533.4345 60.923907) scale(0.11 -0.11)">
       <defs>
        <path id="LiberationSerif-34" d="M 2531 922 
 L 2531 0 
@@ -2252,45 +2243,76 @@ L 1994 1369
 L 1994 3478 
 z
 " transform="scale(0.015625)"/>
-       <path id="LiberationSerif-33" d="M 2950 1141 
-Q 2950 575 2562 256 
-Q 2175 -63 1466 -63 
-Q 872 -63 341 72 
-L 306 953 
-L 513 953 
-L 653 366 
-Q 775 297 998 247 
-Q 1222 197 1416 197 
-Q 1906 197 2140 422 
-Q 2375 647 2375 1172 
-Q 2375 1584 2159 1798 
-Q 1944 2013 1491 2034 
-L 1044 2059 
-L 1044 2316 
-L 1491 2344 
-Q 1844 2363 2012 2563 
-Q 2181 2763 2181 3169 
-Q 2181 3591 1998 3783 
-Q 1816 3975 1416 3975 
-Q 1250 3975 1069 3929 
-Q 888 3884 750 3809 
-L 641 3297 
-L 434 3297 
-L 434 4103 
-Q 744 4184 969 4211 
-Q 1194 4238 1416 4238 
-Q 2759 4238 2759 3206 
-Q 2759 2772 2520 2514 
-Q 2281 2256 1844 2194 
-Q 2413 2128 2681 1867 
-Q 2950 1606 2950 1141 
+       <path id="LiberationSerif-35" d="M 1516 2450 
+Q 2241 2450 2595 2153 
+Q 2950 1856 2950 1247 
+Q 2950 616 2565 276 
+Q 2181 -63 1466 -63 
+Q 872 -63 406 72 
+L 372 953 
+L 578 953 
+L 719 366 
+Q 856 291 1048 244 
+Q 1241 197 1416 197 
+Q 1909 197 2142 430 
+Q 2375 663 2375 1216 
+Q 2375 1603 2275 1801 
+Q 2175 2000 1956 2094 
+Q 1738 2188 1369 2188 
+Q 1084 2188 813 2113 
+L 513 2113 
+L 513 4191 
+L 2638 4191 
+L 2638 3713 
+L 794 3713 
+L 794 2375 
+Q 1131 2450 1516 2450 
+z
+" transform="scale(0.015625)"/>
+       <path id="LiberationSerif-38" d="M 2828 3169 
+Q 2828 2825 2661 2586 
+Q 2494 2347 2209 2222 
+Q 2566 2091 2761 1811 
+Q 2956 1531 2956 1131 
+Q 2956 538 2622 237 
+Q 2288 -63 1581 -63 
+Q 244 -63 244 1131 
+Q 244 1547 444 1820 
+Q 644 2094 984 2222 
+Q 713 2347 542 2584 
+Q 372 2822 372 3169 
+Q 372 3688 689 3972 
+Q 1006 4256 1606 4256 
+Q 2188 4256 2508 3973 
+Q 2828 3691 2828 3169 
+z
+M 2394 1131 
+Q 2394 1631 2198 1856 
+Q 2003 2081 1581 2081 
+Q 1169 2081 987 1867 
+Q 806 1653 806 1131 
+Q 806 603 990 393 
+Q 1175 184 1581 184 
+Q 1997 184 2195 401 
+Q 2394 619 2394 1131 
+z
+M 2266 3169 
+Q 2266 3600 2097 3803 
+Q 1928 4006 1588 4006 
+Q 1256 4006 1095 3809 
+Q 934 3613 934 3169 
+Q 934 2734 1090 2545 
+Q 1247 2356 1588 2356 
+Q 1938 2356 2102 2548 
+Q 2266 2741 2266 3169 
 z
 " transform="scale(0.015625)"/>
       </defs>
-      <use xlink:href="#LiberationSerif-34"/>
-      <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-      <use xlink:href="#LiberationSerif-33" transform="translate(75 0)"/>
-      <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+      <use xlink:href="#LiberationSerif-31"/>
+      <use xlink:href="#LiberationSerif-34" transform="translate(50 0)"/>
+      <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+      <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+      <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
      </g>
     </g>
     <g id="patch_26">
@@ -2302,8 +2324,8 @@ z
 " style="fill: #e3eaf4; stroke: #bbbbbb; stroke-linejoin: miter"/>
     </g>
     <g id="text_25">
-     <!-- 2.03 -->
-     <g transform="translate(590.79875 60.923907) scale(0.11 -0.11)">
+     <!-- 12.58 -->
+     <g transform="translate(588.04875 60.923907) scale(0.11 -0.11)">
       <defs>
        <path id="LiberationSerif-Bold-32" d="M 2925 0 
 L 269 0 
@@ -2331,11 +2353,50 @@ L 2925 706
 L 2925 0 
 z
 " transform="scale(0.015625)"/>
+       <path id="LiberationSerif-Bold-38" d="M 2891 3159 
+Q 2891 2816 2722 2573 
+Q 2553 2331 2247 2222 
+Q 2606 2088 2797 1806 
+Q 2988 1525 2988 1131 
+Q 2988 538 2645 237 
+Q 2303 -63 1581 -63 
+Q 213 -63 213 1131 
+Q 213 1531 406 1812 
+Q 600 2094 944 2222 
+Q 641 2338 475 2578 
+Q 309 2819 309 3169 
+Q 309 3681 648 3968 
+Q 988 4256 1606 4256 
+Q 2213 4256 2552 3964 
+Q 2891 3672 2891 3159 
+z
+M 2100 1131 
+Q 2100 1613 1975 1831 
+Q 1850 2050 1581 2050 
+Q 1325 2050 1212 1837 
+Q 1100 1625 1100 1131 
+Q 1100 647 1214 450 
+Q 1328 253 1581 253 
+Q 1850 253 1975 459 
+Q 2100 666 2100 1131 
+z
+M 2003 3159 
+Q 2003 3569 1900 3755 
+Q 1797 3941 1588 3941 
+Q 1388 3941 1292 3756 
+Q 1197 3572 1197 3159 
+Q 1197 2734 1290 2559 
+Q 1384 2384 1588 2384 
+Q 1803 2384 1903 2564 
+Q 2003 2744 2003 3159 
+z
+" transform="scale(0.015625)"/>
       </defs>
-      <use xlink:href="#LiberationSerif-Bold-32"/>
-      <use xlink:href="#LiberationSerif-Bold-2e" transform="translate(50 0)"/>
-      <use xlink:href="#LiberationSerif-Bold-30" transform="translate(75 0)"/>
-      <use xlink:href="#LiberationSerif-Bold-33" transform="translate(125 0)"/>
+      <use xlink:href="#LiberationSerif-Bold-31"/>
+      <use xlink:href="#LiberationSerif-Bold-32" transform="translate(50 0)"/>
+      <use xlink:href="#LiberationSerif-Bold-2e" transform="translate(100 0)"/>
+      <use xlink:href="#LiberationSerif-Bold-35" transform="translate(125 0)"/>
+      <use xlink:href="#LiberationSerif-Bold-38" transform="translate(175 0)"/>
      </g>
     </g>
     <g id="patch_27">
@@ -2361,12 +2422,26 @@ z
 " style="fill: #e3eaf4; stroke: #bbbbbb; stroke-linejoin: miter"/>
     </g>
     <g id="text_27">
-     <!-- 4.10 -->
+     <!-- 4.27 -->
      <g transform="translate(700.02725 60.923907) scale(0.11 -0.11)">
+      <defs>
+       <path id="LiberationSerif-37" d="M 628 3200 
+L 422 3200 
+L 422 4191 
+L 3016 4191 
+L 3016 3950 
+L 1147 0 
+L 744 0 
+L 2578 3713 
+L 738 3713 
+L 628 3200 
+z
+" transform="scale(0.015625)"/>
+      </defs>
       <use xlink:href="#LiberationSerif-34"/>
       <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-      <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-      <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+      <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
+      <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
      </g>
     </g>
     <g id="patch_29">
@@ -2380,40 +2455,12 @@ z
     <g id="text_28">
      <!-- 5 -->
      <g transform="translate(746.4505 60.923907) scale(0.11 -0.11)">
-      <defs>
-       <path id="LiberationSerif-35" d="M 1516 2450 
-Q 2241 2450 2595 2153 
-Q 2950 1856 2950 1247 
-Q 2950 616 2565 276 
-Q 2181 -63 1466 -63 
-Q 872 -63 406 72 
-L 372 953 
-L 578 953 
-L 719 366 
-Q 856 291 1048 244 
-Q 1241 197 1416 197 
-Q 1909 197 2142 430 
-Q 2375 663 2375 1216 
-Q 2375 1603 2275 1801 
-Q 2175 2000 1956 2094 
-Q 1738 2188 1369 2188 
-Q 1084 2188 813 2113 
-L 513 2113 
-L 513 4191 
-L 2638 4191 
-L 2638 3713 
-L 794 3713 
-L 794 2375 
-Q 1131 2450 1516 2450 
-z
-" transform="scale(0.015625)"/>
-      </defs>
       <use xlink:href="#LiberationSerif-35"/>
      </g>
     </g>
    </g>
    <g id="text_29">
-    <!-- Settings tested: step from rest to 460 RPM, mean of repeats -->
+    <!-- Settings tested: step from rest to 300 RPM, mean of repeats -->
     <g transform="translate(236.969578 16.000781) scale(0.125 -0.125)">
      <defs>
       <path id="LiberationSerif-53" d="M 434 1128 
@@ -2572,6 +2619,40 @@ L 994 2938
 L 1019 2700 
 z
 " transform="scale(0.015625)"/>
+      <path id="LiberationSerif-33" d="M 2950 1141 
+Q 2950 575 2562 256 
+Q 2175 -63 1466 -63 
+Q 872 -63 341 72 
+L 306 953 
+L 513 953 
+L 653 366 
+Q 775 297 998 247 
+Q 1222 197 1416 197 
+Q 1906 197 2140 422 
+Q 2375 647 2375 1172 
+Q 2375 1584 2159 1798 
+Q 1944 2013 1491 2034 
+L 1044 2059 
+L 1044 2316 
+L 1491 2344 
+Q 1844 2363 2012 2563 
+Q 2181 2763 2181 3169 
+Q 2181 3591 1998 3783 
+Q 1816 3975 1416 3975 
+Q 1250 3975 1069 3929 
+Q 888 3884 750 3809 
+L 641 3297 
+L 434 3297 
+L 434 4103 
+Q 744 4184 969 4211 
+Q 1194 4238 1416 4238 
+Q 2759 4238 2759 3206 
+Q 2759 2772 2520 2514 
+Q 2281 2256 1844 2194 
+Q 2413 2128 2681 1867 
+Q 2950 1606 2950 1141 
+z
+" transform="scale(0.015625)"/>
       <path id="LiberationSerif-52" d="M 1325 1838 
 L 1325 250 
 L 1959 166 
@@ -2708,8 +2789,8 @@ z
      <use xlink:href="#LiberationSerif-74" transform="translate(1208.154297 0)"/>
      <use xlink:href="#LiberationSerif-6f" transform="translate(1235.9375 0)"/>
      <use xlink:href="#LiberationSerif-20" transform="translate(1285.9375 0)"/>
-     <use xlink:href="#LiberationSerif-34" transform="translate(1310.9375 0)"/>
-     <use xlink:href="#LiberationSerif-36" transform="translate(1360.9375 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(1310.9375 0)"/>
+     <use xlink:href="#LiberationSerif-30" transform="translate(1360.9375 0)"/>
      <use xlink:href="#LiberationSerif-30" transform="translate(1410.9375 0)"/>
      <use xlink:href="#LiberationSerif-20" transform="translate(1460.9375 0)"/>
      <use xlink:href="#LiberationSerif-52" transform="translate(1485.9375 0)"/>

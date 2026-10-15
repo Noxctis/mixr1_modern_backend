@@ -226,13 +226,15 @@ def load_run(path: str):
             kind = "OL"
         elif mode.upper().startswith("PI") and const_tgt and (step == -1).all():
             kind = "PI"
-        elif (mode.upper().startswith("PI") and (step == -1).all() and np.isfinite(tgt).all() and len(np.unique(np.round(tgt, 3))) == 2
-              and np.count_nonzero(np.diff(tgt)) == 1):
-            kind = "STEP"                                                  # closed-loop reference step: target 300 -> 370 RPM, for example
+        elif (mode.upper().startswith("PI") and (step == -1).all() and np.isfinite(tgt).all()
+              and 2 <= len(np.unique(np.round(tgt, 3))) <= 4
+              and 1 <= np.count_nonzero(np.diff(tgt)) <= 4):
+            # 1 change = one-way step (300->340); 2 changes = two-step profile (300->340->300)
+            kind = "STEP" if np.count_nonzero(np.diff(tgt)) == 1 else "PI"
         else:
             print(f"  skip {stem}: sweep / sine / non-constant target")
             return None
-        r = Run(path, stem, kind, cfg, rep, t, rpm, pwm_raw * 100.0 / 4095.0, target=float(tgt[0]) if (const_tgt or kind == "STEP") else np.nan,
+        r = Run(path, stem, kind, cfg, rep, t, rpm, pwm_raw * 100.0 / 4095.0, target=float(tgt[0]) if (const_tgt or kind in ("STEP", "PI")) else np.nan,
                 fb=df.fb_rpm.to_numpy(float) if "fb_rpm" in cols else None, pwm_cmd=int(pwm_raw[0]))
         if {"bus_v", "current_ma", "power_w"} <= cols:
             r.volts, r.current_ma, r.power_w = df.bus_v.to_numpy(float), df.current_ma.to_numpy(float), df.power_w.to_numpy(float)

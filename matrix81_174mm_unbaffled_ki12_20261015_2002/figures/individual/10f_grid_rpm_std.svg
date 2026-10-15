@@ -6,7 +6,7 @@
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2026-10-15T21:21:30.778141</dc:date>
+    <dc:date>2026-10-15T21:34:00.008767</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -31,31 +31,31 @@ z
   <g id="axes_1">
    <g id="patch_2">
     <path d="M 58.16 409.5475 
-L 638.540339 409.5475 
-L 638.540339 31.92 
+L 632.552819 409.5475 
+L 632.552819 31.92 
 L 58.16 31.92 
 z
 " style="fill: #ffffff"/>
    </g>
-   <g clip-path="url(#p8f607f2fa6)">
+   <g clip-path="url(#p064742898d)">
     <image xlink:href="data:image/png;base64,
-iVBORw0KGgoAAAANSUhEUgAAAycAAAINCAYAAAAk6QBNAAANd0lEQVR4nO3ZP6vfdxnH4ZzTJKQxWklDPYmkVO0UEJEKrQgK0kEoVvsw1KGd/UPxATi4dFAyCIKDk4PBwVYtRVSsYwZFIjUcJI1pwdM0WnJ+Pgnt/eL7ua5H8ObeXtx79195fneC/7uXzt+bnrB5Xz86Nz1hCS+dO5qesITnHv/M9ITNu7T78PSENZw6M71gCT++cW16wuY989jnpycsYX96AAAAwIkT4gQAAIgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACXuHR1d30yNWcPDgo9MTtu+tm9MLlvDG6bvTE5bw0OkL0xM2z43fHz/Z/9r0hCV87umz0xM27+FrL05PWILPCQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgIST/3rvzvSGJZx+4Mz0hM07f8qN3w8Xzx5MT1jCqXt3pyds3v4L35yesITb7744PWEJx7vj6Qmb96dbf5yesASfEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBh7+bRD3fTI1ZwcO216Qmb9+/X/zE9YQm3v/XV6QlLuPzO9IIFPPzY9IIlXH/i+ekJS7jy+venJ2zf0e3pBUvwOQEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASTl785e+mNyzh1c9+dHrC5j114+3pCUs4f+ZgesISdn94ZXrC9l16c3rBEq689t3pCUs4fO7b0xM27+J3np6esASfEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAl7h0dXd9MjVnDwwIXpCZt3eP/W9IQlXPzb4fSENdx9d3rB5h3/5eb0hCXsX35kesIS9j75xPSEzfvpm7+dnrAEnxMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgYe/+r1/YTY9YwV8/dXl6wuY9/oEr0xOW8LM3fjE9YQlf+fiz0xM27/jE8fSEJRy99/b0hCV86J+3pids3jsXLk1PWILPCQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJBw8tVPnJ3esIQnv/fy9ITN233pcHrCEp595CPTE9awO55esHn7b92cnrCED/75+vSEJexu3ZmesHmn//6r6QlL8DkBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQcPL6nTvTG5bwhW98eXrC5t37wc+nJyzh1Mcemp6whP9c/c30hM37/Y9uTE9YwqefOZiesIRzX3x0egL8T/icAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAniBAAASBAnAABAgjgBAAASxAkAAJAgTgAAgARxAgAAJIgTAAAgQZwAAAAJ4gQAAEgQJwAAQII4AQAAEsQJAACQIE4AAIAEcQIAACSIEwAAIEGcAAAACeIEAABIECcAAECCOAEAABLECQAAkCBOAACABHECAAAkiBMAACBBnAAAAAn/BSWxf8Cbr1nuAAAAAElFTkSuQmCC" id="image82514790df" transform="scale(1 -1) translate(0 -378)" x="58.16" y="-31.5475" width="581.04" height="378"/>
+iVBORw0KGgoAAAANSUhEUgAAAx4AAAINCAYAAACwD6m/AAANSElEQVR4nO3ZS8ugdRnH8Z5pJiZwOiAG4qRluQgKOtFBOyCaCCMtgo67NkJSEAQREa0kkQjaBFFE7gKDCEwKiuigiUiEpRJpTGhTGzsMzYA4Pj69ii8XXHw+r+DHvfp/7+vgh09+7uglpD5y/tT0hNUOHz07PWG9Y6deNj1hvQevPz09YbX3/uSp6Qnr3fO+V09PWO9j1900PWG1Uw8/ND1hvWPTAwAAgP2EBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSOv/ny09Mb1rt49RunJ6z2+FUnpies95av/256wnqfuXhxesJqP/3UTdMT1vvEl+6dnrDeB97zr+kJq/3gtndOT1jPxQMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAIHdw+Oc7j6ZHbHfhm7+YnrDaiSsvm56w3snbz0xPWO/w5w9MT1jtK9e+fHrCep9/2w3TE9b7zmMPTU9Y7dyFw+kJ67l4AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAueOX/+g30xvW+9a3/zE9YbXTf//o9IT13n3F1dMT1jv23OH0hNXuuv6T0xPWO/XVO6cnrPfZW98wPWG1u2+4ZXrCei4eAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABATngAAAA54QEAAOSEBwAAkBMeAABA7uDwZ3ccTY/Y7i/vumZ6wmrffezJ6Qnr3f/Uf6YnrPerj982PWG11zxzbnrCenf/7+npCeu9/hXHpyes9sGr3jE9YT0XDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACAnPAAAABywgMAAMgJDwAAICc8AACA3PFLN5+Z3rDeC//94/SE1V48ml6w342ve9X0hPX++fa7pies9uyDn56esN6Pf39+esJ6H77uldMTVjv5Uu+1mosHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQO3jxufuOpkdsd9+5X05PWO2Lv356esJ6T1z72ukJ6z3/8NnpCatdc/JwesJ6b7ry1PSE9R747d+mJ6z2/TveOj1hPRcPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgJzwAAICc8AAAAHLCAwAAyAkPAAAgd/C1R24/mh6x3Ze/9+j0hNUuvf+66Qnr3XzicHrCeveeuXV6wmqXjp6fnrDePU88Mj1hvWMH0wt2u+HKK6YnrOfiAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQEx4AAEBOeAAAADnhAQAA5IQHAACQO7j/7BeOpkdsd9mJk9MTVnvmwr+nJ6x3y9XXT09Y70/PPj49YbUbT39oesJ63/jDvdMT1vvr+RemJ6x2wu/4nE8MAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADkhAcAAJATHgAAQE54AAAAOeEBAADk/g8UjIMQ6Vop1gAAAABJRU5ErkJggg==" id="image69dca8a4b6" transform="scale(1 -1) translate(0 -378)" x="58.16" y="-31.5475" width="574.56" height="378"/>
    </g>
    <g id="matplotlib.axis_1">
     <g id="xtick_1">
      <g id="line2d_1">
       <defs>
-       <path id="ma35bb4a3ab" d="M 0 0 
+       <path id="m81063752e5" d="M 0 0 
 L 0 3.5 
 " style="stroke: #000000; stroke-width: 0.8"/>
       </defs>
       <g>
-       <use xlink:href="#ma35bb4a3ab" x="90.403352" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m81063752e5" x="90.070712" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_1">
       <!-- 1.0 -->
-      <g transform="translate(83.892936 423.77569) scale(0.104167 -0.104167)">
+      <g transform="translate(83.560295 423.77569) scale(0.104167 -0.104167)">
        <defs>
         <path id="LiberationSerif-31" d="M 1959 250 
 L 2816 166 
@@ -112,12 +112,12 @@ z
     <g id="xtick_2">
      <g id="line2d_2">
       <g>
-       <use xlink:href="#ma35bb4a3ab" x="154.890057" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m81063752e5" x="153.892136" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_2">
       <!-- 0.8 -->
-      <g transform="translate(148.37964 423.77569) scale(0.104167 -0.104167)">
+      <g transform="translate(147.38172 423.77569) scale(0.104167 -0.104167)">
        <defs>
         <path id="LiberationSerif-38" d="M 2828 3169 
 Q 2828 2825 2661 2586 
@@ -167,12 +167,12 @@ z
     <g id="xtick_3">
      <g id="line2d_3">
       <g>
-       <use xlink:href="#ma35bb4a3ab" x="219.376761" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m81063752e5" x="217.713561" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_3">
       <!-- 0.7 -->
-      <g transform="translate(212.866344 423.77569) scale(0.104167 -0.104167)">
+      <g transform="translate(211.203144 423.77569) scale(0.104167 -0.104167)">
        <defs>
         <path id="LiberationSerif-37" d="M 628 3200 
 L 422 3200 
@@ -196,12 +196,12 @@ z
     <g id="xtick_4">
      <g id="line2d_4">
       <g>
-       <use xlink:href="#ma35bb4a3ab" x="283.863465" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m81063752e5" x="281.534985" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_4">
       <!-- 0.6 -->
-      <g transform="translate(277.353048 423.77569) scale(0.104167 -0.104167)">
+      <g transform="translate(275.024568 423.77569) scale(0.104167 -0.104167)">
        <defs>
         <path id="LiberationSerif-36" d="M 3009 1300 
 Q 3009 647 2679 292 
@@ -243,12 +243,12 @@ z
     <g id="xtick_5">
      <g id="line2d_5">
       <g>
-       <use xlink:href="#ma35bb4a3ab" x="348.350169" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m81063752e5" x="345.356409" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_5">
       <!-- 0.5 -->
-      <g transform="translate(341.839753 423.77569) scale(0.104167 -0.104167)">
+      <g transform="translate(338.845993 423.77569) scale(0.104167 -0.104167)">
        <defs>
         <path id="LiberationSerif-35" d="M 1516 2450 
 Q 2241 2450 2595 2153 
@@ -286,12 +286,12 @@ z
     <g id="xtick_6">
      <g id="line2d_6">
       <g>
-       <use xlink:href="#ma35bb4a3ab" x="412.836874" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m81063752e5" x="409.177834" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_6">
       <!-- 0.4 -->
-      <g transform="translate(406.326457 423.77569) scale(0.104167 -0.104167)">
+      <g transform="translate(402.667417 423.77569) scale(0.104167 -0.104167)">
        <defs>
         <path id="LiberationSerif-34" d="M 2531 922 
 L 2531 0 
@@ -323,12 +323,12 @@ z
     <g id="xtick_7">
      <g id="line2d_7">
       <g>
-       <use xlink:href="#ma35bb4a3ab" x="477.323578" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m81063752e5" x="472.999258" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_7">
       <!-- 0.3 -->
-      <g transform="translate(470.813161 423.77569) scale(0.104167 -0.104167)">
+      <g transform="translate(466.488841 423.77569) scale(0.104167 -0.104167)">
        <defs>
         <path id="LiberationSerif-33" d="M 2950 1141 
 Q 2950 575 2562 256 
@@ -374,12 +374,12 @@ z
     <g id="xtick_8">
      <g id="line2d_8">
       <g>
-       <use xlink:href="#ma35bb4a3ab" x="541.810282" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m81063752e5" x="536.820682" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_8">
       <!-- 0.2 -->
-      <g transform="translate(535.299866 423.77569) scale(0.104167 -0.104167)">
+      <g transform="translate(530.310266 423.77569) scale(0.104167 -0.104167)">
        <defs>
         <path id="LiberationSerif-32" d="M 2847 0 
 L 281 0 
@@ -416,12 +416,12 @@ z
     <g id="xtick_9">
      <g id="line2d_9">
       <g>
-       <use xlink:href="#ma35bb4a3ab" x="606.296987" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m81063752e5" x="600.642107" y="409.5475" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_9">
       <!-- 0.15 -->
-      <g transform="translate(597.182403 423.77569) scale(0.104167 -0.104167)">
+      <g transform="translate(591.527523 423.77569) scale(0.104167 -0.104167)">
        <use xlink:href="#LiberationSerif-30"/>
        <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
        <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
@@ -431,7 +431,7 @@ z
     </g>
     <g id="text_10">
      <!-- Feedback filter α   (1.0 = off; smaller = stronger filtering →) -->
-     <g transform="translate(166.772826 440.555052) scale(0.15 -0.15)">
+     <g transform="translate(163.779066 440.555052) scale(0.15 -0.15)">
       <defs>
        <path id="LiberationSerif-46" d="M 1325 1881 
 L 1325 250 
@@ -1090,12 +1090,12 @@ z
     <g id="ytick_1">
      <g id="line2d_10">
       <defs>
-       <path id="m95571839f7" d="M 0 0 
+       <path id="ma96730e426" d="M 0 0 
 L -3.5 0 
 " style="stroke: #000000; stroke-width: 0.8"/>
       </defs>
       <g>
-       <use xlink:href="#m95571839f7" x="58.16" y="52.899306" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#ma96730e426" x="58.16" y="52.899306" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_11">
@@ -1110,7 +1110,7 @@ L -3.5 0
     <g id="ytick_2">
      <g id="line2d_11">
       <g>
-       <use xlink:href="#m95571839f7" x="58.16" y="94.857917" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#ma96730e426" x="58.16" y="94.857917" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_12">
@@ -1126,7 +1126,7 @@ L -3.5 0
     <g id="ytick_3">
      <g id="line2d_12">
       <g>
-       <use xlink:href="#m95571839f7" x="58.16" y="136.816528" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#ma96730e426" x="58.16" y="136.816528" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_13">
@@ -1142,7 +1142,7 @@ L -3.5 0
     <g id="ytick_4">
      <g id="line2d_13">
       <g>
-       <use xlink:href="#m95571839f7" x="58.16" y="178.775139" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#ma96730e426" x="58.16" y="178.775139" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_14">
@@ -1158,7 +1158,7 @@ L -3.5 0
     <g id="ytick_5">
      <g id="line2d_14">
       <g>
-       <use xlink:href="#m95571839f7" x="58.16" y="220.73375" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#ma96730e426" x="58.16" y="220.73375" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_15">
@@ -1174,7 +1174,7 @@ L -3.5 0
     <g id="ytick_6">
      <g id="line2d_15">
       <g>
-       <use xlink:href="#m95571839f7" x="58.16" y="262.692361" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#ma96730e426" x="58.16" y="262.692361" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_16">
@@ -1190,7 +1190,7 @@ L -3.5 0
     <g id="ytick_7">
      <g id="line2d_16">
       <g>
-       <use xlink:href="#m95571839f7" x="58.16" y="304.650972" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#ma96730e426" x="58.16" y="304.650972" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_17">
@@ -1206,7 +1206,7 @@ L -3.5 0
     <g id="ytick_8">
      <g id="line2d_17">
       <g>
-       <use xlink:href="#m95571839f7" x="58.16" y="346.609583" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#ma96730e426" x="58.16" y="346.609583" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_18">
@@ -1222,7 +1222,7 @@ L -3.5 0
     <g id="ytick_9">
      <g id="line2d_18">
       <g>
-       <use xlink:href="#m95571839f7" x="58.16" y="388.568194" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#ma96730e426" x="58.16" y="388.568194" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_19">
@@ -1349,13 +1349,13 @@ z
     </g>
    </g>
    <g id="patch_3">
-    <path d="M 62.029202 160.31335 
-L 118.777502 160.31335 
-L 118.777502 197.236928 
-L 62.029202 197.236928 
-L 62.029202 160.31335 
+    <path d="M 61.989285 160.31335 
+L 118.152139 160.31335 
+L 118.152139 197.236928 
+L 61.989285 197.236928 
+L 61.989285 160.31335 
 z
-" clip-path="url(#p8f607f2fa6)" style="fill: none; stroke-dasharray: 9.62,4.16; stroke-dashoffset: 0; stroke: #1f4e9e; stroke-width: 2.6; stroke-linejoin: miter"/>
+" clip-path="url(#p064742898d)" style="fill: none; stroke-dasharray: 9.62,4.16; stroke-dashoffset: 0; stroke: #1f4e9e; stroke-width: 2.6; stroke-linejoin: miter"/>
    </g>
    <g id="patch_4">
     <path d="M 58.16 409.5475 
@@ -1363,23 +1363,73 @@ L 58.16 31.92
 " style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
    <g id="patch_5">
-    <path d="M 638.540339 409.5475 
-L 638.540339 31.92 
+    <path d="M 632.552819 409.5475 
+L 632.552819 31.92 
 " style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
    <g id="patch_6">
     <path d="M 58.16 409.5475 
-L 638.540339 409.5475 
+L 632.552819 409.5475 
 " style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
    <g id="patch_7">
     <path d="M 58.16 31.92 
-L 638.540339 31.92 
+L 632.552819 31.92 
 " style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
    <g id="text_21">
-    <!-- 1.92 -->
-    <g transform="translate(81.288769 55.404188) scale(0.104167 -0.104167)">
+    <!-- 12.38 -->
+    <g transform="translate(78.351962 55.404188) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
+    </g>
+   </g>
+   <g id="text_22">
+    <!-- 12.41 -->
+    <g transform="translate(142.173386 55.404188) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(175 0)"/>
+    </g>
+   </g>
+   <g id="text_23">
+    <!-- 12.35 -->
+    <g transform="translate(205.994811 55.404188) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(175 0)"/>
+    </g>
+   </g>
+   <g id="text_24">
+    <!-- 12.53 -->
+    <g transform="translate(269.816235 55.404188) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(175 0)"/>
+    </g>
+   </g>
+   <g id="text_25">
+    <!-- 12.41 -->
+    <g transform="translate(333.637659 55.404188) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(175 0)"/>
+    </g>
+   </g>
+   <g id="text_26">
+    <!-- 12.59 -->
+    <g transform="translate(397.459084 55.404188) scale(0.104167 -0.104167)">
      <defs>
       <path id="LiberationSerif-39" d="M 206 2913 
 Q 206 3544 559 3891 
@@ -1411,729 +1461,760 @@ z
 " transform="scale(0.015625)"/>
      </defs>
      <use xlink:href="#LiberationSerif-31"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-39" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
-    </g>
-   </g>
-   <g id="text_22">
-    <!-- 2.12 -->
-    <g transform="translate(145.775473 55.404188) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
-    </g>
-   </g>
-   <g id="text_23">
-    <!-- 2.25 -->
-    <g transform="translate(210.262177 55.404188) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
      <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
-    </g>
-   </g>
-   <g id="text_24">
-    <!-- 2.21 -->
-    <g transform="translate(274.748882 55.404188) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
-    </g>
-   </g>
-   <g id="text_25">
-    <!-- 2.26 -->
-    <g transform="translate(339.235586 55.404188) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-36" transform="translate(125 0)"/>
-    </g>
-   </g>
-   <g id="text_26">
-    <!-- 2.37 -->
-    <g style="fill: #ffffff" transform="translate(403.72229 55.404188) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-33" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_27">
-    <!-- 2.28 -->
-    <g transform="translate(468.208995 55.404188) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+    <!-- 12.29 -->
+    <g transform="translate(461.280508 55.404188) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_28">
-    <!-- 2.21 -->
-    <g transform="translate(532.695699 55.404188) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
+    <!-- 12.22 -->
+    <g transform="translate(525.101932 55.404188) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_29">
-    <!-- 2.23 -->
-    <g transform="translate(597.182403 55.404188) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+    <!-- 12.23 -->
+    <g transform="translate(588.923357 55.404188) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_30">
-    <!-- 1.97 -->
-    <g transform="translate(81.288769 97.362799) scale(0.104167 -0.104167)">
+    <!-- 12.29 -->
+    <g transform="translate(78.351962 97.362799) scale(0.104167 -0.104167)">
      <use xlink:href="#LiberationSerif-31"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-39" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_31">
-    <!-- 2.25 -->
-    <g transform="translate(145.775473 97.362799) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+    <!-- 11.97 -->
+    <g style="fill: #ffffff" transform="translate(142.368699 97.362799) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(46.25 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(96.25 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(121.25 0)"/>
+     <use xlink:href="#LiberationSerif-37" transform="translate(171.25 0)"/>
     </g>
    </g>
    <g id="text_32">
-    <!-- 2.17 -->
-    <g transform="translate(210.262177 97.362799) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+    <!-- 12.87 -->
+    <g transform="translate(205.994811 97.362799) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-37" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_33">
-    <!-- 2.15 -->
-    <g transform="translate(274.748882 97.362799) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+    <!-- 12.16 -->
+    <g transform="translate(269.816235 97.362799) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-36" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_34">
-    <!-- 2.08 -->
-    <g transform="translate(339.235586 97.362799) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+    <!-- 12.53 -->
+    <g transform="translate(333.637659 97.362799) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_35">
-    <!-- 2.11 -->
-    <g transform="translate(403.917603 97.362799) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(121.25 0)"/>
+    <!-- 12.51 -->
+    <g transform="translate(397.459084 97.362799) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_36">
-    <!-- 2.17 -->
-    <g transform="translate(468.208995 97.362799) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+    <!-- 12.28 -->
+    <g transform="translate(461.280508 97.362799) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_37">
-    <!-- 2.20 -->
-    <g transform="translate(532.695699 97.362799) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+    <!-- 12.28 -->
+    <g transform="translate(525.101932 97.362799) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_38">
-    <!-- 2.23 -->
-    <g transform="translate(597.182403 97.362799) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+    <!-- 12.41 -->
+    <g transform="translate(588.923357 97.362799) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_39">
-    <!-- 2.18 -->
-    <g transform="translate(81.288769 139.321411) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+    <!-- 12.62 -->
+    <g transform="translate(78.351962 139.321411) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-36" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_40">
-    <!-- 2.01 -->
-    <g transform="translate(145.775473 139.321411) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
+    <!-- 12.37 -->
+    <g transform="translate(142.173386 139.321411) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-37" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_41">
-    <!-- 2.08 -->
-    <g transform="translate(210.262177 139.321411) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+    <!-- 12.12 -->
+    <g style="fill: #ffffff" transform="translate(205.994811 139.321411) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_42">
-    <!-- 1.95 -->
-    <g transform="translate(274.748882 139.321411) scale(0.104167 -0.104167)">
+    <!-- 12.80 -->
+    <g transform="translate(269.816235 139.321411) scale(0.104167 -0.104167)">
      <use xlink:href="#LiberationSerif-31"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-39" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-30" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_43">
-    <!-- 2.07 -->
-    <g transform="translate(339.235586 139.321411) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+    <!-- 12.92 -->
+    <g transform="translate(333.637659 139.321411) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_44">
-    <!-- 2.07 -->
-    <g transform="translate(403.72229 139.321411) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+    <!-- 12.08 -->
+    <g style="fill: #ffffff" transform="translate(397.459084 139.321411) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_45">
-    <!-- 2.05 -->
-    <g transform="translate(468.208995 139.321411) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+    <!-- 12.16 -->
+    <g transform="translate(461.280508 139.321411) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-36" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_46">
-    <!-- 2.12 -->
-    <g transform="translate(532.695699 139.321411) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+    <!-- 11.99 -->
+    <g style="fill: #ffffff" transform="translate(525.297245 139.321411) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(46.25 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(96.25 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(121.25 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(171.25 0)"/>
     </g>
    </g>
    <g id="text_47">
-    <!-- 2.05 -->
-    <g transform="translate(597.182403 139.321411) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+    <!-- 12.34 -->
+    <g transform="translate(588.923357 139.321411) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_48">
-    <!-- 2.03 -->
-    <g transform="translate(81.288769 181.280022) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+    <!-- 12.58 -->
+    <g transform="translate(78.351962 181.280022) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_49">
-    <!-- 2.09 -->
-    <g transform="translate(145.775473 181.280022) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-39" transform="translate(125 0)"/>
+    <!-- 12.46 -->
+    <g transform="translate(142.173386 181.280022) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-36" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_50">
-    <!-- 2.03 -->
-    <g transform="translate(210.262177 181.280022) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+    <!-- 12.24 -->
+    <g transform="translate(205.994811 181.280022) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_51">
-    <!-- 2.15 -->
-    <g transform="translate(274.748882 181.280022) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+    <!-- 12.23 -->
+    <g transform="translate(269.816235 181.280022) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_52">
-    <!-- 2.17 -->
-    <g transform="translate(339.235586 181.280022) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+    <!-- 13.12 -->
+    <g style="fill: #ffffff" transform="translate(333.637659 181.280022) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_53">
-    <!-- 2.21 -->
-    <g transform="translate(403.72229 181.280022) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
+    <!-- 12.46 -->
+    <g transform="translate(397.459084 181.280022) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-36" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_54">
-    <!-- 2.18 -->
-    <g transform="translate(468.208995 181.280022) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+    <!-- 12.15 -->
+    <g transform="translate(461.280508 181.280022) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_55">
-    <!-- 2.10 -->
-    <g transform="translate(532.695699 181.280022) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+    <!-- 12.28 -->
+    <g transform="translate(525.101932 181.280022) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_56">
-    <!-- 1.94 -->
-    <g transform="translate(597.182403 181.280022) scale(0.104167 -0.104167)">
+    <!-- 12.37 -->
+    <g transform="translate(588.923357 181.280022) scale(0.104167 -0.104167)">
      <use xlink:href="#LiberationSerif-31"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-39" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-37" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_57">
-    <!-- 2.20 -->
-    <g transform="translate(81.288769 223.238633) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+    <!-- 12.82 -->
+    <g transform="translate(78.351962 223.238633) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_58">
-    <!-- 1.97 -->
-    <g transform="translate(145.775473 223.238633) scale(0.104167 -0.104167)">
+    <!-- 12.47 -->
+    <g transform="translate(142.173386 223.238633) scale(0.104167 -0.104167)">
      <use xlink:href="#LiberationSerif-31"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-39" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-37" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_59">
-    <!-- 2.24 -->
-    <g transform="translate(210.262177 223.238633) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+    <!-- 12.25 -->
+    <g transform="translate(205.994811 223.238633) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_60">
-    <!-- 2.05 -->
-    <g transform="translate(274.748882 223.238633) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+    <!-- 12.12 -->
+    <g style="fill: #ffffff" transform="translate(269.816235 223.238633) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_61">
-    <!-- 2.18 -->
-    <g transform="translate(339.235586 223.238633) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+    <!-- 12.52 -->
+    <g transform="translate(333.637659 223.238633) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_62">
-    <!-- 2.15 -->
-    <g transform="translate(403.72229 223.238633) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+    <!-- 12.74 -->
+    <g transform="translate(397.459084 223.238633) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_63">
-    <!-- 2.10 -->
-    <g transform="translate(468.208995 223.238633) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+    <!-- 12.28 -->
+    <g transform="translate(461.280508 223.238633) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_64">
-    <!-- 2.30 -->
-    <g transform="translate(532.695699 223.238633) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-33" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+    <!-- 12.35 -->
+    <g transform="translate(525.101932 223.238633) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_65">
-    <!-- 2.17 -->
-    <g transform="translate(597.182403 223.238633) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+    <!-- 12.52 -->
+    <g transform="translate(588.923357 223.238633) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_66">
-    <!-- 2.03 -->
-    <g transform="translate(81.288769 265.197244) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+    <!-- 12.05 -->
+    <g style="fill: #ffffff" transform="translate(78.351962 265.197244) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_67">
-    <!-- 2.21 -->
-    <g transform="translate(145.775473 265.197244) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
+    <!-- 13.23 -->
+    <g style="fill: #ffffff" transform="translate(142.173386 265.197244) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_68">
-    <!-- 2.26 -->
-    <g transform="translate(210.262177 265.197244) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-36" transform="translate(125 0)"/>
+    <!-- 12.41 -->
+    <g transform="translate(205.994811 265.197244) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_69">
-    <!-- 2.02 -->
-    <g transform="translate(274.748882 265.197244) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+    <!-- 12.58 -->
+    <g transform="translate(269.816235 265.197244) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_70">
-    <!-- 2.12 -->
-    <g transform="translate(339.235586 265.197244) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+    <!-- 12.89 -->
+    <g transform="translate(333.637659 265.197244) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_71">
-    <!-- 2.08 -->
-    <g transform="translate(403.72229 265.197244) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+    <!-- 12.60 -->
+    <g transform="translate(397.459084 265.197244) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-36" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-30" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_72">
-    <!-- 2.34 -->
-    <g style="fill: #ffffff" transform="translate(468.208995 265.197244) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-33" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+    <!-- 12.03 -->
+    <g style="fill: #ffffff" transform="translate(461.280508 265.197244) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_73">
-    <!-- 2.08 -->
-    <g transform="translate(532.695699 265.197244) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+    <!-- 12.26 -->
+    <g transform="translate(525.101932 265.197244) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-36" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_74">
-    <!-- 2.11 -->
-    <g transform="translate(597.377716 265.197244) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(121.25 0)"/>
+    <!-- 12.55 -->
+    <g transform="translate(588.923357 265.197244) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_75">
-    <!-- 2.00 -->
-    <g transform="translate(81.288769 307.155855) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+    <!-- 12.74 -->
+    <g transform="translate(78.351962 307.155855) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_76">
-    <!-- 2.04 -->
-    <g transform="translate(145.775473 307.155855) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+    <!-- 12.98 -->
+    <g transform="translate(142.173386 307.155855) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_77">
-    <!-- 2.10 -->
-    <g transform="translate(210.262177 307.155855) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+    <!-- 12.93 -->
+    <g transform="translate(205.994811 307.155855) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_78">
-    <!-- 2.06 -->
-    <g transform="translate(274.748882 307.155855) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
+    <!-- 12.69 -->
+    <g transform="translate(269.816235 307.155855) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
      <use xlink:href="#LiberationSerif-36" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_79">
-    <!-- 2.09 -->
-    <g transform="translate(339.235586 307.155855) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-39" transform="translate(125 0)"/>
+    <!-- 12.87 -->
+    <g transform="translate(333.637659 307.155855) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-37" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_80">
-    <!-- 1.74 -->
-    <g style="fill: #ffffff" transform="translate(403.72229 307.155855) scale(0.104167 -0.104167)">
+    <!-- 12.26 -->
+    <g transform="translate(397.459084 307.155855) scale(0.104167 -0.104167)">
      <use xlink:href="#LiberationSerif-31"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-36" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_81">
-    <!-- 2.04 -->
-    <g transform="translate(468.208995 307.155855) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+    <!-- 12.52 -->
+    <g transform="translate(461.280508 307.155855) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_82">
-    <!-- 2.04 -->
-    <g transform="translate(532.695699 307.155855) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+    <!-- 12.28 -->
+    <g transform="translate(525.101932 307.155855) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_83">
-    <!-- 1.97 -->
-    <g transform="translate(597.182403 307.155855) scale(0.104167 -0.104167)">
+    <!-- 12.22 -->
+    <g transform="translate(588.923357 307.155855) scale(0.104167 -0.104167)">
      <use xlink:href="#LiberationSerif-31"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-39" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_84">
-    <!-- 2.03 -->
-    <g transform="translate(81.288769 349.114466) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+    <!-- 12.47 -->
+    <g transform="translate(78.351962 349.114466) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-37" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_85">
-    <!-- 2.07 -->
-    <g transform="translate(145.775473 349.114466) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+    <!-- 12.55 -->
+    <g transform="translate(142.173386 349.114466) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_86">
-    <!-- 2.11 -->
-    <g transform="translate(210.45749 349.114466) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(121.25 0)"/>
+    <!-- 12.43 -->
+    <g transform="translate(205.994811 349.114466) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_87">
-    <!-- 2.02 -->
-    <g transform="translate(274.748882 349.114466) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+    <!-- 12.96 -->
+    <g transform="translate(269.816235 349.114466) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-36" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_88">
-    <!-- 2.04 -->
-    <g transform="translate(339.235586 349.114466) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+    <!-- 12.12 -->
+    <g transform="translate(333.637659 349.114466) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_89">
-    <!-- 2.07 -->
-    <g transform="translate(403.72229 349.114466) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+    <!-- 12.50 -->
+    <g transform="translate(397.459084 349.114466) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-30" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_90">
-    <!-- 2.40 -->
-    <g style="fill: #ffffff" transform="translate(468.208995 349.114466) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-34" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+    <!-- 12.98 -->
+    <g transform="translate(461.280508 349.114466) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_91">
-    <!-- 2.31 -->
-    <g style="fill: #ffffff" transform="translate(532.695699 349.114466) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-33" transform="translate(75 0)"/>
+    <!-- 12.13 -->
+    <g transform="translate(525.101932 349.114466) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
      <use xlink:href="#LiberationSerif-31" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_92">
-    <!-- 2.05 -->
-    <g transform="translate(597.182403 349.114466) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+    <!-- 12.47 -->
+    <g transform="translate(588.923357 349.114466) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-37" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_93">
-    <!-- 2.18 -->
-    <g transform="translate(81.288769 391.073077) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+    <!-- 12.36 -->
+    <g transform="translate(78.351962 391.073077) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-36" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_94">
-    <!-- 1.92 -->
-    <g transform="translate(145.775473 391.073077) scale(0.104167 -0.104167)">
+    <!-- 12.77 -->
+    <g transform="translate(142.173386 391.073077) scale(0.104167 -0.104167)">
      <use xlink:href="#LiberationSerif-31"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-39" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-37" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_95">
-    <!-- 2.17 -->
-    <g transform="translate(210.262177 391.073077) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-37" transform="translate(125 0)"/>
+    <!-- 12.88 -->
+    <g transform="translate(205.994811 391.073077) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_96">
-    <!-- 1.92 -->
-    <g transform="translate(274.748882 391.073077) scale(0.104167 -0.104167)">
+    <!-- 12.85 -->
+    <g transform="translate(269.816235 391.073077) scale(0.104167 -0.104167)">
      <use xlink:href="#LiberationSerif-31"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-39" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_97">
-    <!-- 2.03 -->
-    <g transform="translate(339.235586 391.073077) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+    <!-- 12.41 -->
+    <g transform="translate(333.637659 391.073077) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-31" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_98">
-    <!-- 2.10 -->
-    <g transform="translate(403.72229 391.073077) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
+    <!-- 12.89 -->
+    <g transform="translate(397.459084 391.073077) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-39" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_99">
-    <!-- 2.08 -->
-    <g transform="translate(468.208995 391.073077) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+    <!-- 12.32 -->
+    <g transform="translate(461.280508 391.073077) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-33" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_100">
-    <!-- 1.94 -->
-    <g transform="translate(532.695699 391.073077) scale(0.104167 -0.104167)">
+    <!-- 12.55 -->
+    <g transform="translate(525.101932 391.073077) scale(0.104167 -0.104167)">
      <use xlink:href="#LiberationSerif-31"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-39" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-35" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_101">
-    <!-- 2.04 -->
-    <g transform="translate(597.182403 391.073077) scale(0.104167 -0.104167)">
-     <use xlink:href="#LiberationSerif-32"/>
-     <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-     <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
-     <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
+    <!-- 12.80 -->
+    <g transform="translate(588.923357 391.073077) scale(0.104167 -0.104167)">
+     <use xlink:href="#LiberationSerif-31"/>
+     <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+     <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+     <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
+     <use xlink:href="#LiberationSerif-30" transform="translate(175 0)"/>
     </g>
    </g>
    <g id="text_102">
@@ -2569,10 +2650,10 @@ z
   </g>
   <g id="axes_2">
    <g id="patch_8">
-    <path d="M 657.383856 409.5475 
-L 676.265231 409.5475 
-L 676.265231 31.92 
-L 657.383856 31.92 
+    <path d="M 651.201936 409.5475 
+L 670.083311 409.5475 
+L 670.083311 31.92 
+L 651.201936 31.92 
 z
 " style="fill: #ffffff"/>
    </g>
@@ -2581,116 +2662,123 @@ z
     <g id="ytick_10">
      <g id="line2d_19">
       <defs>
-       <path id="ma42cdf4df0" d="M 0 0 
+       <path id="me7226a792e" d="M 0 0 
 L 3.5 0 
 " style="stroke: #000000; stroke-width: 0.8"/>
       </defs>
       <g>
-       <use xlink:href="#ma42cdf4df0" x="676.265231" y="375.78989" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#me7226a792e" x="670.083311" y="400.227447" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_103">
-      <!-- 1.8 -->
-      <g transform="translate(683.265231 380.300281) scale(0.13 -0.13)">
+      <!-- 12.0 -->
+      <g transform="translate(677.083311 404.737837) scale(0.13 -0.13)">
        <use xlink:href="#LiberationSerif-31"/>
-       <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-       <use xlink:href="#LiberationSerif-38" transform="translate(75 0)"/>
+       <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+       <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+       <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
       </g>
      </g>
     </g>
     <g id="ytick_11">
      <g id="line2d_20">
       <g>
-       <use xlink:href="#ma42cdf4df0" x="676.265231" y="318.573602" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#me7226a792e" x="670.083311" y="340.140208" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_104">
-      <!-- 1.9 -->
-      <g transform="translate(683.265231 323.083993) scale(0.13 -0.13)">
+      <!-- 12.2 -->
+      <g transform="translate(677.083311 344.650599) scale(0.13 -0.13)">
        <use xlink:href="#LiberationSerif-31"/>
-       <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-       <use xlink:href="#LiberationSerif-39" transform="translate(75 0)"/>
+       <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+       <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+       <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
       </g>
      </g>
     </g>
     <g id="ytick_12">
      <g id="line2d_21">
       <g>
-       <use xlink:href="#ma42cdf4df0" x="676.265231" y="261.357314" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#me7226a792e" x="670.083311" y="280.05297" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_105">
-      <!-- 2.0 -->
-      <g transform="translate(683.265231 265.867705) scale(0.13 -0.13)">
-       <use xlink:href="#LiberationSerif-32"/>
-       <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-       <use xlink:href="#LiberationSerif-30" transform="translate(75 0)"/>
+      <!-- 12.4 -->
+      <g transform="translate(677.083311 284.563361) scale(0.13 -0.13)">
+       <use xlink:href="#LiberationSerif-31"/>
+       <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+       <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+       <use xlink:href="#LiberationSerif-34" transform="translate(125 0)"/>
       </g>
      </g>
     </g>
     <g id="ytick_13">
      <g id="line2d_22">
       <g>
-       <use xlink:href="#ma42cdf4df0" x="676.265231" y="204.141027" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#me7226a792e" x="670.083311" y="219.965732" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_106">
-      <!-- 2.1 -->
-      <g transform="translate(683.265231 208.651417) scale(0.13 -0.13)">
-       <use xlink:href="#LiberationSerif-32"/>
-       <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-       <use xlink:href="#LiberationSerif-31" transform="translate(75 0)"/>
+      <!-- 12.6 -->
+      <g transform="translate(677.083311 224.476123) scale(0.13 -0.13)">
+       <use xlink:href="#LiberationSerif-31"/>
+       <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+       <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+       <use xlink:href="#LiberationSerif-36" transform="translate(125 0)"/>
       </g>
      </g>
     </g>
     <g id="ytick_14">
      <g id="line2d_23">
       <g>
-       <use xlink:href="#ma42cdf4df0" x="676.265231" y="146.924739" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#me7226a792e" x="670.083311" y="159.878494" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_107">
-      <!-- 2.2 -->
-      <g transform="translate(683.265231 151.435129) scale(0.13 -0.13)">
-       <use xlink:href="#LiberationSerif-32"/>
-       <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-       <use xlink:href="#LiberationSerif-32" transform="translate(75 0)"/>
+      <!-- 12.8 -->
+      <g transform="translate(677.083311 164.388885) scale(0.13 -0.13)">
+       <use xlink:href="#LiberationSerif-31"/>
+       <use xlink:href="#LiberationSerif-32" transform="translate(50 0)"/>
+       <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+       <use xlink:href="#LiberationSerif-38" transform="translate(125 0)"/>
       </g>
      </g>
     </g>
     <g id="ytick_15">
      <g id="line2d_24">
       <g>
-       <use xlink:href="#ma42cdf4df0" x="676.265231" y="89.708451" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#me7226a792e" x="670.083311" y="99.791256" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_108">
-      <!-- 2.3 -->
-      <g transform="translate(683.265231 94.218841) scale(0.13 -0.13)">
-       <use xlink:href="#LiberationSerif-32"/>
-       <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-       <use xlink:href="#LiberationSerif-33" transform="translate(75 0)"/>
+      <!-- 13.0 -->
+      <g transform="translate(677.083311 104.301647) scale(0.13 -0.13)">
+       <use xlink:href="#LiberationSerif-31"/>
+       <use xlink:href="#LiberationSerif-33" transform="translate(50 0)"/>
+       <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+       <use xlink:href="#LiberationSerif-30" transform="translate(125 0)"/>
       </g>
      </g>
     </g>
     <g id="ytick_16">
      <g id="line2d_25">
       <g>
-       <use xlink:href="#ma42cdf4df0" x="676.265231" y="32.492163" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#me7226a792e" x="670.083311" y="39.704018" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_109">
-      <!-- 2.4 -->
-      <g transform="translate(683.265231 37.002554) scale(0.13 -0.13)">
-       <use xlink:href="#LiberationSerif-32"/>
-       <use xlink:href="#LiberationSerif-2e" transform="translate(50 0)"/>
-       <use xlink:href="#LiberationSerif-34" transform="translate(75 0)"/>
+      <!-- 13.2 -->
+      <g transform="translate(677.083311 44.214409) scale(0.13 -0.13)">
+       <use xlink:href="#LiberationSerif-31"/>
+       <use xlink:href="#LiberationSerif-33" transform="translate(50 0)"/>
+       <use xlink:href="#LiberationSerif-2e" transform="translate(100 0)"/>
+       <use xlink:href="#LiberationSerif-32" transform="translate(125 0)"/>
       </g>
      </g>
     </g>
     <g id="text_110">
      <!-- Speed ripple, std (RPM) -->
-     <g transform="translate(713.923825 293.646641) rotate(-90) scale(0.15 -0.15)">
+     <g transform="translate(714.241905 293.646641) rotate(-90) scale(0.15 -0.15)">
       <defs>
        <path id="LiberationSerif-53" d="M 434 1128 
 L 638 1128 
@@ -2833,24 +2921,24 @@ z
     </g>
    </g>
    <image xlink:href="data:image/png;base64,
-iVBORw0KGgoAAAANSUhEUgAAABoAAAINCAYAAAAgBm/EAAACXUlEQVR4nO2dwW3kQBDERtrN6VK6/P+WnAMfhTuCTKBBVXfPeGDY1/n75z0D7kWRc875Xvc1KZQRJiPM0OjSGdky6tNhMsJkhMkI08GHMWaUESQjTEaYjDBGo05YSEYYodE9KiV80PjoVtBH197GjDaFyghjNBJuhk2hMsI0R5jmCKPMKCNG9zqMMiOdkTCjTaEy+vcLNbCYBhZjzEh3yb/LCLLMaFOojDDfW3jCbgo1RxhlRs0RoznCCG+qxow2hfqdE4xvjhpYjHFgdUa6gVVmtCnUJR9TRpiMMEqjTa0ywmSEGRqNapURRmlU1zGUDxqyT6c00g3s8WXkM9J1nTAjn1Fdx2h7Y4wZNUeQ5V8F0WWke9AQZqQzunRdV0YU5RON7NMZl6qtvY0Z6Yyu85kUKiOM7+AzZqQz6jyiNEeYdh2mjDDGjHxGk/+5tTQ67zMpJHzQ0H26jDBDo0dn5MsoI0hzhDFmlBFkZ/S+P5NCbQaMsOsyomSEaTNgMsL4jBpYjK8ZjEa+rns2D99lhFEa1XWMjDB1HaaMMMqMbEbvW9cxMsK06zA9aGBqb4wyI59RXcfICFPXYYaX/B9fRjojXUZvGUGWRrpdV9dB2t4Y5Qlr2wy6OWqpYnzNIDQydp1tqRoz0hnpMjJet3RG7TpIuw4jzMi363wZPWUEWRrpziNb19XeGF8zCDN6dEZ1HSUjjLLrupwwmiNM5xGmrsOUESYjjLDrfNt7dAnK6D8o5Pt039G8lhEnI0xGmIwwGWGERr6/ZuDLKCNKRpiMMBlh+okP04MGJiOMz+gXCX8s8chprcwAAAAASUVORK5CYII=" id="image2cc8ceb2e8" transform="scale(1 -1) translate(0 -378)" x="657.36" y="-31.68" width="18.72" height="378"/>
+iVBORw0KGgoAAAANSUhEUgAAABsAAAINCAYAAADPxAT6AAACbElEQVR4nO2d0Y3DMAzFnLQ73Uq3/3/jDmFCQAlyAYF5kpwYh961/v/2GuKeKrTWWu/rvsaKZYaQGcKw2aU1s2bWY0TIDCEzhMwQOjwRzJllBpAZQmYImSGYzTqpATJDEJvdg+XEly4v7bp6aVvfnNlcsTJDMJuJN8hcsTJDaM4QmjMEdWaZndN7I4I6M62ZOLO5YmX2e8UaaoSGGsGcmfbD4i4zgOnM5oqVGcL7Fp/Uc8WaMwR1Zs3ZOc0ZgviN2JzZXLH+hgfBO2cNNYJ5qLVm2qFWZzZXrA8LhDJDyAxBbTZXr8wQMkMYNhusV2YIarO68Rz1pYv0MarNtEO9vJl5zbTdKM7Ma1Y3ntPWRzBn1pwBTP9ajTYz7aWLODOt2aXtxjIjUF8nSR+jeRFbW9+cmdbsWq+xYmWG4D08zZlpzTrPCJozhHYjQpkhmDPzmo39L75ps7WfsWLiSxftY8wMYdjs0Zp5M8sMoDlDMGeWGcCs2d6fsWJtEARxN2ZGkBlCGwQhMwSvWUON4G0Qs5m3G5+5i/0yQ1Cb1Y3nZIZQNyKUGYI6M6vZ3nXjOZkhtBsRunRBqPUR1Jl5zerGczJDqBsRhj8sPt7MtGbazHaZAUybaXdj3QjQ1kdQn9TWDaKdsxYxgrdBxGbmbrQuYnNmWjNtZuZXOa1ZuxGg3Yggzsy7G72ZPWUGMG2mPc+s3VjrI3gbRJzZozWrGwkyQ1B3Yy885zRnCJ1nCHUjQpkhZIYg7kbv1h98ucrsB4t5H+N7cKbLjCEzhMwQMkPIDEFs5v0VDW9mmRFkhpAZQmYIfXkidOmCkBmC1+wLS2As8agHtUIAAAAASUVORK5CYII=" id="image9bfe3d0deb" transform="scale(1 -1) translate(0 -378)" x="650.88" y="-31.68" width="19.44" height="378"/>
    <g id="LineCollection_1"/>
    <g id="patch_9">
-    <path d="M 657.383856 409.5475 
-L 666.824544 409.5475 
-L 676.265231 409.5475 
-L 676.265231 31.92 
-L 666.824544 31.92 
-L 657.383856 31.92 
-L 657.383856 409.5475 
+    <path d="M 651.201936 409.5475 
+L 660.642624 409.5475 
+L 670.083311 409.5475 
+L 670.083311 31.92 
+L 660.642624 31.92 
+L 651.201936 31.92 
+L 651.201936 409.5475 
 z
 " style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
   </g>
  </g>
  <defs>
-  <clipPath id="p8f607f2fa6">
-   <rect x="58.16" y="31.92" width="580.380339" height="377.6275"/>
+  <clipPath id="p064742898d">
+   <rect x="58.16" y="31.92" width="574.392819" height="377.6275"/>
   </clipPath>
  </defs>
 </svg>
