@@ -1,0 +1,16 @@
+graph,group,x_low,x_high,y_low,y_high
+03_effect_kp,,-0.73,8.73,0,0.31125
+03_effect_alpha,,-0.73,8.73,0,0.22625
+03_tradeoff,,-1,20.6682,0,0.28884
+03_ranking,,0,0.27324,-0.3575,0.3575
+07a_rpm_std,,-4.3575,84.3575,0,3.00125
+07c_pwm_vs_rpm,,0,0.29382,0,3.00125
+10a_grid_jitter,,-0.5,8.5,8.5,-0.5
+10b_grid_overshoot,,-0.5,8.5,8.5,-0.5
+10c_grid_rise,,-0.5,8.5,8.5,-0.5
+10d_grid_settle,,-0.5,8.5,8.5,-0.5
+10e_grid_settle2,,-0.5,8.5,8.5,-0.5
+10f_grid_rpm_std,,-0.5,8.5,8.5,-0.5
+10g_grid_power,,-0.5,8.5,8.5,-0.5
+10h_grid_current_ma,,-0.5,8.5,8.5,-0.5
+10e_grid_best_region,,-0.5,8.5,8.5,-0.5

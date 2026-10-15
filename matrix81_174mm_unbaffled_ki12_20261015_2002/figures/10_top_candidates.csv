@@ -1,0 +1,2 @@
+rank,name,kp,ki,alpha,jitter_pct,overshoot_pct,settle_s,rpm_std,jitter_spread,runs
+0,A_baseline,2.629,12.0,1.0,0.16560000000000002,17.3048,4.321999999999999,2.0294,0.025999999999999995,5
