@@ -24,10 +24,6 @@
       0.0,
       20.0
     ],
-    "win_x": [
-      10.0,
-      13.0
-    ],
     "duty": [
       0.0,
       40.0
@@ -40,7 +36,6 @@
     "volts": "all runs with wattmeter data",
     "current_ma": "all runs with wattmeter data",
     "power_w": "all runs with wattmeter data",
-    "win_x": "steady-state window used for every open-loop run",
     "duty": "open-loop runs"
   }
 }

@@ -1,11 +1,11 @@
 graph,group,x_low,x_high,y_low,y_high
-11_openloop_trace_0069rpm,ol_speed_trace [y span only],10,13,0,50
-11_openloop_trace_0161rpm,ol_speed_trace [y span only],10,13,0,50
-11_openloop_trace_0235rpm,ol_speed_trace [y span only],10,13,0,50
-11_openloop_trace_0300rpm,ol_speed_trace [y span only],10,13,0,50
-11_openloop_trace_0380rpm,ol_speed_trace [y span only],10,13,0,50
-11_openloop_trace_0466rpm,ol_speed_trace [y span only],10,13,0,50
-11_openloop_overlay_deviation,,10,13,-15.6351,22.1484
+11_openloop_trace_0069rpm,,9.85053,13.1395,43.9131,93.9131
+11_openloop_trace_0161rpm,,9.85052,13.1395,135.74,185.74
+11_openloop_trace_0235rpm,,9.85051,13.1395,210.105,260.105
+11_openloop_trace_0300rpm,,9.85052,13.1395,275.155,325.155
+11_openloop_trace_0380rpm,,9.85052,13.1395,354.788,404.788
+11_openloop_trace_0466rpm,,9.85051,13.1395,441.161,491.161
+11_openloop_overlay_deviation,,9.85051,13.1395,-15.6351,22.1484
 12a_scaling_amplitude,,55.1305,582.701,0.0941878,13.882
 12b_ripple_percent,,55.1305,582.701,1.35836,16.1858
 13_openloop_orders,,0,13,-0.48208,10.1454

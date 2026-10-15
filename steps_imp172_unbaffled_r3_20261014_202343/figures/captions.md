@@ -44,3 +44,7 @@ Numbers come straight from the data; edit the wording, not the numbers.
 
 **individual/11c_ol_voltage_vs_duty** - Steady-state supply voltage (v) against the commanded duty, one point per run.
 
+**00_summary_table** - Summary of all measured data (mean of repeats). See also metrics_*.csv for full per-run data.
+
+**individual/00_summary_table** - Summary of all measured data (mean of repeats). See also metrics_*.csv for full per-run data.
+

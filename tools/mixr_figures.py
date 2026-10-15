@@ -15,8 +15,7 @@ Put the CSVs of ONE test session in a folder (plus results_raw.txt if you have i
 
 SAME AXES: every graph of one kind (all PWM traces, all speed traces, all power graphs, ...) uses ONE set of x and y limits, taken from ALL runs in the folder.
   The limits are written to figures/axis_limits.json; figures/axis_limits_check.csv lists the x and y limits of every individual graph, and the script
-  prints a check that graphs of one kind really have identical axes.  Graphs that are NOT forced identical: scatter plots, bar charts of the metrics, heat maps, and the open-loop scaling (12a/12b), order-spectrum (13) and
-  deviation (y axis) graphs.  Open-loop speed traces (11_) and repeat traces (14b) share x and the same y SPAN, each centred on its own speed.
+  prints a check that graphs of one kind really have identical axes.  Graphs that are NOT forced identical: scatter plots, bar charts of the metrics, heat maps.
 ELECTRICAL (when the CSVs have bus_v / current_ma / power_w): voltage, current and power as INDIVIDUAL graphs only (11a power, 11b current, 11c voltage:
   per setting, overlay, bars; open-loop: vs time, vs duty, vs speed).  SPEED-STEP runs (--ref-step-to): 12a speed, 12b PWM, 12c current, 12d power, 12e voltage
   (one line per Ki, aligned at the step), 12f full runs, and metrics_step_runs.csv (same definitions as the daemon's rs_* fields).
@@ -132,20 +131,7 @@ class Out:
         if plan is None or not getattr(self.args, "same_axes", True):
             return
         g = axis_group(name)
-        if name == "11_openloop_overlay_deviation" and plan.get("win_x"):
-            axes[0].set_xlim(*plan.get("win_x"))
-        elif g.startswith("ol_speed_trace") and plan.get("win_x"):
-            axes[0].set_xlim(*plan.get("win_x"))              # y is already mean +- 25 RPM in every graph: the same SPAN, centred on each speed
-        elif g.startswith("ol_repeat_trace"):
-            if plan.get("t_full") and plan.get("t_full")[1] >= 12.0:
-                axes[0].set_xlim(10.0, 11.5)
-            sp = plan.get("ol_repeat_span")
-            if sp:
-                c = 0.5 * sum(axes[0].get_ylim())
-                axes[0].set_ylim(c - sp[1] / 2, c + sp[1] / 2)  # the same SPAN in every graph, centred on its own speed
-        elif g == "ol_repeat_spectrum" and plan.get("rep_spec_y"):
-            axes[0].set_ylim(*plan.get("rep_spec_y"))
-        elif g in ("pwm_trace_window", "rpm_trace_window", "rpm_pwm_window") and plan.get("win_x"):
+        if g in ("pwm_trace_window", "rpm_trace_window", "rpm_pwm_window") and plan.get("win_x"):
             for ax in axes:
                 ax.set_xlim(*plan.get("win_x"))
         elif g == "startup_step":                              # the graph plots the first 1.2 s; a settling marker must not stretch the axis
@@ -156,10 +142,7 @@ class Out:
         self._apply_plan(name, axes)
         g = axis_group(name)
         for i, ax in enumerate(axes):
-            yl = ax.get_ylim()
-            if g.endswith("[y span only]"):
-                yl = (0.0, round(yl[1] - yl[0], 6))                       # compare the span: each graph is centred on its own speed
-            self.axlog.append((name, (g + (":top" if i == 0 else ":bottom")) if (g and len(axes) > 1) else g, ax.get_xlim(), yl))
+            self.axlog.append((name, (g + (":top" if i == 0 else ":bottom")) if (g and len(axes) > 1) else g, ax.get_xlim(), ax.get_ylim()))
 
     def write_axis_check(self, path):
         """axis_limits_check.csv: the x and y limits of every individual graph; and a check that graphs of one kind have identical axes."""
@@ -1941,12 +1924,6 @@ def build_plan(pi, step, ol, args):
             if len(v):
                 plan.set(key, nice_range(v.min(), v.max(), 0.08, key != "volts"), "all runs with wattmeter data")
     global WIN_FIXED, WIN_REQ
-    if not pi and ol:                                   # open-loop-only folder: the same fixed steady-state window for every run
-        tmin, w = min(r.t[-1] for r in ol), float(args.window[1] - args.window[0])
-        win = tuple(args.window) if tmin >= args.window[1] + 0.5 else (max(0.0, float(np.floor(tmin * 2) / 2) - w), float(np.floor(tmin * 2) / 2))
-        plan.set("win_x", win, "steady-state window used for every open-loop run")
-        if args.same_axes:
-            WIN_FIXED, WIN_REQ = (float(win[0]), float(win[1])), tuple(args.window)
     if pi:
         tmin, w = min(r.t[-1] for r in pi), float(args.window[1] - args.window[0])
         win = tuple(args.window) if tmin >= args.window[1] + 0.5 else (max(0.0, float(np.floor(tmin * 2) / 2) - w), float(np.floor(tmin * 2) / 2))
@@ -1978,28 +1955,6 @@ def build_plan(pi, step, ol, args):
                 plan.set(key + "_step", nice_range(v.min(), v.max(), 0.08, key != "volts"), "around the step, all step runs")
     if ol:
         plan.set("duty", nice_range(0, max(float(np.median(r.pwm)) for r in ol), 0.08, True), "open-loop runs")
-        grp = {}
-        for r in ol:
-            grp.setdefault(r.pwm_cmd, []).append(r)
-        spans, spec_max = [], 0.0
-        for k, g in grp.items():
-            if len(g) < 2:
-                continue
-            vals = [r.rpm[trace_window(r, (10, 11.5))[0]] for r in g]
-            vals = [v for v in vals if len(v)]
-            if vals:
-                spans.append(float(np.ptp(np.concatenate(vals))))
-            for r in g:
-                try:
-                    sp = order_spectrum(r, r.rpm)
-                    if sp is not None and len(sp[1]):
-                        spec_max = max(spec_max, float(np.nanmax(sp[1])))
-                except Exception:                                                        # noqa: BLE001
-                    pass
-        if spans:
-            plan.set("ol_repeat_span", (0.0, max(spans) * 1.15), "largest repeat-to-repeat range at any PWM, +15 %")
-        if spec_max > 0:
-            plan.set("rep_spec_y", (0.0, nice_range(0, spec_max * 1.08, 0.0, True)[1]), "largest spectrum amplitude of all repeats")
     return plan
 
 
@@ -2022,7 +1977,6 @@ AXIS_GROUPS = [(r"^01_pwm_trace_", "pwm_trace_window"), (r"^06_rpm_trace_", "rpm
                (r"^11a_power_(trace|overlay)", "elec_power_time"), (r"^11b_current_(trace|overlay)", "elec_current_time"), (r"^11c_voltage_(trace|overlay)", "elec_voltage_time"),
                (r"^11a_ol_power_vs_time", "ol_power_time"), (r"^11b_ol_current_vs_time", "ol_current_time"), (r"^11c_ol_voltage_vs_time", "ol_voltage_time"), (r"^11a_ol_power_vs_duty", "ol_power_duty"), (r"^11b_ol_current_vs_duty", "ol_current_duty"),
                (r"^11c_ol_voltage_vs_duty", "ol_voltage_duty"), (r"^11a_ol_power_vs_rpm", "ol_power_rpm"), (r"^11b_ol_current_vs_rpm", "ol_current_rpm"),
-               (r"^11_openloop_trace_", "ol_speed_trace [y span only]"), (r"^14b_repeat_trace_", "ol_repeat_trace [y span only]"), (r"^14a_repeat_spectrum_", "ol_repeat_spectrum"),
                (r"^12a_step_speed_", "step_speed"), (r"^12b_step_pwm_", "step_pwm"), (r"^12c_step_current_", "step_current"), (r"^12d_step_power_", "step_power"),
                (r"^12e_step_voltage_", "step_voltage"), (r"^12f_step_run_", "step_run")]
 
@@ -2310,6 +2264,244 @@ def step_section(step, raw_rows, args, out):
         out.single2(f"12f_step_run_{short_id(name)}", draw2, title=f"{name}: Kp {kp:g}, Ki {ki:.4g}, \u03b1 {al:g}", caption=f"Full run of {name}: speed with its target, and the PWM duty. Same axes in every graph of this kind.")
 
 
+
+# ======================================================================================== summary table (all run types)
+def _fmt(v, decimals=2):
+    if v is None or (isinstance(v, float) and not (v == v)):
+        return "\u2014"
+    try:
+        return f"{float(v):.{decimals}f}"
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def summary_table(pi, step, ol, raw_rows, args, out):
+    """Write figures/00_summary_table.png/.pdf and 00_summary_table.csv."""
+    import pandas as pd
+
+    sections = []   # list of (title_str, col_headers_list, data_rows_list)
+
+    # ---- open-loop ----
+    if ol:
+        grps = {}
+        for r in ol:
+            grps.setdefault(r.pwm_cmd, []).append(r)
+        has_e = any(has_elec([r], "current_ma") for r in ol)
+        H = ["Duty (%)", "Speed (RPM)", "Ripple std (RPM)",
+             "Rise 10-90 (s)", "Settle 5% (s)", "Overshoot (%)"]
+        if has_e:
+            H += ["Voltage (V)", "Current (mA)", "Power (W)"]
+        rows = []
+        for k in sorted(grps, key=lambda k: float(
+                np.mean(steady_arr(grps[k][0], grps[k][0].rpm) if steady_arr(grps[k][0], grps[k][0].rpm) is not None else [0]))):
+            rs = grps[k]
+            rpms  = [float(np.mean(steady_arr(r, r.rpm))) for r in rs
+                     if steady_arr(r, r.rpm) is not None]
+            stds  = [float(np.std(steady_arr(r, r.rpm)))  for r in rs
+                     if steady_arr(r, r.rpm) is not None]
+            rises, settles, overshoots = [], [], []
+            for r in rs:
+                t, y = r.t, r.rpm
+                yf = float(np.mean(y[t >= t[-1] - max(1.0, 0.1 * (t[-1] - t[0]))]))
+                sm = pd.Series(y).rolling(5, center=True, min_periods=1).mean().to_numpy()
+                i10 = np.where(sm >= 0.1 * yf)[0]
+                i90 = np.where(sm >= 0.9 * yf)[0]
+                if len(i10) and len(i90):
+                    rises.append(float(t[i90[0]] - t[i10[0]]))
+                ob = np.where(np.abs(y - yf) > 0.05 * yf)[0]
+                settles.append(float(t[ob[-1]]) if len(ob) else 0.0)
+                overshoots.append(float(max(0.0, (y.max() - yf) / yf * 100.0)))
+            row = [
+                f"{k * 100 / 4095:.1f}",
+                _fmt(np.mean(rpms), 1) if rpms else "\u2014",
+                _fmt(np.mean(stds), 2) if stds else "\u2014",
+                _fmt(np.mean(rises), 2) if rises else "\u2014",
+                _fmt(np.mean(settles), 2) if settles else "\u2014",
+                _fmt(np.mean(overshoots), 1) if overshoots else "\u2014",
+            ]
+            if has_e:
+                for key, dec in (("volts", 2), ("current_ma", 0), ("power_w", 2)):
+                    vals = [steady_mean(r, key) for r in rs
+                            if has_elec([r], key)]
+                    vals = [v for v in vals if np.isfinite(v)]
+                    row.append(_fmt(np.mean(vals), dec) if vals else "\u2014")
+            rows.append(row)
+        if rows:
+            sections.append(("Open-loop step response", H, rows))
+
+    # ---- PI startup ----
+    if pi or raw_rows:
+        raw_by = {row["name"]: row for row in raw_rows}
+        cfgs_used = {}
+        for r in pi:
+            cfgs_used.setdefault(r.cfg, []).append(r)
+        for row in raw_rows:
+            if row["name"] not in cfgs_used:
+                cfgs_used[row["name"]] = []
+        has_e_pi = any(has_elec(runs, "current_ma")
+                       for runs in cfgs_used.values() if runs)
+        H = ["Setting", "Kp", "Ki", "\u03b1",
+             "Jitter (% duty)", "Speed std (RPM)",
+             "Overshoot (%)", "Settling (s)", "Rise 10-90 (s)"]
+        if has_e_pi:
+            H += ["Current (mA)", "Power (W)"]
+        rows = []
+        for name, runs in sorted(cfgs_used.items()):
+            rr = raw_by.get(name, {})
+            kp = rr.get("kp", float("nan"))
+            ki = rr.get("ki", float("nan"))
+            al = rr.get("alpha", 1.0)
+            if not np.isfinite(kp) and runs:
+                kp, ki, al, _ = parse_gains(name)
+            jit  = rr.get("pwm_jitter_pct", float("nan"))
+            rss  = rr.get("rpm_std",         float("nan"))
+            ovr  = rr.get("overshoot_pct",   float("nan"))
+            stl  = rr.get("settle5_s",        float("nan"))
+            rise = rr.get("rise10_90_s",      float("nan"))
+            if not np.isfinite(jit) and runs:
+                ms  = [pi_metrics(r) for r in runs]
+                jit  = float(np.mean([m["jitter"]   for m in ms]))
+                rss  = float(np.mean([m["rpm_std"]  for m in ms]))
+                ovr  = float(np.mean([m["overshoot"] for m in ms]))
+                stl  = float(np.mean([m["settle"]   for m in ms]))
+                rvals = [m["rise"] for m in ms if np.isfinite(m["rise"])]
+                rise = float(np.mean(rvals)) if rvals else float("nan")
+            row = [short_id(name),
+                   _fmt(kp, 4), _fmt(ki, 4), _fmt(al, 2),
+                   _fmt(jit, 3), _fmt(rss, 2), _fmt(ovr, 1),
+                   _fmt(stl, 2), _fmt(rise, 2)]
+            if has_e_pi:
+                for key, raw_key, dec in (
+                        ("current_ma", "i_mean_mA", 0),
+                        ("power_w",    "p_mean_W",  2)):
+                    v = rr.get(raw_key, float("nan"))
+                    if not np.isfinite(v) and runs:
+                        vals = [steady_mean(r, key) for r in runs
+                                if has_elec([r], key)]
+                        vals = [x for x in vals if np.isfinite(x)]
+                        v = float(np.mean(vals)) if vals else float("nan")
+                    row.append(_fmt(v, dec))
+            rows.append(row)
+        if rows:
+            sections.append(("PI startup runs", H, rows))
+
+    # ---- speed-step ----
+    if step:
+        raw_by_s = {row["name"]: row for row in raw_rows}
+        cfg_s = {}
+        for r in step:
+            cfg_s.setdefault(r.cfg, []).append(r)
+        has_e_s = any(has_elec(runs, "current_ma")
+                      for runs in cfg_s.values())
+        H = ["Setting", "Kp", "Ki", "\u03b1",
+             "Step overshoot (%)", "Rise (s)", "Settle (s)", "Peak duty (%)"]
+        if has_e_s:
+            H += ["Current (mA)", "Power (W)"]
+        rows = []
+        for name, runs in sorted(cfg_s.items()):
+            rr = raw_by_s.get(name, {})
+            kp = rr.get("kp", float("nan"))
+            ki = rr.get("ki", float("nan"))
+            al = rr.get("alpha", 1.0)
+            if not np.isfinite(kp):
+                kp, ki, al, _ = parse_gains(name)
+            ms = [py_step_metrics(r) for r in runs]
+            ms = [m for m in ms if m is not None]
+            def _sm(key, ms=ms):
+                vals = [m[key] for m in ms
+                        if np.isfinite(m.get(key, float("nan")))]
+                return float(np.mean(vals)) if vals else float("nan")
+            row = [short_id(name),
+                   _fmt(kp, 4), _fmt(ki, 4), _fmt(al, 2),
+                   _fmt(_sm("overshoot_pct"), 1),
+                   _fmt(_sm("rise_s"), 2),
+                   _fmt(_sm("settle_s"), 2),
+                   _fmt(_sm("peak_duty_pct"), 1)]
+            if has_e_s:
+                for key, dec in (("current_ma", 0), ("power_w", 2)):
+                    row.append(_fmt(_sm(key + "_final"), dec))
+            rows.append(row)
+        if rows:
+            sections.append(("Speed-step runs", H, rows))
+
+    if not sections:
+        return
+
+    # ---- layout ----
+    n_cols = max(len(h) for _, h, _ in sections)
+    col_hdr = []
+    flat_data = []
+    flat_colors = []
+    BASE_BLUE = "#D6E4F0"
+    HDR_COL   = "#1A5276"
+    ALT = ["#FFFFFF", "#F2F3F4"]
+    alt_i = 0
+    for sec_idx, (title_s, hdr_s, data_s) in enumerate(sections):
+        if sec_idx == 0:
+            pad = n_cols - len(hdr_s)
+            col_hdr = hdr_s + [""] * pad
+        pad = n_cols - len(hdr_s)
+        flat_data.append([title_s] + [""] * (n_cols - 1))
+        flat_colors.append([HDR_COL] * n_cols)
+        for r in data_s:
+            flat_data.append(r + [""] * (n_cols - len(r)))
+            flat_colors.append([ALT[alt_i % 2]] * n_cols)
+            alt_i += 1
+
+    n_rows = len(flat_data)
+    row_h = 0.38
+    fig_h = max(3.5, 0.52 + n_rows * row_h + 0.6)
+    fig, ax = plt.subplots(figsize=(max(10, n_cols * 1.45), fig_h))
+    ax.set_axis_off()
+
+    tb = ax.table(cellText=flat_data, colLabels=col_hdr,
+                  loc="upper center", cellLoc="center",
+                  colWidths=[1.0 / n_cols] * n_cols)
+    tb.auto_set_font_size(False)
+    tb.set_fontsize(9)
+
+    # column header row
+    for j in range(n_cols):
+        cell = tb[0, j]
+        cell.set_facecolor(BASE_BLUE)
+        cell.set_text_props(fontweight="bold", fontsize=8.5)
+
+    # section-title and data rows
+    ri = 1
+    for _, _, data_s in sections:
+        for j in range(n_cols):
+            cell = tb[ri, j]
+            cell.set_facecolor(HDR_COL)
+            cell.set_text_props(
+                color="white", fontweight="bold", fontsize=8.5,
+                ha="left" if j == 0 else "center")
+            cell.set_height(0.52 / fig_h)
+        ri += 1
+        for row_colors in [flat_colors[ri - 1 + i] for i in range(len(data_s))]:
+            for j in range(n_cols):
+                tb[ri, j].set_facecolor(row_colors[j])
+            ri += 1
+
+    ax.set_title("Measured data summary  (mean of repeats where multiple runs exist)",
+                 fontsize=11, fontweight="bold", pad=8)
+    fig.tight_layout()
+    cap = ("Summary of all measured data (mean of repeats). "
+           "See also metrics_*.csv for full per-run data.")
+    out.comp(fig, "00_summary_table", cap)
+    out.single_fig("00_summary_table", fig, cap)
+
+    # editable CSV
+    csv_rows = []
+    for title_s, hdr_s, data_s in sections:
+        for i, r in enumerate(data_s):
+            d = {"section": title_s if i == 0 else ""}
+            d.update(dict(zip(hdr_s, r)))
+            csv_rows.append(d)
+    pd.DataFrame(csv_rows).to_csv(
+        os.path.join(out.dir, "00_summary_table.csv"), index=False)
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Automatic thesis-quality and PowerPoint-ready figures for MIXR-1 test data")
     ap.add_argument("folder")
@@ -2400,6 +2592,7 @@ def main():
         electrical_ol(ol, args, out)
     if dash:
         dash_section(dash, args, out)
+    summary_table(pi, step, ol, raw_rows, args, out)
     args.plan.save(os.path.join(outdir, "axis_limits.json"))
     out.write_axis_check(os.path.join(outdir, "axis_limits_check.csv"))
     if not out.caps:
