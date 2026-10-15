@@ -1,0 +1,12 @@
+1 settings finished.  Ki fixed at 12.  Acceptable = overshoot <= 5 % and settling <= 0.3 s.
+Typical repeat-to-repeat spread of PWM jitter: nan % duty -> differences smaller than this are NOT real.
+
+=== BEST ACCEPTABLE SETTINGS (lowest PWM jitter), top 8 ===
+setting                  n      kp      ki  alpha  pwmJit%   vs A  rpmStd rise10-90 power W   ovr% settle_s
+-----------------------------------------------------------------------------------------------------------
+  (none meet the limits - relax MAX_OVERSHOOT / MAX_SETTLE)
+
+=== ALL SETTINGS ranked by PWM jitter (top 20; check overshoot!) ===
+setting                  n      kp      ki  alpha  pwmJit%   vs A  rpmStd rise10-90 power W   ovr% settle_s
+-----------------------------------------------------------------------------------------------------------
+final_controller         1   2.629      12   0.15    0.050           5.00    1.29   43.73  19.10     6.52
