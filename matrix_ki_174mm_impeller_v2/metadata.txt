@@ -1,0 +1,6 @@
+date:    2026-10-15T17:56:07+08:00
+host:    mixr1   kernel 6.18.50+rpt-rpi-v8
+daemon:  ./mixr1_daemon   sha256 d7f99b61f5ebcf4f   built 2026-10-15 17:14:01
+command: ./run_matrix.sh 300 22 3 --base-kp 2.629 --base-ki 1.454 --kps 2.629 3.155 --alphas 0.15 0.2 --kis 1.454 6 12 --out matrix_ki_174mm_impeller_v2 --pause 30 --max-duty 35 --ref-step-to 340 --ref-step-at 10 --ref-step-to2 300 --ref-step-at2 14 --power-warn-w 60 --abort-rpm 400
+flags:   --fifo --power --no-stream --abort-rpm=400 --wait-rest=60 --max-duty=35 --ref-step-to=340 --ref-step-at=10 --ref-step-to2=300 --ref-step-at2=14 --power-warn-w=60
+note:    174 mm impeller, unbaffled, 90 mm water, 24 C      (set NOTE="water 24C, baffled, 200 mm" in front of the command to record the conditions)

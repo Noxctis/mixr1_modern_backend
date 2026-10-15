@@ -1,0 +1,84 @@
+13 settings finished.  Ki varies between settings (1.454 to 12; see the ki column).  Acceptable = overshoot <= 5 % and settling <= 0.3 s.
+Typical repeat-to-repeat spread of PWM jitter: 0.003 % duty -> differences smaller than this are NOT real.
+
+=== BEST ACCEPTABLE SETTINGS (lowest PWM jitter), top 8 ===
+setting                  n      kp      ki  alpha  pwmJit%   vs A  rpmStd rise10-90 power W   ovr% settle_s
+-----------------------------------------------------------------------------------------------------------
+  (none meet the limits - relax MAX_OVERSHOOT / MAX_SETTLE)
+
+baseline for reference:
+A_baseline               1   2.629   1.454   1.00    0.173           6.61    5.27    5.25  12.30     6.62
+
+=== ALL SETTINGS ranked by PWM jitter (top 20; check overshoot!) ===
+setting                  n      kp      ki  alpha  pwmJit%   vs A  rpmStd rise10-90 power W   ovr% settle_s
+-----------------------------------------------------------------------------------------------------------
+G005_kp2.629_ki12_a0.15  3   2.629      12   0.15    0.022   -87%    2.01    1.16    4.05  18.06     3.98
+G003_kp2.629_ki6_a0.15   3   2.629       6   0.15    0.023   -87%    4.43    1.85    3.98  16.39     6.08
+G001_kp2.629_ki1.454_a0.15 3   2.629   1.454   0.15    0.026   -85%    6.31    5.20    5.21  12.26     6.58
+G009_kp3.155_ki6_a0.15   3   3.155       6   0.15    0.026   -85%    4.48    1.84    4.03  16.64     6.15
+G011_kp3.155_ki12_a0.15  3   3.155      12   0.15    0.027   -84%    2.15    1.23    4.02  16.78     4.23
+G006_kp2.629_ki12_a0.2   3   2.629      12   0.20    0.029   -83%    2.06    1.25    4.02  17.77     4.14
+G004_kp2.629_ki6_a0.2    3   2.629       6   0.20    0.029   -83%    4.35    1.89    3.99  16.88     6.24
+G007_kp3.155_ki1.454_a0.15 3   3.155   1.454   0.15    0.029   -83%    5.92    5.13    4.96  12.31     6.78
+G002_kp2.629_ki1.454_a0.2 3   2.629   1.454   0.20    0.033   -81%    6.43    5.16    5.19  12.57     6.73
+G012_kp3.155_ki12_a0.2   3   3.155      12   0.20    0.034   -80%    2.11    1.22    4.02  18.02     4.20
+G010_kp3.155_ki6_a0.2    3   3.155       6   0.20    0.035   -80%    4.51    1.86    4.04  16.30     6.40
+G008_kp3.155_ki1.454_a0.2 3   3.155   1.454   0.20    0.038   -78%    6.03    5.15    4.97  12.18     6.91
+A_baseline               1   2.629   1.454   1.00    0.173           6.61    5.27    5.25  12.30     6.62
+
+=== PWM jitter, % duty (rows: Kp, columns: alpha; * = acceptable) ===
+   Kp/alpha       1     0.2    0.15
+    3.155       .  0.038   0.029 
+    2.629  0.173   0.033   0.026 
+
+=== Startup overshoot, % (rows: Kp, columns: alpha; * = acceptable) ===
+   Kp/alpha       1     0.2    0.15
+    3.155       .   12.2    12.3 
+    2.629   12.3    12.6    12.3 
+
+=== Settling time to +-5 %, s (rows: Kp, columns: alpha; * = acceptable) ===
+   Kp/alpha       1     0.2    0.15
+    3.155       .   6.91    6.78 
+    2.629   6.62    6.73    6.58 
+
+=== PWM jitter, % duty, alpha = 0.2 (rows: Kp, columns: Ki; * = acceptable) ===
+   Kp \ Ki      12       6    1.45
+    3.155  0.034   0.035   0.038 
+    2.629  0.029   0.029   0.033 
+
+=== Startup overshoot, %, alpha = 0.2 (rows: Kp, columns: Ki; * = acceptable) ===
+   Kp \ Ki      12       6    1.45
+    3.155   18.0    16.3    12.2 
+    2.629   17.8    16.9    12.6 
+
+=== Settling time to +-5 %, s, alpha = 0.2 (rows: Kp, columns: Ki; * = acceptable) ===
+   Kp \ Ki      12       6    1.45
+    3.155   4.20    6.40    6.91 
+    2.629   4.14    6.24    6.73 
+
+=== PWM jitter, % duty, alpha = 0.15 (rows: Kp, columns: Ki; * = acceptable) ===
+   Kp \ Ki      12       6    1.45
+    3.155  0.027   0.026   0.029 
+    2.629  0.022   0.023   0.026 
+
+=== Startup overshoot, %, alpha = 0.15 (rows: Kp, columns: Ki; * = acceptable) ===
+   Kp \ Ki      12       6    1.45
+    3.155   16.8    16.6    12.3 
+    2.629   18.1    16.4    12.3 
+
+=== Settling time to +-5 %, s, alpha = 0.15 (rows: Kp, columns: Ki; * = acceptable) ===
+   Kp \ Ki      12       6    1.45
+    3.155   4.23    6.15    6.78 
+    2.629   3.98    6.08    6.58 
+
+=== REFERENCE STEP (closed loop, small step around the operating point; valid = the PWM never hit the duty cap) ===
+setting                  n     kp  alpha  overshoot% rise10-90 settle_s peak duty%  sat_s  valid
+----------------------------------------------------------------------------------------------------
+G004_kp2.629_ki6_a0.2    3   2.63   0.20        48.8      7.44     9.08       24.0   0.00  yes
+G009_kp3.155_ki6_a0.15   3   3.15   0.15        57.0      7.43    10.98       24.2   0.00  yes
+G010_kp3.155_ki6_a0.2    3   3.15   0.20        61.5      7.19    11.07       24.2   0.00  yes
+G008_kp3.155_ki1.454_a0.2 3   3.15   0.20       237.6      0.00     7.53       23.1   0.00  yes
+G007_kp3.155_ki1.454_a0.15 3   3.15   0.15       244.0      0.01     7.64       23.0   0.00  yes
+A_baseline               1   2.63   1.00       270.9      0.00    -1.00       23.3   0.00  yes
+G002_kp2.629_ki1.454_a0.2 3   2.63   0.20       294.5      0.00    -1.00       23.1   0.00  yes
+G001_kp2.629_ki1.454_a0.15 3   2.63   0.15       301.3      0.00    11.92       23.1   0.00  yes
