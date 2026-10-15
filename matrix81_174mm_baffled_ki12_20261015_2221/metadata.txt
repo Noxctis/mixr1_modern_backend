@@ -1,0 +1,6 @@
+date:    2026-10-15T22:21:38+08:00
+host:    mixr1   kernel 6.18.50+rpt-rpi-v8
+daemon:  ./mixr1_daemon   sha256 14ae4c4353e803b0   built 2026-10-15 20:00:14
+command: ./run_matrix.sh 300 22 1 --baseline-file baseline_174mm_baffled/baseline_gains.txt --base-ki 12 --out matrix81_174mm_baffled_ki12_20261015_2221 --pause 30 --abort-rpm 400 --ref-step-to 340 --ref-step-at 10 --ref-step-to2 300 --ref-step-at2 15 --power-warn-w 60
+flags:   --fifo --power --no-stream --abort-rpm=400 --wait-rest=60  --ref-step-to=340 --ref-step-at=10 --ref-step-to2=300 --ref-step-at2=15 --power-warn-w=60
+note:    174 mm impeller, baffled, 90 mm water, 24 C      (set NOTE="water 24C, baffled, 200 mm" in front of the command to record the conditions)
