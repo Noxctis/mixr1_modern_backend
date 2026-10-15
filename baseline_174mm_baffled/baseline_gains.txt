@@ -1,0 +1,1 @@
+kp=5.2541 ki=174.9979   # rule: Kp = 1/K, Ki = Kp/tau   (pole-zero cancellation = IMC with lambda = tau and the dead time ignored; this formula reproduces the ORIGINAL air gains 1.5641 / 41.2249 for K = 0.6393, A = 26.36 /s; whether it is the method your professor wants is for them to confirm); steps 20%, 25%, 30% (~300 RPM)
