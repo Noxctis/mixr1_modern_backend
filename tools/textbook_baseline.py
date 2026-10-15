@@ -187,7 +187,7 @@ def main():
     print("\nHOW THE BASELINE IS CHOSEN: every step above is a run from 0 to X % duty. For each run, K comes from its STEADY STATE (the last 3 s), and theta and tau from its early response.")
     print("  The numbers for every duty are in the table. The baseline is the MEDIAN over the steps whose steady-state speed is closest to the speed you will actually run at, because the plant is not")
     print("  exactly linear (K and tau change with speed) and the controller works at that speed. Use --all-steps to use every run, or --duties \"14 18 22\" to pick them yourself.")
-    print(f"\nBASELINE for the matrix: using {how}: {', '.join(f'{r['duty_pct']:.0f}% ({r['final_rpm']:.0f} RPM)' for r in near)}")
+    print(f"\nBASELINE for the matrix: using {how}: {', '.join(f'{r["duty_pct"]:.0f}% ({r["final_rpm"]:.0f} RPM)' for r in near)}")
     res = {}
     for rule in ("yourformula", "imc", "simc"):
         kps, kis = [], []
@@ -210,7 +210,7 @@ def main():
     if loopgain > 4:
         print(f"\n!! Kp x K = {loopgain:.1f}: a loop gain this large at high frequency usually hunts or amplifies noise once the real delay of the speed measurement is included. Do not use it without checking.")
     open(os.path.join(args.out, "baseline_gains.txt"), "w").write(
-        f"kp={kp:.4f} ki={ki:.4f}   # rule: {desc}; steps {', '.join(f'{r['duty_pct']:.0f}%' for r in near)} (~{args.work_rpm:g} RPM)\n")
+        f"kp={kp:.4f} ki={ki:.4f}   # rule: {desc}; steps {', '.join(f'{r["duty_pct"]:.0f}%' for r in near)} (~{args.work_rpm:g} RPM)\n")
     pd.DataFrame([{k: v for k, v in r.items() if k not in ("t", "y", "sm")} for r in rows]).to_csv(os.path.join(args.out, "textbook_fopdt.csv"), index=False)
     pd.DataFrame([{k: v for k, v in r.items() if k not in ("t", "y", "sm")} for r in rows_all]).to_csv(os.path.join(args.out, "textbook_fopdt_every_file.csv"), index=False)
     spread = max((r.get("tau_repeat_spread", 1.0) for r in rows), default=1.0)

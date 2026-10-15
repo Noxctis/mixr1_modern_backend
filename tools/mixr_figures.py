@@ -9,6 +9,17 @@ Put the CSVs of ONE test session in a folder (plus results_raw.txt if you have i
     python mixr_figures.py <folder> --show C3,F3     # force which configs get time-series graphs
     python mixr_figures.py <folder> --no-title       # individual graphs without titles (your slide has its own title)
     python mixr_figures.py <folder> --slide-size 13.33 7.5   # individual graph size in inches (default 10 x 5.625 = 16:9)
+    python mixr_figures.py <folder> --axes-from <other folder>/figures/axis_limits.json   # the SAME axes as another folder (e.g. baffled vs unbaffled)
+    python mixr_figures.py <folder> --ylim-power 0 10 --ylim-current 0 500 --ylim-volt 23 24.5 --xlim 0 40   # your own axis limits
+    python mixr_figures.py <folder> --no-same-axes   # old behaviour: every graph picks its own limits
+
+SAME AXES: every graph of one kind (all PWM traces, all speed traces, all power graphs, ...) uses ONE set of x and y limits, taken from ALL runs in the folder.
+  The limits are written to figures/axis_limits.json; figures/axis_limits_check.csv lists the x and y limits of every individual graph, and the script
+  prints a check that graphs of one kind really have identical axes.  Graphs that are NOT forced identical: scatter plots, bar charts of the metrics, heat maps, and the open-loop scaling (12a/12b), order-spectrum (13) and
+  deviation (y axis) graphs.  Open-loop speed traces (11_) and repeat traces (14b) share x and the same y SPAN, each centred on its own speed.
+ELECTRICAL (when the CSVs have bus_v / current_ma / power_w): voltage, current and power as INDIVIDUAL graphs only (11a power, 11b current, 11c voltage:
+  per setting, overlay, bars; open-loop: vs time, vs duty, vs speed).  SPEED-STEP runs (--ref-step-to): 12a speed, 12b PWM, 12c current, 12d power, 12e voltage
+  (one line per Ki, aligned at the step), 12f full runs, and metrics_step_runs.csv (same definitions as the daemon's rs_* fields).
 
 TWO kinds of output:
   figures/             multi-panel composites for the thesis document   (PNG 300 dpi + PDF vector)
@@ -24,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import re
 import sys
@@ -64,6 +76,7 @@ class Out:
         self.args = args
         self.caps = []
         self.n_ind = 0
+        self.axlog = []
         os.makedirs(self.dir, exist_ok=True)
         if not args.no_individual:
             os.makedirs(self.ind, exist_ok=True)
@@ -82,6 +95,7 @@ class Out:
         with plt.rc_context(SLIDE_RC):
             fig, ax = plt.subplots(figsize=size or tuple(self.args.slide_size))
             draw(ax)
+            self._log(name, [ax])
             if title and not self.args.no_title:
                 ax.set_title(title, fontsize=15, fontweight="bold", loc="left")
             fig.tight_layout()
@@ -102,6 +116,7 @@ class Out:
             fig, (a1, a2) = plt.subplots(2, 1, figsize=size or tuple(self.args.slide_size), sharex=True,
                                          gridspec_kw={"height_ratios": list(ratios)})
             draw(a1, a2)
+            self._log(name, [a1, a2])
             if title and not self.args.no_title:
                 a1.set_title(title, fontsize=14, fontweight="bold", loc="left")
             fig.tight_layout(h_pad=0.5)
@@ -111,6 +126,59 @@ class Out:
         self.n_ind += 1
         if caption:
             self.caps.append((f"individual/{name}", caption))
+
+    def _apply_plan(self, name, axes):
+        plan = getattr(self.args, "plan", None)
+        if plan is None or not getattr(self.args, "same_axes", True):
+            return
+        g = axis_group(name)
+        if name == "11_openloop_overlay_deviation" and plan.get("win_x"):
+            axes[0].set_xlim(*plan.get("win_x"))
+        elif g.startswith("ol_speed_trace") and plan.get("win_x"):
+            axes[0].set_xlim(*plan.get("win_x"))              # y is already mean +- 25 RPM in every graph: the same SPAN, centred on each speed
+        elif g.startswith("ol_repeat_trace"):
+            if plan.get("t_full") and plan.get("t_full")[1] >= 12.0:
+                axes[0].set_xlim(10.0, 11.5)
+            sp = plan.get("ol_repeat_span")
+            if sp:
+                c = 0.5 * sum(axes[0].get_ylim())
+                axes[0].set_ylim(c - sp[1] / 2, c + sp[1] / 2)  # the same SPAN in every graph, centred on its own speed
+        elif g == "ol_repeat_spectrum" and plan.get("rep_spec_y"):
+            axes[0].set_ylim(*plan.get("rep_spec_y"))
+        elif g in ("pwm_trace_window", "rpm_trace_window", "rpm_pwm_window") and plan.get("win_x"):
+            for ax in axes:
+                ax.set_xlim(*plan.get("win_x"))
+        elif g == "startup_step":                              # the graph plots the first 1.2 s; a settling marker must not stretch the axis
+            for ax in axes:
+                ax.set_xlim(-0.03, 1.23)
+
+    def _log(self, name, axes):
+        self._apply_plan(name, axes)
+        g = axis_group(name)
+        for i, ax in enumerate(axes):
+            yl = ax.get_ylim()
+            if g.endswith("[y span only]"):
+                yl = (0.0, round(yl[1] - yl[0], 6))                       # compare the span: each graph is centred on its own speed
+            self.axlog.append((name, (g + (":top" if i == 0 else ":bottom")) if (g and len(axes) > 1) else g, ax.get_xlim(), yl))
+
+    def write_axis_check(self, path):
+        """axis_limits_check.csv: the x and y limits of every individual graph; and a check that graphs of one kind have identical axes."""
+        import csv
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["graph", "group", "x_low", "x_high", "y_low", "y_high"])
+            for name, g, xl, yl in self.axlog:
+                w.writerow([name, g, f"{xl[0]:.6g}", f"{xl[1]:.6g}", f"{yl[0]:.6g}", f"{yl[1]:.6g}"])
+        groups = {}
+        for name, g, xl, yl in self.axlog:
+            if g:
+                groups.setdefault(g, []).append((name, xl, yl))
+        if groups:
+            print("\nAxis check (every graph of one kind must have the same x and y limits; full list: axis_limits_check.csv):")
+        for g, items in sorted(groups.items()):
+            ref = items[0]
+            bad = [n for n, xl, yl in items if not (np.allclose(xl, ref[1], atol=1e-6) and np.allclose(yl, ref[2], atol=1e-6))]
+            print(f"  {g:24s} {len(items):3d} graphs: " + ("identical axes" if not bad else f"DIFFERENT in {len(bad)}: " + ", ".join(bad[:4])))
 
     def single_fig(self, name, fig, caption=None):
         """Save an already-built single-axes figure (e.g. a table) to the individual folder too."""
@@ -144,6 +212,7 @@ class Run:
     volts: np.ndarray | None = None          # wattmeter (INA219) columns, when the run was recorded with one
     current_ma: np.ndarray | None = None
     power_w: np.ndarray | None = None
+    step_t: float = float("nan")              # reference-step runs: the time (s) at which the target changed
 
 
 def load_run(path: str):
@@ -174,13 +243,19 @@ def load_run(path: str):
             kind = "OL"
         elif mode.upper().startswith("PI") and const_tgt and (step == -1).all():
             kind = "PI"
+        elif (mode.upper().startswith("PI") and (step == -1).all() and np.isfinite(tgt).all() and len(np.unique(np.round(tgt, 3))) == 2
+              and np.count_nonzero(np.diff(tgt)) == 1):
+            kind = "STEP"                                                  # closed-loop reference step: target 300 -> 370 RPM, for example
         else:
             print(f"  skip {stem}: sweep / sine / non-constant target")
             return None
-        r = Run(path, stem, kind, cfg, rep, t, rpm, pwm_raw * 100.0 / 4095.0, target=float(tgt[0]) if const_tgt else np.nan,
+        r = Run(path, stem, kind, cfg, rep, t, rpm, pwm_raw * 100.0 / 4095.0, target=float(tgt[0]) if (const_tgt or kind == "STEP") else np.nan,
                 fb=df.fb_rpm.to_numpy(float) if "fb_rpm" in cols else None, pwm_cmd=int(pwm_raw[0]))
         if {"bus_v", "current_ma", "power_w"} <= cols:
             r.volts, r.current_ma, r.power_w = df.bus_v.to_numpy(float), df.current_ma.to_numpy(float), df.power_w.to_numpy(float)
+        if kind == "STEP":
+            r.tgt_series = tgt
+            r.step_t = float(t[int(np.argmax(np.abs(np.diff(tgt)) > 0)) + 1])
         if "torque_nm" in cols and df.torque_nm.notna().any():
             r.torque_nm = df.torque_nm.to_numpy(float)
             r.torque_v = df.torque_v.to_numpy(float) if "torque_v" in cols else None
@@ -294,7 +369,13 @@ def log_axis(ax, which, lo, hi, cand):
     axis.set_minor_formatter(NullFormatter())
 
 
+WIN_FIXED = None            # (lo, hi): set by build_plan; the same steady-state window for EVERY run (so every trace graph has the same x axis)
+WIN_REQ = None
+
+
 def trace_window(r: Run, win):
+    if WIN_FIXED is not None and WIN_REQ is not None and tuple(win) == WIN_REQ:
+        return (r.t >= WIN_FIXED[0]) & (r.t <= WIN_FIXED[1]), WIN_FIXED
     lo, hi = win
     if r.t[-1] < hi + 0.5:
         hi = r.t[-1]
@@ -1140,6 +1221,8 @@ def pi_section(runs, raw_rows, args, out):
         ymax = max(np.nanmax(c.runs[0].pwm[w[0]]) for c, w in zip(shown, wins))
         pad = 0.12 * (ymax - ymin)
         ylim = (ymin - pad, ymax + pad)
+        if args.same_axes and args.plan.get("pwm_win"):
+            ylim = args.plan.get("pwm_win")                 # the same PWM axis in every steady-state PWM graph
         fig, axs = plt.subplots(len(shown), 1, figsize=(10, (2.2 if len(shown) <= 5 else (1.75 if len(shown) <= 8 else 1.5)) * len(shown) + 1.2), sharex=True, sharey=True, squeeze=False)
         for ax, c in zip(axs[:, 0], shown):
             d_trace(ax, c, cols[c.name], args.window, ylim)
@@ -1296,6 +1379,8 @@ def pi_section(runs, raw_rows, args, out):
         rmax = max(np.nanmax(c.runs[0].rpm[w[0]]) for c, w in zip(shown, wins))
         rpad = 0.12 * (rmax - rmin)
         rlim = (rmin - rpad, rmax + rpad)
+        if args.same_axes and args.plan.get("rpm_win"):
+            rlim = args.plan.get("rpm_win")                 # the same speed axis in every steady-state speed graph
 
         def rtitle(c):
             v = mean_m(c, "rpm_std")
@@ -1359,6 +1444,8 @@ def pi_section(runs, raw_rows, args, out):
         pmax_s = max(float(np.nanmax(r.pwm[r.t <= 1.2])) for c in shown for r in c.runs[:2])
         ppad = 0.08 * (pmax_s - pmin_s)
         rlim_s, plim_s = (0.0, rmax_s * 1.25), (max(0.0, pmin_s - ppad), pmax_s + ppad)
+        if args.same_axes and args.plan.get("rpm_start") and args.plan.get("pwm_start"):
+            rlim_s, plim_s = args.plan.get("rpm_start"), args.plan.get("pwm_start")
 
         def step_title(c):
             st = mean_m(c, "settle")
@@ -1442,6 +1529,7 @@ def pi_section(runs, raw_rows, args, out):
              + (f" Large grid: baseline plus the best {len(order) - 1} acceptable settings of {len(known)}; the full list is in metrics_pi_configs.csv." if big else ""))
 
     grid_section(cfgs, base, shown, args, out)
+    electrical_pi(cfgs, shown, base, cols, args, out)
 
 
 # ============================================================================================ open-loop: draw functions
@@ -1798,6 +1886,430 @@ def dash_section(runs, args, out):
 
 
 # ============================================================================================ main
+# ============================================================================================ same axes in every graph, electrical graphs, step runs
+# One AxisPlan holds ONE set of limits per quantity. Every graph of that quantity uses it, so graphs can be compared by eye (also across folders:
+# axis_limits.json is written next to the figures and can be reused with --axes-from). axis_limits_check.csv lists the limits of every graph written.
+def nice_range(lo, hi, pad=0.06, floor0=False):
+    lo, hi = float(lo), float(hi)
+    if not (np.isfinite(lo) and np.isfinite(hi)):
+        return None
+    if hi - lo < 1e-9:
+        d = max(abs(lo) * 0.05, 0.5)
+        lo, hi = lo - d, hi + d
+    span, lo0 = hi - lo, lo
+    lo, hi = lo - pad * span, hi + pad * span
+    raw = (hi - lo) / 5.0
+    mag = 10 ** np.floor(np.log10(raw))
+    step = next((s * mag for s in (1, 2, 2.5, 5, 10) if s * mag >= raw), 10 * mag)
+    lo, hi = np.floor(lo / step) * step, np.ceil(hi / step) * step
+    if floor0 and lo0 >= 0:
+        lo = 0.0
+    return (float(lo), float(hi))
+
+
+def _cat(arrs):
+    arrs = [a[np.isfinite(a)] for a in arrs if a is not None and np.isfinite(a).any()]
+    return np.concatenate(arrs) if arrs else np.array([])
+
+
+class AxisPlan:
+    def __init__(self):
+        self.lim, self.src = {}, {}
+
+    def set(self, key, rng, src):
+        if rng is not None:
+            self.lim[key] = (float(rng[0]), float(rng[1]))
+            self.src[key] = src
+
+    def get(self, key, default=None):
+        return self.lim.get(key, default)
+
+    def save(self, path):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"limits": {k: list(v) for k, v in self.lim.items()}, "source": self.src}, f, indent=2)
+
+
+def build_plan(pi, step, ol, args):
+    plan = AxisPlan()
+    allr = pi + step + ol
+    if allr:
+        plan.set("t_full", (0.0, float(np.ceil(max(r.t[-1] for r in allr) / 5.0) * 5.0)), "longest run")
+        plan.set("rpm_full", nice_range(0, np.nanmax(_cat([r.rpm for r in allr])), 0.08, True), "all runs")
+        plan.set("pwm_full", nice_range(0, np.nanmax(_cat([r.pwm for r in allr])), 0.08, True), "all runs")
+        for key in ("volts", "current_ma", "power_w"):
+            v = _cat([getattr(r, key) for r in allr])
+            if len(v):
+                plan.set(key, nice_range(v.min(), v.max(), 0.08, key != "volts"), "all runs with wattmeter data")
+    global WIN_FIXED, WIN_REQ
+    if not pi and ol:                                   # open-loop-only folder: the same fixed steady-state window for every run
+        tmin, w = min(r.t[-1] for r in ol), float(args.window[1] - args.window[0])
+        win = tuple(args.window) if tmin >= args.window[1] + 0.5 else (max(0.0, float(np.floor(tmin * 2) / 2) - w), float(np.floor(tmin * 2) / 2))
+        plan.set("win_x", win, "steady-state window used for every open-loop run")
+        if args.same_axes:
+            WIN_FIXED, WIN_REQ = (float(win[0]), float(win[1])), tuple(args.window)
+    if pi:
+        tmin, w = min(r.t[-1] for r in pi), float(args.window[1] - args.window[0])
+        win = tuple(args.window) if tmin >= args.window[1] + 0.5 else (max(0.0, float(np.floor(tmin * 2) / 2) - w), float(np.floor(tmin * 2) / 2))
+        plan.set("win_x", win, "steady-state window used for every PI run")
+        if args.same_axes:
+            WIN_FIXED, WIN_REQ = (float(win[0]), float(win[1])), tuple(args.window)
+        wins = [trace_window(r, args.window)[0] for r in pi]
+        rv, pv = _cat([r.rpm[m] for r, m in zip(pi, wins)]), _cat([r.pwm[m] for r, m in zip(pi, wins)])
+        if len(rv):
+            plan.set("rpm_win", nice_range(rv.min(), rv.max(), 0.12), "steady window of ALL PI runs")
+        if len(pv):
+            plan.set("pwm_win", nice_range(pv.min(), pv.max(), 0.12), "steady window of ALL PI runs")
+        early = [r.t <= 1.2 for r in pi]
+        rs, ps = _cat([r.rpm[m] for r, m in zip(pi, early)]), _cat([r.pwm[m] for r, m in zip(pi, early)])
+        if len(rs):
+            plan.set("rpm_start", nice_range(0.0, rs.max() * 1.25, 0.0, True), "first 1.2 s of ALL PI runs")
+        if len(ps):
+            plan.set("pwm_start", nice_range(ps.min(), ps.max(), 0.08), "first 1.2 s of ALL PI runs")
+    if step:
+        post = min(r.t[-1] - r.step_t for r in step)
+        plan.set("t_step", (-3.0, float(max(5.0, np.floor(post / 5.0) * 5.0))), "time since the step, all step runs")
+        wm = [r.t >= r.step_t - 3.0 for r in step]
+        plan.set("rpm_step", nice_range(_cat([r.rpm[m] for r, m in zip(step, wm)]).min(), _cat([r.rpm[m] for r, m in zip(step, wm)]).max(), 0.06), "around the step, all step runs")
+        pv = _cat([r.pwm[m] for r, m in zip(step, wm)])
+        plan.set("pwm_step", nice_range(pv.min(), pv.max(), 0.06, True), "around the step, all step runs")
+        for key in ("volts", "current_ma", "power_w"):
+            v = _cat([getattr(r, key)[m] if getattr(r, key) is not None else None for r, m in zip(step, wm)])
+            if len(v):
+                plan.set(key + "_step", nice_range(v.min(), v.max(), 0.08, key != "volts"), "around the step, all step runs")
+    if ol:
+        plan.set("duty", nice_range(0, max(float(np.median(r.pwm)) for r in ol), 0.08, True), "open-loop runs")
+        grp = {}
+        for r in ol:
+            grp.setdefault(r.pwm_cmd, []).append(r)
+        spans, spec_max = [], 0.0
+        for k, g in grp.items():
+            if len(g) < 2:
+                continue
+            vals = [r.rpm[trace_window(r, (10, 11.5))[0]] for r in g]
+            vals = [v for v in vals if len(v)]
+            if vals:
+                spans.append(float(np.ptp(np.concatenate(vals))))
+            for r in g:
+                try:
+                    sp = order_spectrum(r, r.rpm)
+                    if sp is not None and len(sp[1]):
+                        spec_max = max(spec_max, float(np.nanmax(sp[1])))
+                except Exception:                                                        # noqa: BLE001
+                    pass
+        if spans:
+            plan.set("ol_repeat_span", (0.0, max(spans) * 1.15), "largest repeat-to-repeat range at any PWM, +15 %")
+        if spec_max > 0:
+            plan.set("rep_spec_y", (0.0, nice_range(0, spec_max * 1.08, 0.0, True)[1]), "largest spectrum amplitude of all repeats")
+    return plan
+
+
+def apply_overrides(plan, args):
+    if args.axes_from:
+        data = json.load(open(args.axes_from, encoding="utf-8"))
+        for k, v in data.get("limits", {}).items():
+            plan.set(k, v, f"reused from {args.axes_from}")
+    over = {"xlim": ("t_full",), "ylim_rpm": ("rpm_full", "rpm_step"), "ylim_rpm_zoom": ("rpm_win", "rpm_start"), "ylim_pwm": ("pwm_full", "pwm_step"),
+            "ylim_pwm_zoom": ("pwm_win", "pwm_start"), "ylim_power": ("power_w", "power_w_step"), "ylim_current": ("current_ma", "current_ma_step"),
+            "ylim_volt": ("volts", "volts_step")}
+    for arg, keys in over.items():
+        v = getattr(args, arg, None)
+        if v:
+            for k in keys:
+                plan.set(k, v, f"--{arg.replace('_', '-')}")
+
+
+AXIS_GROUPS = [(r"^01_pwm_trace_", "pwm_trace_window"), (r"^06_rpm_trace_", "rpm_trace_window"), (r"^08_step_", "startup_step"), (r"^09_rpm_pwm_", "rpm_pwm_window"),
+               (r"^11a_power_(trace|overlay)", "elec_power_time"), (r"^11b_current_(trace|overlay)", "elec_current_time"), (r"^11c_voltage_(trace|overlay)", "elec_voltage_time"),
+               (r"^11a_ol_power_vs_time", "ol_power_time"), (r"^11b_ol_current_vs_time", "ol_current_time"), (r"^11c_ol_voltage_vs_time", "ol_voltage_time"), (r"^11a_ol_power_vs_duty", "ol_power_duty"), (r"^11b_ol_current_vs_duty", "ol_current_duty"),
+               (r"^11c_ol_voltage_vs_duty", "ol_voltage_duty"), (r"^11a_ol_power_vs_rpm", "ol_power_rpm"), (r"^11b_ol_current_vs_rpm", "ol_current_rpm"),
+               (r"^11_openloop_trace_", "ol_speed_trace [y span only]"), (r"^14b_repeat_trace_", "ol_repeat_trace [y span only]"), (r"^14a_repeat_spectrum_", "ol_repeat_spectrum"),
+               (r"^12a_step_speed_", "step_speed"), (r"^12b_step_pwm_", "step_pwm"), (r"^12c_step_current_", "step_current"), (r"^12d_step_power_", "step_power"),
+               (r"^12e_step_voltage_", "step_voltage"), (r"^12f_step_run_", "step_run")]
+
+
+def axis_group(name):
+    for pat, g in AXIS_GROUPS:
+        if re.search(pat, name):
+            return g
+    return ""
+
+
+ELEC_KEYS = (("power_w", "Electrical power (W)", "11a_power", "power"), ("current_ma", "Supply current (mA)", "11b_current", "current"),
+             ("volts", "Supply voltage (V)", "11c_voltage", "voltage"))
+
+
+def has_elec(runs, key):
+    return any(getattr(r, key) is not None and np.isfinite(getattr(r, key)).any() for r in runs)
+
+
+def steady_mean(r, key, last=0.4):
+    y = getattr(r, key)
+    if y is None:
+        return float("nan")
+    ss = r.t >= (1.0 - last) * r.t[-1]
+    return float(np.nanmean(y[ss])) if np.isfinite(y[ss]).any() else float("nan")
+
+
+def d_elec_trace(ax, c, color, key, ylabel, plan):
+    for k, r in enumerate(c.runs[:2]):
+        y = getattr(r, key)
+        if y is None or not np.isfinite(y).any():
+            continue
+        ax.plot(r.t, y, color=color, lw=1.8 if k == 0 else 1.0, alpha=1.0 if k == 0 else 0.5, label=f"run {r.rep}")
+        if k == 0:
+            ss = r.t >= 0.6 * r.t[-1]
+            m = float(np.nanmean(y[ss]))
+            ax.axvspan(r.t[ss][0], r.t[-1], color="#999999", alpha=0.10)
+            ax.axhline(m, color="#555555", ls="--", lw=1.0)
+            ax.text(0.99, 0.04, f"mean over the last 40 % of the run: {m:.4g}", transform=ax.transAxes, ha="right", va="bottom", fontsize=11, color="#333333")
+    ax.set_xlim(*plan.get("t_full"))
+    ax.set_ylim(*plan.get(key))
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel(ylabel)
+    if len(c.runs) > 1:
+        ax.legend(loc="upper right", frameon=False)
+
+
+def d_elec_overlay(ax, shown, cols, base, key, ylabel, plan):
+    for c in shown:
+        r = c.runs[0]
+        y = getattr(r, key)
+        if y is None or not np.isfinite(y).any():
+            continue
+        ax.plot(r.t, y, color=cols[c.name], label=label_of(c, base), **emph(c, base))
+    ax.set_xlim(*plan.get("t_full"))
+    ax.set_ylim(*plan.get(key))
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel(ylabel)
+    leg_opaque(ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.17), ncol=2 if len(shown) > 3 else 1, frameon=False))
+
+
+def d_elec_bars(ax, items, cols, base, key, ylabel, plan):
+    xs = np.arange(len(items))
+    for i, c in enumerate(items):
+        vals = [steady_mean(r, key) for r in c.runs]
+        vals = [v for v in vals if np.isfinite(v)]
+        if not vals:
+            continue
+        m = float(np.mean(vals))
+        ax.bar(i, m, color=cols[c.name], yerr=(float(np.std(vals, ddof=1)) if len(vals) > 1 else None), capsize=4, alpha=1.0 if c is base else 0.75, edgecolor="k", linewidth=0.6)
+        ax.text(i, m, f"{m:.3g}", ha="center", va="bottom", fontsize=11)
+    ax.set_xticks(xs)
+    ax.set_xticklabels([c.id for c in items], rotation=0)
+    ax.set_ylim(*plan.get(key))
+    ax.set_ylabel(ylabel + " (mean of the last 40 % of the run)")
+    ax.set_xlabel("Setting")
+
+
+def electrical_pi(cfgs, shown, base, cols, args, out):
+    plan = args.plan
+    runs = [r for c in cfgs.values() for r in c.runs]
+    if not runs:
+        return                                                   # e.g. a folder with only speed-step runs: they have their own electrical graphs
+    keys = [k for k in ELEC_KEYS if has_elec(runs, k[0])]
+    if not keys:
+        print("\n  electrical graphs: no wattmeter data (bus_v / current_ma / power_w are empty in these CSVs) - skipped")
+        return
+    print("\nElectrical graphs: each as its own PNG; every graph of one quantity has the same x and y axes")
+    for key, ylabel, pref, nm in keys:
+        for c in shown:
+            if has_elec(c.runs, key):
+                out.single(f"{pref}_trace_{c.id}", lambda ax, c=c, key=key, ylabel=ylabel: d_elec_trace(ax, c, cols[c.name], key, ylabel, plan),
+                           title=f"{ylabel} vs time: {label_of(c, base)}",
+                           caption=f"{ylabel} during the run for setting {c.id} (grey = last 40 % of the run, dashed = its mean). Axes identical in every {nm} graph.")
+        have = [c for c in shown if has_elec(c.runs, key)]
+        if len(have) > 1:
+            out.single(f"{pref}_overlay", lambda ax, key=key, ylabel=ylabel, have=have: d_elec_overlay(ax, have, cols, base, key, ylabel, plan),
+                       title=f"{ylabel} vs time: all shown settings overlaid", caption=f"{ylabel} of the shown settings on the same axes as the single-setting graphs.")
+        if key != "volts" and len(have) > 1:
+            out.single(f"{pref}_bars", lambda ax, key=key, ylabel=ylabel, have=have: d_elec_bars(ax, have, cols, base, key, ylabel, plan),
+                       title=f"{ylabel}: mean per setting", caption=f"Mean {ylabel.lower()} over the last 40 % of the run, per setting (error bar = spread of repeats).")
+
+
+def electrical_ol(ol, args, out):
+    plan = args.plan
+    keys = [k for k in ELEC_KEYS if has_elec(ol, k[0])]
+    if not keys:
+        print("\n  open-loop electrical graphs: no wattmeter data - skipped")
+        return
+    print("\nOpen-loop electrical graphs (each its own PNG):")
+    by = {}
+    for r in sorted(ol, key=lambda r: (float(np.median(r.pwm)), r.rep)):
+        by.setdefault(round(float(np.median(r.pwm)) * 2) / 2, []).append(r)
+    duties = sorted(by)
+    cm = plt.get_cmap("viridis")
+    for key, ylabel, pref, nm in keys:
+        def draw_time(ax, key=key, ylabel=ylabel):
+            for i, d in enumerate(duties):
+                y = getattr(by[d][0], key)
+                if y is not None and np.isfinite(y).any():
+                    ax.plot(by[d][0].t, y, color=cm(i / max(1, len(duties) - 1)), label=f"{d:g} % duty")
+            ax.set_xlim(*plan.get("t_full"))
+            ax.set_ylim(*plan.get(key))
+            ax.set_xlabel("Time since the PWM was switched on (s)")
+            ax.set_ylabel(ylabel)
+            ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False, fontsize=11)
+        out.single(f"{pref.split('_')[0]}_ol_{nm}_vs_time", draw_time, title=f"{ylabel} after a step from rest (one line per duty)", caption=f"{ylabel} after switching the PWM on, one line per duty.")
+
+        def vs(xkey, xlabel, xlim_key, key=key, ylabel=ylabel):
+            def draw(ax):
+                mx = []
+                for d in duties:
+                    pts = []
+                    for r in by[d]:
+                        v = steady_mean(r, key, last=0.15)
+                        if np.isfinite(v):
+                            x = d if xkey == "duty" else float(np.nanmean(r.rpm[r.t >= 0.85 * r.t[-1]]))
+                            ax.plot(x, v, "o", color="#2471A3", alpha=0.45, ms=7)
+                            pts.append((x, v))
+                    if pts:
+                        mx.append((float(np.mean([p[0] for p in pts])), float(np.mean([p[1] for p in pts]))))
+                if mx:
+                    ax.plot([m[0] for m in mx], [m[1] for m in mx], "-", color="#C0392B", lw=2.2, label="mean of repeats")
+                    ax.legend(loc="upper left", frameon=False)
+                ax.set_xlim(*plan.get(xlim_key))
+                ax.set_ylim(*plan.get(key))
+                ax.set_xlabel(xlabel)
+                ax.set_ylabel(ylabel + " (last 15 % of the run)")
+            return draw
+        out.single(f"{pref.split('_')[0]}_ol_{nm}_vs_duty", vs("duty", "PWM duty (%)", "duty"), title=f"{ylabel} vs PWM duty", caption=f"Steady-state {ylabel.lower()} against the commanded duty, one point per run.")
+        if key != "volts":
+            out.single(f"{pref.split('_')[0]}_ol_{nm}_vs_rpm", vs("rpm", "Speed (RPM)", "rpm_full"), title=f"{ylabel} vs speed", caption=f"Steady-state {ylabel.lower()} against the steady-state speed, one point per run.")
+
+
+# ---------------------------------------------------------------------------------------------- speed-step runs (--ref-step-to)
+def py_step_metrics(r):
+    """Same definitions as the daemon's rs_* fields, recomputed from the CSV (5-sample moving average)."""
+    t, y, p = r.t, r.rpm, r.pwm * 4095.0 / 100.0
+    n = int(np.searchsorted(t, r.step_t))
+    if n < 20 or len(t) - n < 20:
+        return None
+    y_pre = float(np.mean(y[int(0.6 * n):n]))
+    m0, m = n, len(t) - n
+    fs = m0 + int(0.7 * m)
+    y_fin = float(np.mean(y[fs:]))
+    delta = y_fin - y_pre
+    if abs(delta) <= 5.0:
+        return None
+    sgn = 1.0 if delta > 0 else -1.0
+    ma = pd.Series(y).rolling(5, center=True, min_periods=1).mean().to_numpy()
+    post = ma[m0:]
+    peak = post[np.argmax((post - y_fin) * sgn)]
+    f = (post - y_pre) * sgn / abs(delta)
+    i10, i90 = np.where(f >= 0.1)[0], np.where(f >= 0.9)[0]
+    rise = float(t[m0 + i90[0]] - t[m0 + i10[0]]) if (len(i10) and len(i90)) else float("nan")
+    band = max(0.05 * abs(delta), 3.0)
+    out_ = np.where(np.abs(post - y_fin) > band)[0]
+    settle = 0.0 if len(out_) == 0 else (-1.0 if out_[-1] == len(post) - 1 else float(t[m0 + out_[-1]] - r.step_t))
+    d = dict(from_rpm=y_pre, to_rpm=y_fin, overshoot_pct=max(0.0, (peak - y_fin) * sgn / abs(delta) * 100.0), rise_s=rise, settle_s=settle, band_rpm=band,
+             peak_duty_pct=float(np.max(p[m0:]) * 100.0 / 4095.0), rpm_std_final=float(np.sqrt(np.mean((y[fs:] - y_fin) ** 2))),
+             pwm_jitter_final_pct=float(np.sqrt(np.mean(np.diff(p[fs:]) ** 2)) * 100.0 / 4095.0))
+    for key, nm in (("power_w", "power_w"), ("current_ma", "current_ma"), ("volts", "volts")):
+        v = getattr(r, key)
+        d[nm + "_final"] = float(np.nanmean(v[fs:])) if (v is not None and np.isfinite(v[fs:]).any()) else float("nan")
+    return d
+
+
+def step_section(step, raw_rows, args, out):
+    plan = args.plan
+    raw_by = {row["name"]: row for row in raw_rows}
+    cfg = {}
+    for r in step:
+        cfg.setdefault(r.cfg, []).append(r)
+    info = {}
+    for name, rs in cfg.items():
+        row = raw_by.get(name)
+        if row is not None and all(k in row for k in ("kp", "ki", "alpha")):
+            kp, ki, al = row["kp"], row["ki"], row["alpha"]
+        else:
+            kp, ki, al, _ = parse_gains(name)
+        info[name] = (kp, ki, al)
+    # -------- metrics (recomputed from the CSVs; same definitions as the daemon) -> metrics_step_runs.csv
+    rows = []
+    for r in step:
+        m = py_step_metrics(r)
+        if m is not None:
+            kp, ki, al = info[r.cfg]
+            rows.append(dict(run=r.stem, setting=r.cfg, kp=kp, ki=ki, alpha=al, **m))
+    if rows:
+        pd.DataFrame(rows).to_csv(os.path.join(args.outdir, "metrics_step_runs.csv"), index=False)
+        print(f"  metrics_step_runs.csv: {len(rows)} step runs (overshoot, rise, settling, peak duty, ripple, electrical)")
+    print("\nSpeed-step graphs (each its own PNG; every graph of one kind has the same axes):")
+    groups = {}
+    for name, rs in cfg.items():
+        kp, ki, al = info[name]
+        groups.setdefault((round(kp, 4), round(al, 3)), []).append((ki, name, rs[0]))
+    t_step = plan.get("t_step", (-3.0, 20.0))
+    for (kp, al), members in sorted(groups.items()):
+        members.sort()
+        cm = plt.get_cmap("viridis")
+
+        def colour(i, n=len(members), cm=cm):
+            return cm(i / max(1, n - 1) * 0.9)
+        r0 = members[0][2]
+        tgt0, tgt1 = float(r0.tgt_series[0]), float(r0.tgt_series[-1])
+        tag = f"Kp{kp:g}_a{al:g}"
+        ttl = f"{tgt0:g} \u2192 {tgt1:g} RPM step, Kp {kp:g}, \u03b1 {al:g}: different Ki"
+
+        def draw_speed(ax, members=members, tgt0=tgt0, tgt1=tgt1):
+            for i, (ki, name, r) in enumerate(members):
+                sm = pd.Series(r.rpm).rolling(5, center=True, min_periods=1).mean().to_numpy()
+                ax.plot(r.t - r.step_t, sm, color=colour(i), label=f"Ki {ki:.4g}")
+            ax.axvline(0, color="k", ls=":", lw=1)
+            for lv in (tgt0, tgt1):
+                ax.axhline(lv, color="#777777", ls="--", lw=1)
+            ax.axhspan(tgt1 - 0.05 * abs(tgt1 - tgt0), tgt1 + 0.05 * abs(tgt1 - tgt0), color="#999999", alpha=0.15)
+            ax.set_xlim(*t_step)
+            ax.set_ylim(*plan.get("rpm_step"))
+            ax.set_xlabel("Time since the speed step (s)")
+            ax.set_ylabel("Speed (RPM, 5-sample moving average)")
+            leg_opaque(ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False, fontsize=11))
+        out.single(f"12a_step_speed_{tag}", draw_speed, title=f"Speed response to the {ttl}", caption=f"Speed after the {tgt0:g} to {tgt1:g} RPM step for Kp {kp:g}, alpha {al:g}, one line per Ki (grey band = +-5 % of the step).")
+
+        def mk(key, ylabel, limkey, members=members):
+            def draw(ax):
+                for i, (ki, name, r) in enumerate(members):
+                    y = r.pwm if key == "pwm" else getattr(r, key)
+                    if y is not None and np.isfinite(y).any():
+                        ax.plot(r.t - r.step_t, y, color=colour(i), lw=1.3, label=f"Ki {ki:.4g}")
+                ax.axvline(0, color="k", ls=":", lw=1)
+                ax.set_xlim(*t_step)
+                ax.set_ylim(*plan.get(limkey))
+                ax.set_xlabel("Time since the speed step (s)")
+                ax.set_ylabel(ylabel)
+                leg_opaque(ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False, fontsize=11))
+            return draw
+        out.single(f"12b_step_pwm_{tag}", mk("pwm", "PWM duty (%)", "pwm_step"), title=f"PWM command during the {ttl}", caption=f"PWM duty during the step for Kp {kp:g}, alpha {al:g}, one line per Ki.")
+        for key, ylabel, pref, nm in (("current_ma", "Supply current (mA)", "12c_step_current", "current"), ("power_w", "Electrical power (W)", "12d_step_power", "power"),
+                                      ("volts", "Supply voltage (V)", "12e_step_voltage", "voltage")):
+            if has_elec([m[2] for m in members], key) and plan.get(key + "_step"):
+                out.single(f"{pref}_{tag}", mk(key, ylabel, key + "_step"), title=f"{ylabel} during the {ttl}", caption=f"{ylabel} during the step for Kp {kp:g}, alpha {al:g}, one line per Ki.")
+    # -------- one full-run graph (speed on top, PWM below) for the baseline and the chosen settings
+    sel = [n for n in cfg if "baseline" in n.lower()]
+    extra = [n for n in cfg if n not in sel]
+    if args.show:
+        want = {w.strip().lower() for w in args.show.split(",")}
+        extra = [n for n in extra if n.lower() in want or short_id(n).lower() in want]
+    else:
+        k = max(0, args.n_show)
+        extra = [extra[int(i)] for i in np.linspace(0, len(extra) - 1, min(k, len(extra)))] if extra else []
+    for name in sel + extra:
+        r, (kp, ki, al) = cfg[name][0], info[name]
+
+        def draw2(a1, a2, r=r):
+            a1.plot(r.t, r.rpm, color="#2471A3", lw=1.0, alpha=0.8)
+            a1.step(r.t, r.tgt_series, where="post", color="#C0392B", lw=1.6, label="target")
+            a1.set_xlim(*plan.get("t_full"))
+            a1.set_ylim(*plan.get("rpm_full"))
+            a1.set_ylabel("Speed (RPM)")
+            a1.legend(loc="lower right", frameon=False)
+            a2.plot(r.t, r.pwm, color="#117A8B", lw=1.0)
+            a2.set_ylim(*plan.get("pwm_full"))
+            a2.set_ylabel("PWM duty (%)")
+            a2.set_xlabel("Time (s)")
+        out.single2(f"12f_step_run_{short_id(name)}", draw2, title=f"{name}: Kp {kp:g}, Ki {ki:.4g}, \u03b1 {al:g}", caption=f"Full run of {name}: speed with its target, and the PWM duty. Same axes in every graph of this kind.")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Automatic thesis-quality and PowerPoint-ready figures for MIXR-1 test data")
     ap.add_argument("folder")
@@ -1817,7 +2329,18 @@ def main():
     ap.add_argument("--no-individual", action="store_true", help="only the multi-panel thesis figures")
     ap.add_argument("--list", action="store_true", help="only list how each file was classified")
     ap.add_argument("-r", "--recursive", action="store_true")
+    ap.add_argument("--no-same-axes", action="store_true", help="let each graph pick its own axis limits (default: ONE set of limits per quantity, from all runs, so graphs compare by eye)")
+    ap.add_argument("--axes-from", default=None, help="reuse the axis limits of another run: <other figures folder>/axis_limits.json (same axes across folders, e.g. baffled vs unbaffled)")
+    ap.add_argument("--xlim", type=float, nargs=2, default=None, metavar=("LO", "HI"), help="time axis of the full-run graphs (s)")
+    ap.add_argument("--ylim-rpm", type=float, nargs=2, default=None, metavar=("LO", "HI"), help="speed axis of the full-scale speed graphs (RPM)")
+    ap.add_argument("--ylim-rpm-zoom", type=float, nargs=2, default=None, metavar=("LO", "HI"), help="speed axis of the zoomed steady-state graphs (RPM)")
+    ap.add_argument("--ylim-pwm", type=float, nargs=2, default=None, metavar=("LO", "HI"), help="PWM axis of the full-scale graphs (%% duty)")
+    ap.add_argument("--ylim-pwm-zoom", type=float, nargs=2, default=None, metavar=("LO", "HI"), help="PWM axis of the zoomed steady-state graphs (%% duty)")
+    ap.add_argument("--ylim-power", type=float, nargs=2, default=None, metavar=("LO", "HI"), help="electrical power axis (W)")
+    ap.add_argument("--ylim-current", type=float, nargs=2, default=None, metavar=("LO", "HI"), help="supply current axis (mA)")
+    ap.add_argument("--ylim-volt", type=float, nargs=2, default=None, metavar=("LO", "HI"), help="supply voltage axis (V)")
     args = ap.parse_args()
+    args.same_axes = not args.no_same_axes
     set_style()
     EMPH["other_alpha"] = min(1.0, max(0.05, args.other_alpha))
     lim = {}
@@ -1854,22 +2377,31 @@ def main():
         runs = [r for r in runs if r not in short]
     ol = [r for r in runs if r.kind == "OL"]
     dash = [r for r in runs if r.kind == "DASH"]
-    print(f"\nClassification: {len(pi)} PI step runs, {len(ol)} open-loop runs, {len(dash)} dashboard exports"
+    step = [r for r in runs if r.kind == "STEP"]
+    print(f"\nClassification: {len(pi)} PI startup runs, {len(step)} PI speed-step runs, {len(ol)} open-loop runs, {len(dash)} dashboard exports"
           + (f", plus {len(raw_rows)} result lines from {os.path.basename(raw_path)}" if raw_rows else ""))
     for r in runs:
-        print(f"  {r.kind:4s} {os.path.basename(r.path):45s} {r.t[-1]:6.1f} s" + (f"  target {r.target:g} RPM" if r.kind == 'PI' else (f"  PWM {r.pwm_cmd}" if r.kind == 'OL' else '')))
+        print(f"  {r.kind:4s} {os.path.basename(r.path):45s} {r.t[-1]:6.1f} s" + (f"  target {r.target:g} RPM" if r.kind in ('PI', 'STEP') else (f"  PWM {r.pwm_cmd}" if r.kind == 'OL' else '')))
     if args.list:
         return
     out = Out(outdir, args)
+    args.outdir = outdir
+    args.plan = build_plan(pi, step, ol, args)
+    apply_overrides(args.plan, args)
     global OL_RUNS, ABORTED
     OL_RUNS = ol
     ABORTED = read_aborted(os.path.join(args.folder, "aborted_runs.txt"))
     if pi or raw_rows:
         pi_section(pi, raw_rows, args, out)
+    if step:
+        step_section(step, raw_rows, args, out)
     if ol:
         ol_section(ol, args, out)
+        electrical_ol(ol, args, out)
     if dash:
         dash_section(dash, args, out)
+    args.plan.save(os.path.join(outdir, "axis_limits.json"))
+    out.write_axis_check(os.path.join(outdir, "axis_limits_check.csv"))
     if not out.caps:
         print("\nNothing to plot: no PI runs, open-loop runs, dashboard exports or results_raw.txt found.")
         return

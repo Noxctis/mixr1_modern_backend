@@ -108,6 +108,7 @@ def main():
         sys.exit("no files found")
     os.makedirs(args.out, exist_ok=True)
     rows = []
+    plot_data: list = []                              # (f, m, y, t, t0, y0, yf)
     for f in files:
         try:
             df = pd.read_csv(f)
@@ -127,10 +128,24 @@ def main():
             if tg > 0 and kind.startswith("closed"):
                 m["sse_rpm"] = tg - yf
         rows.append(m)
-        if args.plots:
-            import matplotlib
-            matplotlib.use("Agg")
-            import matplotlib.pyplot as plt
+        plot_data.append((f, m, y, t, t0, y0, yf))
+
+    # shared axis limits across ALL files (so every plot uses the same scale)
+    if args.plots and plot_data:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        _x_maxes = []
+        _y_los, _y_his = [], []
+        for f, m, y, t, t0, y0, yf in plot_data:
+            settle = m["settle_5pct_s"] if np.isfinite(m["settle_5pct_s"]) else m["t90_s"] * 2
+            _x_maxes.append(min(t[-1] - t0, max(2.0, settle * 1.6)))
+            _y_los.append(min(float(y0), float(np.nanmin(y))) - 5.0)
+            _y_his.append(float(yf) * 1.15)
+        shared_xmax = max(_x_maxes)
+        shared_ylo  = min(_y_los)
+        shared_yhi  = max(_y_his)
+        for f, m, y, t, t0, y0, yf in plot_data:
             fig, ax = plt.subplots(figsize=(9, 5))
             ax.plot(t - t0, y, color="lightgray", lw=0.8, label="measured")
             ax.plot(t - t0, pd.Series(y).rolling(max(1, int(args.smooth / np.median(np.diff(t)))), center=True, min_periods=1).mean(), color="#2471A3", lw=1.8, label="smoothed")
@@ -142,9 +157,11 @@ def main():
                 if tt == tt:
                     ax.axvline(tt, color=c, ls="--", lw=1.2)
                     ax.text(tt, y0 + (yf - y0) * (0.05 if lv == 0.1 else 0.55), f" {nm}\n {tt:.3g} s", color=c, fontsize=9)
-            ax.set_xlim(-0.2, min(t[-1] - t0, max(2.0, (m["settle_5pct_s"] if np.isfinite(m["settle_5pct_s"]) else m["t90_s"] * 2) * 1.6)))
+            ax.set_xlim(-0.2, shared_xmax)
+            ax.set_ylim(shared_ylo, shared_yhi)
             ax.set_xlabel("Time since the step (s)"); ax.set_ylabel("Speed (RPM)"); ax.grid(alpha=0.3); ax.legend(fontsize=8, loc="lower right")
-            ax.set_title(f"{os.path.basename(f)}: rise 10-90 % {m['rise_10_90_s']:.3g} s, settling 5 % {m['settle_5pct_s']:.3g} s, overshoot {m['overshoot_pct']:.1f} %", fontsize=10)
+            _rise = m["rise_10_90_s"]; _set5 = m["settle_5pct_s"]; _ovr = m["overshoot_pct"]
+            ax.set_title(f"{os.path.basename(f)}: rise 10-90 % {_rise:.3g} s, settling 5 % {_set5:.3g} s, overshoot {_ovr:.1f} %", fontsize=10)
             fig.tight_layout(); fig.savefig(os.path.join(args.out, os.path.splitext(os.path.basename(f))[0] + "_metrics.png"), dpi=140); plt.close(fig)
     if not rows:
         sys.exit("no usable files")

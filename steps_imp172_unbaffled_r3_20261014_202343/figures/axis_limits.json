@@ -1,0 +1,46 @@
+{
+  "limits": {
+    "t_full": [
+      0.0,
+      40.0
+    ],
+    "rpm_full": [
+      0.0,
+      600.0
+    ],
+    "pwm_full": [
+      0.0,
+      40.0
+    ],
+    "volts": [
+      23.85,
+      24.05
+    ],
+    "current_ma": [
+      0.0,
+      800.0
+    ],
+    "power_w": [
+      0.0,
+      20.0
+    ],
+    "win_x": [
+      10.0,
+      13.0
+    ],
+    "duty": [
+      0.0,
+      40.0
+    ]
+  },
+  "source": {
+    "t_full": "longest run",
+    "rpm_full": "all runs",
+    "pwm_full": "all runs",
+    "volts": "all runs with wattmeter data",
+    "current_ma": "all runs with wattmeter data",
+    "power_w": "all runs with wattmeter data",
+    "win_x": "steady-state window used for every open-loop run",
+    "duty": "open-loop runs"
+  }
+}
