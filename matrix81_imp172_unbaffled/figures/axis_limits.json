@@ -1,0 +1,61 @@
+{
+  "limits": {
+    "t_full": [
+      0.0,
+      40.0
+    ],
+    "rpm_full": [
+      0.0,
+      500.0
+    ],
+    "pwm_full": [
+      0.0,
+      40.0
+    ],
+    "volts": [
+      23.700000000000003,
+      24.1
+    ],
+    "current_ma": [
+      0.0,
+      1250.0
+    ],
+    "power_w": [
+      0.0,
+      30.0
+    ],
+    "win_x": [
+      10.0,
+      13.0
+    ],
+    "rpm_win": [
+      300.0,
+      400.0
+    ],
+    "pwm_win": [
+      22.0,
+      26.0
+    ],
+    "rpm_start": [
+      0.0,
+      300.0
+    ],
+    "pwm_start": [
+      0.0,
+      40.0
+    ]
+  },
+  "source": {
+    "t_full": "longest run",
+    "rpm_full": "all runs",
+    "pwm_full": "all runs",
+    "volts": "all runs with wattmeter data",
+    "current_ma": "all runs with wattmeter data",
+    "power_w": "all runs with wattmeter data",
+    "win_x": "steady-state window used for every PI run",
+    "rpm_win": "steady window of ALL PI runs",
+    "pwm_win": "steady window of ALL PI runs",
+    "rpm_start": "first 1.2 s of ALL PI runs",
+    "pwm_start": "first 1.2 s of ALL PI runs"
+  }
+}
