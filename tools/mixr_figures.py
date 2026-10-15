@@ -134,9 +134,9 @@ class Out:
         if g in ("pwm_trace_window", "rpm_trace_window", "rpm_pwm_window") and plan.get("win_x"):
             for ax in axes:
                 ax.set_xlim(*plan.get("win_x"))
-        elif g == "startup_step":                              # the graph plots the first 1.2 s; a settling marker must not stretch the axis
+        elif g == "startup_step":                              # plots the first STARTUP_WIN seconds (--startup-window)
             for ax in axes:
-                ax.set_xlim(-0.03, 1.23)
+                ax.set_xlim(-0.03, STARTUP_WIN + 0.03)
 
     def _log(self, name, axes):
         self._apply_plan(name, axes)
@@ -352,6 +352,7 @@ def log_axis(ax, which, lo, hi, cand):
     axis.set_minor_formatter(NullFormatter())
 
 
+STARTUP_WIN = 1.2          # seconds shown in the startup-step graphs (08_, 02a/02b, 12-series); --startup-window changes it
 WIN_FIXED = None            # (lo, hi): set by build_plan; the same steady-state window for EVERY run (so every trace graph has the same x axis)
 WIN_REQ = None
 
@@ -615,7 +616,7 @@ def d_startup(ax, shown, cols, base, tgt, legend_loc="lower right"):
     for c in shown:
         for r in c.runs[:2]:
             first = r.rep == c.runs[0].rep
-            m = r.t <= 1.2
+            m = r.t <= STARTUP_WIN
             ax.plot(r.t[m], r.rpm[m], color=cols[c.name], ls="-" if first else "--", label=label_of(c, base) if first else None, **emph(c, base, first))
     ax.axhline(tgt, color="k", ls=":", lw=1)
     ax.axhspan(tgt * 0.95, tgt * 1.05, color="k", alpha=0.06)
@@ -803,14 +804,14 @@ def d_step(axr, axp, c, color, tgt, rlim, plim):
     """One setting's step response: speed (both repeats, +-5 % band, overshoot and settling marked) and, optionally, the PWM command below."""
     for r in c.runs[:2]:
         first = r is c.runs[0]
-        m = r.t <= 1.2
+        m = r.t <= STARTUP_WIN
         axr.plot(r.t[m], r.rpm[m], color=color, lw=None, ls="-" if first else "--", alpha=1 if first else 0.55, label=f"repeat {r.rep}")
         if axp is not None:
             axp.plot(r.t[m], r.pwm[m], color=color, lw=None, ls="-" if first else "--", alpha=1 if first else 0.55)
     axr.axhline(tgt, color="k", ls=":", lw=1)
     axr.axhspan(tgt * 0.95, tgt * 1.05, color="k", alpha=0.06)
     r0 = c.runs[0]
-    m = r0.t <= 1.2
+    m = r0.t <= STARTUP_WIN
     i = int(np.argmax(r0.rpm[m]))
     t_pk, v_pk = float(r0.t[m][i]), float(r0.rpm[m][i])
     ov, st = mean_m(c, "overshoot"), mean_m(c, "settle")
@@ -1422,9 +1423,9 @@ def pi_section(runs, raw_rows, args, out):
 
     # ---------------------------------------------------------------- per-setting step responses and speed + PWM graphs
     if shown:
-        rmax_s = max(float(np.nanmax(r.rpm[r.t <= 1.2])) for c in shown for r in c.runs[:2])
-        pmin_s = min(float(np.nanmin(r.pwm[r.t <= 1.2])) for c in shown for r in c.runs[:2])
-        pmax_s = max(float(np.nanmax(r.pwm[r.t <= 1.2])) for c in shown for r in c.runs[:2])
+        rmax_s = max(float(np.nanmax(r.rpm[r.t <= STARTUP_WIN])) for c in shown for r in c.runs[:2])
+        pmin_s = min(float(np.nanmin(r.pwm[r.t <= STARTUP_WIN])) for c in shown for r in c.runs[:2])
+        pmax_s = max(float(np.nanmax(r.pwm[r.t <= STARTUP_WIN])) for c in shown for r in c.runs[:2])
         ppad = 0.08 * (pmax_s - pmin_s)
         rlim_s, plim_s = (0.0, rmax_s * 1.25), (max(0.0, pmin_s - ppad), pmax_s + ppad)
         if args.same_axes and args.plan.get("rpm_start") and args.plan.get("pwm_start"):
@@ -1936,12 +1937,12 @@ def build_plan(pi, step, ol, args):
             plan.set("rpm_win", nice_range(rv.min(), rv.max(), 0.12), "steady window of ALL PI runs")
         if len(pv):
             plan.set("pwm_win", nice_range(pv.min(), pv.max(), 0.12), "steady window of ALL PI runs")
-        early = [r.t <= 1.2 for r in pi]
+        early = [r.t <= STARTUP_WIN for r in pi]
         rs, ps = _cat([r.rpm[m] for r, m in zip(pi, early)]), _cat([r.pwm[m] for r, m in zip(pi, early)])
         if len(rs):
-            plan.set("rpm_start", nice_range(0.0, rs.max() * 1.25, 0.0, True), "first 1.2 s of ALL PI runs")
+            plan.set("rpm_start", nice_range(0.0, rs.max() * 1.25, 0.0, True), f"first {STARTUP_WIN:g} s of ALL PI runs")
         if len(ps):
-            plan.set("pwm_start", nice_range(ps.min(), ps.max(), 0.08), "first 1.2 s of ALL PI runs")
+            plan.set("pwm_start", nice_range(ps.min(), ps.max(), 0.08), f"first {STARTUP_WIN:g} s of ALL PI runs")
     if step:
         post = min(r.t[-1] - r.step_t for r in step)
         plan.set("t_step", (-3.0, float(max(5.0, np.floor(post / 5.0) * 5.0))), "time since the step, all step runs")
@@ -2531,7 +2532,10 @@ def main():
     ap.add_argument("--ylim-power", type=float, nargs=2, default=None, metavar=("LO", "HI"), help="electrical power axis (W)")
     ap.add_argument("--ylim-current", type=float, nargs=2, default=None, metavar=("LO", "HI"), help="supply current axis (mA)")
     ap.add_argument("--ylim-volt", type=float, nargs=2, default=None, metavar=("LO", "HI"), help="supply voltage axis (V)")
+    ap.add_argument("--startup-window", type=float, default=1.2, help="seconds shown in the startup-step graphs (default 1.2). Use 40 for the full run")
     args = ap.parse_args()
+    global STARTUP_WIN
+    STARTUP_WIN = float(args.startup_window)
     args.same_axes = not args.no_same_axes
     set_style()
     EMPH["other_alpha"] = min(1.0, max(0.05, args.other_alpha))

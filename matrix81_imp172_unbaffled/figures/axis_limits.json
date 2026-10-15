@@ -38,7 +38,7 @@
     ],
     "rpm_start": [
       0.0,
-      300.0
+      500.0
     ],
     "pwm_start": [
       0.0,
@@ -55,7 +55,7 @@
     "win_x": "steady-state window used for every PI run",
     "rpm_win": "steady window of ALL PI runs",
     "pwm_win": "steady window of ALL PI runs",
-    "rpm_start": "first 1.2 s of ALL PI runs",
-    "pwm_start": "first 1.2 s of ALL PI runs"
+    "rpm_start": "first 40 s of ALL PI runs",
+    "pwm_start": "first 40 s of ALL PI runs"
   }
 }
