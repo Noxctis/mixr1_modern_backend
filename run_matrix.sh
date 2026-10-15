@@ -214,6 +214,10 @@ esac
 ORIG_ARGS=("$@")
 POS=()
 while [ $# -gt 0 ]; do
+  # accept both --flag value and --flag=value forms
+  case "$1" in
+    --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}" ; continue ;;
+  esac
   case "$1" in
     --out)        OUT="${2:?--out needs a folder name}"; shift 2 ;;
     --pause)      PAUSE="${2:?--pause needs seconds}"; shift 2 ;;
@@ -231,8 +235,11 @@ while [ $# -gt 0 ]; do
     --max-duty)   MAX_DUTY="${2:?--max-duty needs a percent}"; shift 2 ;;
     --ref-step-to) REF_STEP_TO="${2:?--ref-step-to needs an RPM}"; shift 2 ;;
     --ref-step-at) REF_STEP_AT="${2:?--ref-step-at needs seconds}"; shift 2 ;;
+    --ref-step-to2) REF_STEP_TO2="${2:?--ref-step-to2 needs an RPM}"; shift 2 ;;
+    --ref-step-at2) REF_STEP_AT2="${2:?--ref-step-at2 needs seconds}"; shift 2 ;;
+    --power-warn-w) POWER_WARN_W="${2:?--power-warn-w needs watts}"; shift 2 ;;
     --foreground) DETACH=0; shift ;;
-    -*)           echo "Unknown option '$1'. Options: --out --pause --grid --configs --kps --kis --base-kp --base-ki --baseline-file --alphas --wait-rest --abort-rpm --max-duty --ref-step-to --ref-step-at --foreground"; exit 1 ;;
+    -*)           echo "Unknown option '$1'. Options: --out --pause --grid --configs --kps --kis --base-kp --base-ki --baseline-file --alphas --wait-rest --abort-rpm --ref-step-to2 --ref-step-at2 --power-warn-w --max-duty --ref-step-to --ref-step-at --foreground"; exit 1 ;;
     *)            POS+=("$1"); shift ;;
   esac
 done
@@ -347,9 +354,16 @@ if [ -n "$MAX_DUTY" ]; then
 fi
 # closed-loop REFERENCE STEP (small step around the operating point: never reaches the duty cap, so it measures the GAINS, not the cap)
 REFSTEP_FLAG=""
+REFSTEP2_FLAG=""
+POWER_WARN_FLAG=""
 if [ -n "${REF_STEP_TO:-}" ]; then
   if grep -qa -- "--ref-step-to" "$BIN"; then REFSTEP_FLAG="--ref-step-to=$REF_STEP_TO --ref-step-at=${REF_STEP_AT:-15}"
   else echo "This daemon build has no --ref-step-to. Copy the new src/main.cpp and run make."; exit 1; fi
+  if [ -n "${REF_STEP_TO2:-}" ]; then
+    if grep -qa -- "--ref-step-to2" "$BIN"; then REFSTEP2_FLAG="--ref-step-to2=$REF_STEP_TO2 --ref-step-at2=${REF_STEP_AT2:?--ref-step-to2 also needs --ref-step-at2}"
+    else echo "This daemon build has no --ref-step-to2. Copy the new src/main.cpp and run make."; exit 1; fi
+  fi
+  if [ -n "${POWER_WARN_W:-}" ] && grep -qa -- "--power-warn-w" "$BIN"; then POWER_WARN_FLAG="--power-warn-w=$POWER_WARN_W"; fi
 fi
 WAIT_REST="${WAIT_REST:-60}"; REST_FLAG=""
 if [ "$WAIT_REST" != "0" ]; then
@@ -366,7 +380,7 @@ mkdir -p "$OUT"
   echo "host:    $(hostname)   kernel $(uname -r)"
   echo "daemon:  $BIN   sha256 $(sha256sum "$BIN" 2>/dev/null | cut -c1-16)   built $(stat -c %y "$BIN" 2>/dev/null | cut -c1-19)"
   echo "command: $0 ${ORIG_ARGS[*]}"
-  echo "flags:   $FLAGS $STREAM_FLAG $ABORT_FLAG $REST_FLAG $DUTY_FLAG $REFSTEP_FLAG"
+  echo "flags:   $FLAGS $STREAM_FLAG $ABORT_FLAG $REST_FLAG $DUTY_FLAG $REFSTEP_FLAG $REFSTEP2_FLAG $POWER_WARN_FLAG"
   echo "note:    ${NOTE:-}      (set NOTE=\"water 24C, baffled, 200 mm\" in front of the command to record the conditions)"
 } > "$OUT/metadata.txt"
 RAW="$OUT/results_raw.txt"; DONE="$OUT/.done"; ABORTS="$OUT/aborted_runs.txt"; ORDER="$OUT/run_order.txt"
@@ -419,7 +433,7 @@ run_one() {  # name kp ki alpha r
   if grep -qx "$name $r" "$DONE"; then echo "   (already done, skipping)"; return 0; fi
   local output res ab
   output=$("$BIN" --test --pi --fixed $FLAGS $STREAM_FLAG --target="$TARGET" --duration="$DUR" \
-             --kp="$kp" --ki="$ki" --alpha="$alpha" $ABORT_FLAG $REST_FLAG $DUTY_FLAG $REFSTEP_FLAG --csv="$csv" 2>&1)
+             --kp="$kp" --ki="$ki" --alpha="$alpha" $ABORT_FLAG $REST_FLAG $DUTY_FLAG $REFSTEP_FLAG $REFSTEP2_FLAG $POWER_WARN_FLAG --csv="$csv" 2>&1)
   if printf '%s\n' "$output" | grep -q "shaft still turning"; then
     echo "   !! the shaft was still turning after $WAIT_REST s - this run did NOT start from rest (listed in not_at_rest.txt)"; echo "$name r$r" >> "$OUT/not_at_rest.txt"
   fi

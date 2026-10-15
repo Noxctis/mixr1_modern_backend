@@ -73,6 +73,9 @@ struct TestOptions {
     // saturates the cap for about 1.3 s, which hides the gains). Metrics of the response are printed as rs_* in the [RESULT] line.
     double ref_step_to = 0.0;
     double ref_step_at = 15.0;
+    double ref_step_to2 = 0.0;
+    double ref_step_at2 = -1.0;
+    double power_warn_w = -1.0;
     double max_duty_pct = 100.0; // hard cap on the PI output in % duty (water safety: the speed cannot exceed what this duty gives)
     bool start_at_zero = false;  // keep the motor off during the 250 ms preparation and switch it on exactly when the log starts (records the ramp from rest)
 };
@@ -166,6 +169,12 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.ref_step_to = std::stod(argument.substr(14));
         } else if (argument.rfind("--ref-step-at=", 0) == 0) {
             options.ref_step_at = std::stod(argument.substr(14));
+        } else if (argument.rfind("--ref-step-to2=", 0) == 0) {
+            options.ref_step_to2 = std::stod(argument.substr(15));
+        } else if (argument.rfind("--ref-step-at2=", 0) == 0) {
+            options.ref_step_at2 = std::stod(argument.substr(15));
+        } else if (argument.rfind("--power-warn-w=", 0) == 0) {
+            options.power_warn_w = std::stod(argument.substr(15));
         } else if (argument.rfind("--max-duty=", 0) == 0) {
             options.max_duty_pct = std::stod(argument.substr(11));
         } else if (argument == "--start-at-zero") {
@@ -186,6 +195,10 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
         options.sine_mode = false;
         if (options.step_from_pct < 0.0 || options.step_from_pct > 100.0 || options.step_to_pct < 0.0 || options.step_to_pct > 100.0 ||
             options.step_at_s <= 0.0 || options.step_at_s >= options.duration_sec) return false;
+    }
+    if (options.ref_step_to2 > 0.0 && (options.ref_step_to <= 0.0 || options.ref_step_at2 <= options.ref_step_at || options.ref_step_at2 >= options.duration_sec - 1.0)) {
+        std::cerr << "--ref-step-to2 requires --ref-step-to; --ref-step-at2 must be after step1 and before (duration - 1 s)\n";
+        return false;
     }
     if (options.ref_step_to > 0.0 && !(options.use_pi && !options.sweep && !options.sine_mode && options.ref_step_at > 1.0 && options.ref_step_at < options.duration_sec - 3.0)) {
         std::cerr << "--ref-step-to needs closed-loop (PI) mode with a fixed target, and --ref-step-at between 1 s and (duration - 3 s)\n";
@@ -243,7 +256,7 @@ int run_test(const TestOptions& options) {
     const std::string condition = intended_mode + "_" + intended_fifo;
 
     log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition,fb_rpm";
-    log << ",bus_v,current_ma,power_w";                     // always present (empty when there is no wattmeter), so every CSV has the same columns
+    log << ",bus_v,current_ma,power_w,power_event";         // power_event = hi_w when power >= --power-warn-w
     log << '\n';
     
     // ---- Live streaming (same TCP port/protocol as normal mode) ----
@@ -406,6 +419,7 @@ int run_test(const TestOptions& options) {
         }
 
         if (options.use_pi && options.ref_step_to > 0.0 && elapsed >= options.ref_step_at) current_target = options.ref_step_to;
+        if (options.use_pi && options.ref_step_to2 > 0.0 && elapsed >= options.ref_step_at2) current_target = options.ref_step_to2;
         if (options.use_pi) {
             current_pwm = controller.compute(current_target, state.exact_rpm, period / 1000000.0);
             motor.set_pwm(current_pwm);
@@ -441,8 +455,10 @@ int run_test(const TestOptions& options) {
             << current_pwm << ',' << error << ','
             << intended_mode << ',' << intended_fifo << ',' << (fifo_active ? "true" : "false") << ',' << condition << ','
             << fb_rpm;
-        if (meter && std::isfinite(last_v) && std::isfinite(last_ma)) log << ',' << last_v << ',' << last_ma << ',' << (last_v * last_ma / 1000.0);
+        const double pw_now = (meter && std::isfinite(last_v) && std::isfinite(last_ma)) ? (last_v * last_ma / 1000.0) : std::nan("");
+        if (std::isfinite(pw_now)) log << ',' << last_v << ',' << last_ma << ',' << pw_now;
         else log << ",,,";
+        log << ',' << ((options.power_warn_w > 0.0 && std::isfinite(pw_now) && pw_now >= options.power_warn_w) ? "hi_w" : "");
         log << '\n';
         periods_us.push_back(period);
         late_us.push_back(lateness);
@@ -815,6 +831,8 @@ int main(int argc, char** argv) {
             std::cerr << "Usage: ./mixr1_daemon --test ...\n";
             return 2;
         }
+        if (options.ref_step_to2 > 0.0) std::cout << "[CONFIG] 2nd step: -> " << options.ref_step_to2 << " RPM at t=" << options.ref_step_at2 << " s\n";
+        if (options.power_warn_w > 0.0) std::cout << "[CONFIG] Power warning threshold: " << options.power_warn_w << " W\n";
         std::signal(SIGINT, signal_handler);
         std::signal(SIGTERM, signal_handler);
         std::signal(SIGHUP, signal_handler);   // SSH disconnect: stop the motor cleanly instead of dying with PWM still running
