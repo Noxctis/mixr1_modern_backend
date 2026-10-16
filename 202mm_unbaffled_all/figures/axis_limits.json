@@ -1,0 +1,41 @@
+{
+  "limits": {
+    "t_full": [
+      0.0,
+      40.0
+    ],
+    "rpm_full": [
+      0.0,
+      600.0
+    ],
+    "pwm_full": [
+      0.0,
+      40.0
+    ],
+    "volts": [
+      23.400000000000002,
+      24.200000000000003
+    ],
+    "current_ma": [
+      0.0,
+      800.0
+    ],
+    "power_w": [
+      0.0,
+      20.0
+    ],
+    "duty": [
+      0.0,
+      40.0
+    ]
+  },
+  "source": {
+    "t_full": "longest run",
+    "rpm_full": "all runs",
+    "pwm_full": "all runs",
+    "volts": "all runs with wattmeter data",
+    "current_ma": "all runs with wattmeter data",
+    "power_w": "all runs with wattmeter data",
+    "duty": "open-loop runs"
+  }
+}
