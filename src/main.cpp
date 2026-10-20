@@ -30,6 +30,7 @@
 #include "network.hpp"
 #include "ec11.hpp"
 #include "powermeter.hpp"
+#include "torquesensor.hpp"
 #include "i2c_util.hpp"
 
 std::atomic<bool> run_loop{true};
@@ -78,6 +79,21 @@ struct TestOptions {
     double power_warn_w = -1.0;
     double max_duty_pct = 100.0; // hard cap on the PI output in % duty (water safety: the speed cannot exceed what this duty gives)
     bool start_at_zero = false;  // keep the motor off during the 250 ms preparation and switch it on exactly when the log starts (records the ramp from rest)
+    // RS485 Modbus torque sensor (an inline strain-gauge amplifier, read with function code 0x03). OFF unless you pass --torque.
+    // Register address, width, byte order and scale are amplifier-specific: set them from the manual, or find them with
+    // tools/torque_calibration --probe. Mirrors --power in every way (same always-present-columns CSV pattern, same div cadence).
+    bool torque = false;
+    std::string torque_port = "/dev/ttyUSB0";
+    int torque_baud = 9600;
+    int torque_slave_id = 1;
+    unsigned torque_reg_addr = 0;          // PLACEHOLDER: from the amplifier manual, or --torque-probe
+    unsigned torque_reg_count = 2;         // 1 for int16/uint16, 2 for int32/uint32/float32
+    std::string torque_format = "int32";   // int16 | uint16 | int32 | uint32 | float32
+    std::string torque_word_order = "big";
+    double torque_scale = 0.001;
+    double torque_offset = 0.0;
+    int torque_div = 5;                    // read the sensor every N-th loop (same idea as --power-div)
+    int torque_stop_bits = 1;              // ATO-LCTR-OAR/DY610 factory default is N81 = 1 stop bit (set --torque-stopbits=2 if you changed it to N82)
 };
 
 bool set_fifo_priority() {
@@ -185,6 +201,32 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.abort_rpm = std::stod(argument.substr(12));
         } else if (argument == "--ext") {
             options.ext_telemetry = true;
+        } else if (argument == "--torque") {
+            options.torque = true;
+        } else if (argument == "--no-torque") {
+            options.torque = false;
+        } else if (argument.rfind("--torque-port=", 0) == 0) {
+            options.torque_port = argument.substr(14);
+        } else if (argument.rfind("--torque-baud=", 0) == 0) {
+            options.torque_baud = std::stoi(argument.substr(14));
+        } else if (argument.rfind("--torque-slave=", 0) == 0) {
+            options.torque_slave_id = std::stoi(argument.substr(15));
+        } else if (argument.rfind("--torque-reg=", 0) == 0) {
+            options.torque_reg_addr = static_cast<unsigned>(std::stoul(argument.substr(13)));
+        } else if (argument.rfind("--torque-regcount=", 0) == 0) {
+            options.torque_reg_count = static_cast<unsigned>(std::stoul(argument.substr(18)));
+        } else if (argument.rfind("--torque-format=", 0) == 0) {
+            options.torque_format = argument.substr(16);
+        } else if (argument.rfind("--torque-word-order=", 0) == 0) {
+            options.torque_word_order = argument.substr(20);
+        } else if (argument.rfind("--torque-scale=", 0) == 0) {
+            options.torque_scale = std::stod(argument.substr(15));
+        } else if (argument.rfind("--torque-offset=", 0) == 0) {
+            options.torque_offset = std::stod(argument.substr(16));
+        } else if (argument.rfind("--torque-div=", 0) == 0) {
+            options.torque_div = std::max(1, std::stoi(argument.substr(13)));
+        } else if (argument.rfind("--torque-stopbits=", 0) == 0) {
+            options.torque_stop_bits = std::stoi(argument.substr(18));
         } else {
             return false;
         }
@@ -243,6 +285,37 @@ int run_test(const TestOptions& options) {
     long power_ok_reads = 0, power_fail_reads = 0;
     int power_fail_streak = 0;
     bool power_dropout = false;
+
+    std::unique_ptr<TorqueSensor> tsensor;
+    if (options.torque) {
+        TorqueSensor::Settings ts;
+        ts.port = options.torque_port;
+        ts.baud = options.torque_baud;
+        ts.slave_id = options.torque_slave_id;
+        ts.reg_addr = options.torque_reg_addr;
+        ts.reg_count = options.torque_reg_count;
+        ts.value_format = options.torque_format;
+        ts.word_order = options.torque_word_order;
+        ts.scale = options.torque_scale;
+        ts.offset = options.torque_offset;
+        ts.stop_bits = options.torque_stop_bits;
+        tsensor = std::make_unique<TorqueSensor>(ts);
+        if (tsensor->available()) {
+            std::cout << "[TEST] Torque sensor answering on " << options.torque_port << " (slave " << options.torque_slave_id
+                      << ", reg " << options.torque_reg_addr << " x" << options.torque_reg_count << ", " << options.torque_format
+                      << "): logging torque_nm\n";
+        } else {
+            std::cout << "[TEST] No torque sensor answered on " << options.torque_port << " (slave " << options.torque_slave_id
+                      << "): check the port name, baud rate, slave ID, wiring and termination resistor. Continuing without the torque column.\n";
+            tsensor.reset();
+        }
+    }
+    const char* torque_status = options.torque ? "absent" : "disabled";
+    if (tsensor) torque_status = "ok";
+    long torque_ok_reads = 0, torque_fail_reads = 0;
+    int torque_fail_streak = 0;
+    bool torque_dropout = false;
+
     std::ofstream log(options.csv_path);
     if (!log) {
         std::cerr << "[TEST] Cannot open CSV: " << options.csv_path << '\n';
@@ -257,6 +330,7 @@ int run_test(const TestOptions& options) {
 
     log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition,fb_rpm";
     log << ",bus_v,current_ma,power_w,power_event";         // power_event = hi_w when power >= --power-warn-w
+    log << ",torque_nm";                                    // always present (empty when there is no torque sensor), same convention as the power columns
     log << '\n';
     
     // ---- Live streaming (same TCP port/protocol as normal mode) ----
@@ -340,10 +414,16 @@ int run_test(const TestOptions& options) {
     std::vector<double> time_samples;
     std::vector<double> volt_samples;
     std::vector<double> cur_samples;
+    std::vector<double> torque_samples;
     double last_v = idle_v, last_ma = idle_ma;
     if (meter && !(last_v == last_v)) {                      // no idle reading: take one now so the first rows are valid
         double v = 0.0, ma = 0.0;
         if (meter->read(v, ma)) { last_v = v; last_ma = ma; }
+    }
+    double last_torque = std::nan("");
+    if (tsensor) {
+        double t0v = 0.0;
+        if (tsensor->read(t0v)) last_torque = t0v;            // first row gets a real value where possible, same idea as the wattmeter's idle read
     }
 
     const double total_duration = options.sweep ? options.duration_sec * 11.0 : options.duration_sec;
@@ -447,6 +527,16 @@ int run_test(const TestOptions& options) {
             }
         }
 
+        if (tsensor && (time_samples.size() % static_cast<size_t>(options.torque_div)) == 0) {
+            double tq = 0.0;
+            if (tsensor->read(tq)) {
+                last_torque = tq; ++torque_ok_reads; torque_fail_streak = 0;
+            } else {
+                ++torque_fail_reads;
+                if (++torque_fail_streak > 10) { last_torque = std::nan(""); torque_dropout = true; }   // RS485 dropout: stop writing a stale value, same rule as the wattmeter
+            }
+        }
+
         const double error = current_target - state.exact_rpm;
         const int pwm_percent = options.sweep ? step_index * 10 : (current_pwm * 100) / 4095;
         log << std::fixed << std::setprecision(6) << elapsed << ',' << step_index << ',' << pwm_percent << ','
@@ -459,6 +549,8 @@ int run_test(const TestOptions& options) {
         if (std::isfinite(pw_now)) log << ',' << last_v << ',' << last_ma << ',' << pw_now;
         else log << ",,,";
         log << ',' << ((options.power_warn_w > 0.0 && std::isfinite(pw_now) && pw_now >= options.power_warn_w) ? "hi_w" : "");
+        if (std::isfinite(last_torque)) log << ',' << last_torque;
+        else log << ',';
         log << '\n';
         periods_us.push_back(period);
         late_us.push_back(lateness);
@@ -468,6 +560,7 @@ int run_test(const TestOptions& options) {
         time_samples.push_back(elapsed);
         volt_samples.push_back(last_v);
         cur_samples.push_back(last_ma);
+        torque_samples.push_back(last_torque);
     }
 
     motor.stop_motor();
@@ -642,6 +735,26 @@ int run_test(const TestOptions& options) {
                 }
             }
 
+            // Torque measurements over the same steady-state window, same gap-handling rule as the electrical block above.
+            std::ostringstream tq;
+            {
+                const char* st = torque_dropout ? "dropout" : torque_status;
+                tq << " torque_status=" << st;
+                if (options.torque) tq << " torque_reads_ok=" << torque_ok_reads << " torque_reads_fail=" << torque_fail_reads;
+                if (tsensor && torque_samples.size() == n_all) {
+                    double tm = 0.0;
+                    size_t k = 0;
+                    for (size_t i = ss; i < n; ++i) if (std::isfinite(torque_samples[i])) { tm += torque_samples[i]; ++k; }
+                    if (k > 2) {
+                        tm /= static_cast<double>(k);
+                        double tv_ = 0.0;
+                        for (size_t i = ss; i < n; ++i) if (std::isfinite(torque_samples[i])) tv_ += (torque_samples[i] - tm) * (torque_samples[i] - tm);
+                        tv_ = std::sqrt(tv_ / static_cast<double>(k));
+                        tq << std::fixed << std::setprecision(5) << " torque_mean_Nm=" << tm << " torque_std_Nm=" << tv_;
+                    }
+                }
+            }
+
             std::cout << std::fixed << std::setprecision(3)
                       << "[RESULT] kp=" << Config::GLOBAL_KP
                       << " ki=" << Config::GLOBAL_KI
@@ -659,6 +772,7 @@ int run_test(const TestOptions& options) {
                       << " settle2_s=" << settle2_s
                       << rs.str()
                       << pw.str()
+                      << tq.str()
                       << " aborted=" << (aborted ? 1 : 0) << '\n';
         }
     }
@@ -677,6 +791,119 @@ static void acquire_single_instance_lock() {
         std::exit(3);
     }
     // the descriptor stays open on purpose for the life of the process
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// ./mixr1_daemon --test-torque [--seconds=10] [--torque-port=/dev/ttyUSB0] [--torque-baud=9600] [--torque-slave=1]
+//                [--torque-reg=0] [--torque-regcount=2] [--torque-format=int32] [--torque-word-order=big] [--torque-scale=0.001]
+// Checks the RS485 Modbus torque amplifier on its own: does the port open, does the slave answer function 0x03 with a valid
+// CRC, are the readings stable. It does NOT drive the motor. Exit code 0 = PASS, 1 = check the wiring / register settings.
+// ---------------------------------------------------------------------------------------------------------------------------------
+static int run_torque_test(int argc, char** argv) {
+    TorqueSensor::Settings s;
+    double seconds = 10.0;
+    std::string csv_path = "torque_test.csv";
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a.rfind("--seconds=", 0) == 0) seconds = std::max(2.0, std::stod(a.substr(10)));
+        else if (a.rfind("--torque-port=", 0) == 0) s.port = a.substr(14);
+        else if (a.rfind("--torque-baud=", 0) == 0) s.baud = std::stoi(a.substr(14));
+        else if (a.rfind("--torque-slave=", 0) == 0) s.slave_id = std::stoi(a.substr(15));
+        else if (a.rfind("--torque-reg=", 0) == 0) s.reg_addr = static_cast<unsigned>(std::stoul(a.substr(13)));
+        else if (a.rfind("--torque-regcount=", 0) == 0) s.reg_count = static_cast<unsigned>(std::stoul(a.substr(18)));
+        else if (a.rfind("--torque-format=", 0) == 0) s.value_format = a.substr(16);
+        else if (a.rfind("--torque-word-order=", 0) == 0) s.word_order = a.substr(20);
+        else if (a.rfind("--torque-scale=", 0) == 0) s.scale = std::stod(a.substr(15));
+        else if (a.rfind("--torque-offset=", 0) == 0) s.offset = std::stod(a.substr(16));
+        else if (a.rfind("--torque-stopbits=", 0) == 0) s.stop_bits = std::stoi(a.substr(18));
+        else if (a.rfind("--csv=", 0) == 0) csv_path = a.substr(6);
+    }
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
+
+    std::cout << "=== TORQUE SENSOR TEST (RS485 Modbus RTU, function 0x03) ===\n"
+              << "The motor is NOT driven.\n\n"
+              << "Step 1: opening " << s.port << " at " << s.baud << " baud, slave " << s.slave_id
+              << ", register " << s.reg_addr << " x" << s.reg_count << " (" << s.value_format << ", "
+              << s.word_order << "-endian, scale " << s.scale << ") ...\n";
+    TorqueSensor sensor(s);
+    if (!sensor.available()) {
+        std::cout << "\nRESULT: FAIL - no valid response from slave " << s.slave_id << " on " << s.port << ".\n"
+                  << "  * check the port name (ls /dev/ttyUSB* /dev/ttyACM*) and that nothing else has it open (sudo fuser -v " << s.port << ")\n"
+                  << "  * check the baud rate, slave ID and register address against the amplifier's manual\n"
+                  << "  * check A/B (D+/D-) wiring is not swapped, and that a 120 ohm termination resistor is fitted at each end of the bus\n"
+                  << "  * try --torque-regcount=1 if the amplifier uses a 16-bit register instead of 32-bit\n";
+        return 1;
+    }
+    std::cout << "yes - slave answered with a valid frame.\n";
+    {   // ATO-LCTR-OAR/DY610 only: register 68 ("decimal point", 0-4) is what the amplifier was last set to via its own
+        // keys. scale should be 10^-that. If this amplifier was never calibrated on-device with a real weight (SL/SH keys),
+        // the raw register value is meaningless no matter what scale you apply here -- do that first.
+        std::vector<uint16_t> dp;
+        if (sensor.read_raw(68, 1, dp)) {
+            std::cout << "\n(DY610 check) Register 68 (decimal point setting): " << dp[0]
+                      << "  ->  scale should be 10^-" << dp[0] << " = " << std::pow(10.0, -static_cast<double>(dp[0]))
+                      << "\nIf that doesn't match what you passed with --torque-scale, fix the flag. And if the amplifier hasn't been\n"
+                      << "calibrated with a real weight using its SL (zero) and SH (span) keys yet, do that before trusting any reading.\n";
+        }
+    }
+    std::cout << "\nStep 2: reading for " << seconds << " s (5 reads per second; one line every 0.5 s)\n"
+              << "   t(s)    torque " << s.unit << "    raw registers\n";
+    std::vector<double> tv, vals;
+    long fails = 0;
+    std::ofstream csv(csv_path);
+    csv << "time_s,torque_" << s.unit << ",raw_registers,ok\n";
+    const auto t0 = std::chrono::steady_clock::now();
+    auto next = t0;
+    int printed = 0;
+    while (run_loop) {
+        next += std::chrono::milliseconds(200);
+        std::this_thread::sleep_until(next);
+        const auto now = std::chrono::steady_clock::now();
+        const double t = std::chrono::duration<double>(now - t0).count();
+        if (t > seconds) break;
+        double v = 0.0;
+        std::vector<uint16_t> regs;
+        const bool ok = sensor.read(v) && sensor.read_raw(s.reg_addr, s.reg_count, regs);
+        if (ok) { tv.push_back(t); vals.push_back(v); } else { ++fails; }
+        csv << std::fixed << std::setprecision(3) << t << ',';
+        if (ok) csv << v; else csv << "";
+        csv << ',';
+        if (ok) { for (size_t i = 0; i < regs.size(); ++i) { if (i) csv << '|'; csv << regs[i]; } }
+        csv << ',' << (ok ? 1 : 0) << '\n';
+        if (t >= 0.5 * printed) {
+            ++printed;
+            if (ok) {
+                std::cout << "  " << std::fixed << std::setprecision(2) << std::setw(5) << t << "  " << std::setw(12) << v << "    ";
+                for (size_t i = 0; i < regs.size(); ++i) { if (i) std::cout << '|'; std::cout << regs[i]; }
+                std::cout << '\n';
+            } else {
+                std::cout << "  " << std::fixed << std::setprecision(2) << std::setw(5) << t << "   READ FAILED\n";
+            }
+        }
+    }
+    csv.close();
+    if (vals.size() < 5) { std::cout << "\nRESULT: FAIL - fewer than 5 successful reads (" << fails << " failed).\n"; return 1; }
+    double mean = 0.0; for (double v : vals) mean += v; mean /= static_cast<double>(vals.size());
+    double sd = 0.0; for (double v : vals) sd += (v - mean) * (v - mean); sd = std::sqrt(sd / static_cast<double>(vals.size()));
+    const double mn = *std::min_element(vals.begin(), vals.end());
+    const double mx = *std::max_element(vals.begin(), vals.end());
+    std::cout << std::fixed << "\nSummary over " << vals.size() << " reads (" << fails << " failed):\n"
+              << std::setprecision(5) << "   torque : mean " << mean << " " << s.unit << "   std " << sd
+              << "   min " << mn << "   max " << mx << '\n' << "\nChecks:\n";
+    bool pass = true;
+    auto check = [&](bool ok, const std::string& good, const std::string& bad) {
+        std::cout << "   [" << (ok ? " OK " : "FAIL") << "] " << (ok ? good : bad) << '\n';
+        if (!ok) pass = false;
+    };
+    check(fails == 0, "no failed reads", std::to_string(fails) + " reads failed: a marginal bus, wrong baud, or a loose termination/ground");
+    check(sd < 0.05 * (std::abs(mean) > 1e-9 ? std::abs(mean) : 1.0) || sd < 0.01,
+          "readings are stable for an unloaded sensor", "readings are noisy: check grounding, cable routing away from the motor leads, and shielding");
+    std::cout << "\n   With nothing hanging on the sensor, this is your ZERO reading: " << mean << " " << s.unit
+              << " (use this as --torque-offset, or the calibration tool's zero convention, so a no-load reading reads as 0).\n"
+              << "   Now run the calibration tool with known weights:  tools/torque_calibration --port=" << s.port << '\n'
+              << "\nData written to " << csv_path << "\nRESULT: " << (pass ? "PASS" : "CHECK - see the FAIL lines above") << '\n';
+    return pass ? 0 : 1;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -804,6 +1031,7 @@ int main(int argc, char** argv) {
     }
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--test-wattmeter") return run_wattmeter_test(argc, argv);
+        if (std::string(argv[i]) == "--test-torque") return run_torque_test(argc, argv);
     }
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -833,6 +1061,9 @@ int main(int argc, char** argv) {
         }
         if (options.ref_step_to2 > 0.0) std::cout << "[CONFIG] 2nd step: -> " << options.ref_step_to2 << " RPM at t=" << options.ref_step_at2 << " s\n";
         if (options.power_warn_w > 0.0) std::cout << "[CONFIG] Power warning threshold: " << options.power_warn_w << " W\n";
+        if (options.torque) std::cout << "[CONFIG] Torque sensor: " << options.torque_port << " slave " << options.torque_slave_id
+                                       << ", reg " << options.torque_reg_addr << " x" << options.torque_reg_count
+                                       << " (" << options.torque_format << ")\n";
         std::signal(SIGINT, signal_handler);
         std::signal(SIGTERM, signal_handler);
         std::signal(SIGHUP, signal_handler);   // SSH disconnect: stop the motor cleanly instead of dying with PWM still running
