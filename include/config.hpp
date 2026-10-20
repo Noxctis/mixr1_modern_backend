@@ -40,10 +40,10 @@ namespace Config {
     constexpr unsigned int PIN_ENC_A = 24;               
     constexpr unsigned int PIN_ENC_B = 23;               
     constexpr unsigned int PIN_ENC_X = 22;               
-    constexpr int ENCODER_DIRECTION = -1;                
-    constexpr unsigned int PIN_M1_EN = 15;               
-    constexpr unsigned int PIN_M1_INA = 17;              
-    constexpr unsigned int PIN_M1_INB = 27;              
+    constexpr int ENCODER_DIRECTION = 1;                
+    constexpr unsigned int PIN_M1_EN = 18;               
+    constexpr unsigned int PIN_M1_INA = 27;              
+    constexpr unsigned int PIN_M1_INB = 17;              
     constexpr unsigned int PIN_M1_PWM = 13;              
     // --- I2C buses (Linux /dev/i2c-N) ---
     // Each device is looked for on its preferred bus first, then on the other one, so the daemon also works if you move a device.

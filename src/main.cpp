@@ -6,6 +6,7 @@
 #include <thread>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <fstream>
 #include <algorithm>
 #include <numeric>
@@ -513,7 +514,7 @@ int run_test(const TestOptions& options) {
                 PowerSample ps;
                 if (meter && std::isfinite(last_v) && std::isfinite(last_ma)) { ps.bus_v = last_v; ps.current_ma = last_ma; ps.power_w = last_v * last_ma / 1000.0; }
                 net.send_packet_ext(state.exact_rpm, fb_rpm, encoder.get_revolutions(),
-                                    current_pwm * 100.0 / 4095.0, current_target, elapsed, ps);
+                                    current_pwm * 100.0 / 4095.0, current_target, elapsed, ps, last_torque);
             } else {
                 net.send_packet(state.exact_rpm, fb_rpm, encoder.get_revolutions());
             }
@@ -1029,8 +1030,27 @@ int main(int argc, char** argv) {
     int power_addr = Config::I2C_POWER_ADDR;        // --power-addr=0x45
     int power_bus_forced = -1;                      // --power-bus=N: use /dev/i2c-N for the wattmeter (default: auto-detect)
     double power_shunt_ohm = 0.010, power_i_gain = 1.0, power_i_offset_ma = 0.0, power_v_gain = 1.0;
+    // RS485 torque amplifier in normal mode: OFF unless --torque is passed (same flags as test mode). Default port = the Pi's UART.
+    bool use_torque = false;
+    TorqueSensor::Settings torque_cfg;
+    torque_cfg.port = "/dev/serial0"; torque_cfg.baud = 9600; torque_cfg.slave_id = 1; torque_cfg.reg_addr = 0; torque_cfg.reg_count = 2;
+    torque_cfg.value_format = "int32"; torque_cfg.word_order = "big"; torque_cfg.scale = 0.001; torque_cfg.offset = 0.0; torque_cfg.stop_bits = 1;
+    int torque_period_ms = 50;                      // --torque-period-ms=N: background poll period (50 -> 20 Hz)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
+        if (a == "--torque") use_torque = true;
+        if (a == "--no-torque") use_torque = false;
+        if (a.rfind("--torque-port=", 0) == 0) torque_cfg.port = a.substr(14);
+        if (a.rfind("--torque-baud=", 0) == 0) torque_cfg.baud = std::stoi(a.substr(14));
+        if (a.rfind("--torque-slave=", 0) == 0) torque_cfg.slave_id = std::stoi(a.substr(15));
+        if (a.rfind("--torque-reg=", 0) == 0) torque_cfg.reg_addr = static_cast<unsigned>(std::stoul(a.substr(13)));
+        if (a.rfind("--torque-regcount=", 0) == 0) torque_cfg.reg_count = static_cast<unsigned>(std::stoul(a.substr(18)));
+        if (a.rfind("--torque-format=", 0) == 0) torque_cfg.value_format = a.substr(16);
+        if (a.rfind("--torque-word-order=", 0) == 0) torque_cfg.word_order = a.substr(20);
+        if (a.rfind("--torque-scale=", 0) == 0) torque_cfg.scale = std::stod(a.substr(15));
+        if (a.rfind("--torque-offset=", 0) == 0) torque_cfg.offset = std::stod(a.substr(16));
+        if (a.rfind("--torque-stopbits=", 0) == 0) torque_cfg.stop_bits = std::stoi(a.substr(18));
+        if (a.rfind("--torque-period-ms=", 0) == 0) torque_period_ms = std::max(10, std::stoi(a.substr(19)));
         if (a == "--no-power") use_power = false;
         if (a == "--power") use_power = true;
         if (a.rfind("--power-addr=", 0) == 0) power_addr = std::stoi(a.substr(13), nullptr, 0);
@@ -1156,6 +1176,41 @@ int main(int argc, char** argv) {
         } else {
             std::cout << "[MIXR-1] No wattmeter answered at 0x" << std::hex << power_addr << std::dec << ": the dashboard will show no electrical power.\n";
             meter.reset();
+        }
+    }
+    // Torque sensor (RS485 Modbus): a Modbus request + reply at 9600 baud takes ~20 ms, which would stall the 10 ms control loop, so it is polled
+    // in a background thread. The thread is moved OFF the control core and back to normal scheduling (std::thread would inherit core 3 + SCHED_FIFO).
+    std::unique_ptr<TorqueSensor> tsensor;
+    std::atomic<double> torque_value{std::numeric_limits<double>::quiet_NaN()};
+    std::atomic<bool> torque_stop{false};
+    std::thread torque_thread;
+    if (use_torque) {
+        tsensor = std::make_unique<TorqueSensor>(torque_cfg);
+        if (tsensor->available()) {
+            std::cout << "[MIXR-1] Torque sensor answering on " << torque_cfg.port << " (slave " << torque_cfg.slave_id << ", reg " << torque_cfg.reg_addr
+                      << " x" << torque_cfg.reg_count << ", " << torque_cfg.value_format << "): streaming torque to the dashboard.\n";
+            torque_thread = std::thread([&]() {
+                cpu_set_t others;
+                CPU_ZERO(&others);
+                for (int c = 0; c < 3; ++c) CPU_SET(c, &others);
+                pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &others);
+                sched_param normal{};
+                normal.sched_priority = 0;
+                pthread_setschedparam(pthread_self(), SCHED_OTHER, &normal);
+                int fails = 0;
+                auto next = std::chrono::steady_clock::now();
+                while (!torque_stop.load()) {
+                    next += std::chrono::milliseconds(torque_period_ms);
+                    std::this_thread::sleep_until(next);
+                    double tq = 0.0;
+                    if (tsensor->read(tq)) { torque_value.store(tq); fails = 0; }
+                    else if (++fails > 10) torque_value.store(std::numeric_limits<double>::quiet_NaN());   // no stale value after an RS485 dropout
+                }
+            });
+        } else {
+            std::cout << "[MIXR-1] No torque sensor answered on " << torque_cfg.port << " (slave " << torque_cfg.slave_id
+                      << "): check port, baud, slave ID, register and wiring (try ./mixr1_daemon --test-torque). Running without torque.\n";
+            tsensor.reset();
         }
     }
     PowerSample power_sample;                       // NaN until the first good reading
@@ -1376,7 +1431,7 @@ int main(int argc, char** argv) {
                 const double uptime = std::chrono::duration<double>(current_time - loop_start).count();
                 sent = network->send_packet_ext(state.exact_rpm, state.ema_filtered_rpm,
                                                 encoder.get_revolutions(), current_pwm * 100.0 / 4095.0,
-                                                active_target, uptime, power_sample);
+                                                active_target, uptime, power_sample, torque_value.load());
             } else {
                 sent = network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder.get_revolutions());
             }
@@ -1412,6 +1467,8 @@ int main(int argc, char** argv) {
     }
 
     motor.stop_motor();
+    torque_stop = true;
+    if (torque_thread.joinable()) torque_thread.join();
     network->stop_server();
 
     pigpio_stop(pi);

@@ -18,6 +18,7 @@ void TelemetryServer::disconnect_client() {
     client_socket = -1;
     ext_requested = false;
     power_requested = false;
+    torque_requested = false;
     send_fail_streak = 0;
     rx_buffer.clear();
 }
@@ -39,6 +40,7 @@ void TelemetryServer::adopt_client(int fd) {
     rx_buffer.clear();
     ext_requested = false;
     power_requested = false;
+    torque_requested = false;
     send_fail_streak = 0;
 }
 
@@ -137,7 +139,7 @@ bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long
 
 bool TelemetryServer::send_packet_ext(double raw_rpm, double feedback_rpm, long long revolutions,
                                       double pwm_pct, double target_rpm, double elapsed_s,
-                                      const PowerSample& power) {
+                                      const PowerSample& power, double torque_nm) {
     if (client_socket < 0) return false;
     std::string packet = std::to_string(raw_rpm) + "," + std::to_string(feedback_rpm) + "," +
                          std::to_string(revolutions) + "," + std::to_string(pwm_pct) + "," +
@@ -145,6 +147,7 @@ bool TelemetryServer::send_packet_ext(double raw_rpm, double feedback_rpm, long 
     if (power_requested) {                                      // std::to_string(NaN) gives "nan", which the dashboard reads as "no data"
         packet += "," + std::to_string(power.bus_v) + "," + std::to_string(power.current_ma) + "," + std::to_string(power.power_w);
     }
+    if (torque_requested) packet += "," + std::to_string(torque_nm);
     packet += "\n";
     return send_to_client(packet);
 }
@@ -188,6 +191,7 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
         size_t fa_pos  = line.find("CMD:ALPHA,");
         size_t ext_pos = line.find("CMD:EXT,");
         size_t pow_pos = line.find("CMD:POWER,");
+        size_t tq_pos  = line.find("CMD:TORQUE,");
 
         if (rpm_pos != std::string::npos) {
             try {
@@ -246,6 +250,11 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
             try {
                 power_requested = (std::stoi(line.substr(pow_pos + 10)) != 0);
                 std::cout << "[MIXR-1] Wattmeter telemetry " << (power_requested ? "ON" : "OFF") << '\n';
+            } catch (...) {}
+        } else if (tq_pos != std::string::npos) {
+            try {
+                torque_requested = (std::stoi(line.substr(tq_pos + 11)) != 0);
+                std::cout << "[MIXR-1] Torque telemetry " << (torque_requested ? "ON" : "OFF") << '\n';
             } catch (...) {}
         }
     }
