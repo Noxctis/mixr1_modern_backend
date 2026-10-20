@@ -20,7 +20,7 @@
 class TorqueSensor {
 public:
     struct Settings {
-        std::string port = "/dev/ttyUSB0";
+        std::string port = "/dev/serial0";
         int baud = 9600;
         int slave_id = 1;
         // Two different ATO protocols share this class. Pick the block matching your actual hardware label.

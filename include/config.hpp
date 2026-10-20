@@ -51,6 +51,8 @@ namespace Config {
     constexpr int I2C_BUS_EXTRA    = 3;                  // extra bus: GPIO 8 = SDA, GPIO 7 = SCL  (dtoverlay=i2c-gpio,bus=3,i2c_gpio_sda=8,i2c_gpio_scl=7)
     constexpr int I2C_BUS_DISPLAY  = I2C_BUS_HARDWARE;   // preferred bus of the OLED / LCD
     constexpr int I2C_BUS_POWER    = I2C_BUS_EXTRA;      // preferred bus of the wattmeter (INA219)
+    constexpr int I2C_POWER_ADDR   = 0x45;               // wattmeter (DFRobot SEN0291 / INA219) address
+    constexpr int POWER_READ_DIV   = 5;                  // daemon reads the wattmeter every N-th loop (5 -> 20 Hz): keeps the 100 Hz loop undisturbed
     constexpr int I2C_LCD_ADDR = 0x27;
     constexpr int I2C_OLED_ADDR = 0x3C;                  
     constexpr DisplayType DISPLAY_TYPE = DisplayType::SSD1306_128x64;

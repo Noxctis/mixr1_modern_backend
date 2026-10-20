@@ -510,8 +510,10 @@ int run_test(const TestOptions& options) {
 
         if (streaming && net.has_client()) {
             if (options.ext_telemetry || net.wants_ext()) {
+                PowerSample ps;
+                if (meter && std::isfinite(last_v) && std::isfinite(last_ma)) { ps.bus_v = last_v; ps.current_ma = last_ma; ps.power_w = last_v * last_ma / 1000.0; }
                 net.send_packet_ext(state.exact_rpm, fb_rpm, encoder.get_revolutions(),
-                                    current_pwm * 100.0 / 4095.0, current_target, elapsed);
+                                    current_pwm * 100.0 / 4095.0, current_target, elapsed, ps);
             } else {
                 net.send_packet(state.exact_rpm, fb_rpm, encoder.get_revolutions());
             }
@@ -1023,8 +1025,20 @@ int main(int argc, char** argv) {
     double dbg_loop_max_ms = 0.0, dbg_lcd_max_ms = 0.0;   // --debug-motor timing probes (loop period, OLED redraw time)
     bool no_lcd = false;                            // --no-lcd: do not touch the I2C display at all (isolates a hung I2C bus / display)
     int lcd_bus_forced = -1;                        // --lcd-bus=N: use /dev/i2c-N for the display (default: auto-detect)
+    bool use_power = true;                          // --no-power: do not touch the wattmeter in normal mode
+    int power_addr = Config::I2C_POWER_ADDR;        // --power-addr=0x45
+    int power_bus_forced = -1;                      // --power-bus=N: use /dev/i2c-N for the wattmeter (default: auto-detect)
+    double power_shunt_ohm = 0.010, power_i_gain = 1.0, power_i_offset_ma = 0.0, power_v_gain = 1.0;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
+        if (a == "--no-power") use_power = false;
+        if (a == "--power") use_power = true;
+        if (a.rfind("--power-addr=", 0) == 0) power_addr = std::stoi(a.substr(13), nullptr, 0);
+        if (a.rfind("--power-bus=", 0) == 0) power_bus_forced = std::stoi(a.substr(12));
+        if (a.rfind("--power-shunt-ohm=", 0) == 0) power_shunt_ohm = std::stod(a.substr(18));
+        if (a.rfind("--power-i-gain=", 0) == 0) power_i_gain = std::stod(a.substr(15));
+        if (a.rfind("--power-i-offset-ma=", 0) == 0) power_i_offset_ma = std::stod(a.substr(20));
+        if (a.rfind("--power-v-gain=", 0) == 0) power_v_gain = std::stod(a.substr(15));
         if (a == "--debug-motor") debug_motor = true;
         if (a == "--no-lcd") no_lcd = true;
         if (a.rfind("--lcd-bus=", 0) == 0) lcd_bus_forced = std::stoi(a.substr(10));
@@ -1129,6 +1143,24 @@ int main(int argc, char** argv) {
     LCD1602 lcd(pi, Config::DISPLAY_TYPE, no_lcd ? 0xFFFF : display_addr, display_bus);       // an invalid address makes i2c_open fail at once: every display call becomes a no-op
     EC11Input ec11(pi, Config::PIN_EC11_A, Config::PIN_EC11_B, Config::PIN_EC11_SW);
     PIController pi_control;
+
+    // Wattmeter (INA219 on its own I2C bus): read at 20 Hz and forwarded to the dashboard. A missing meter is not an error: the dashboard just gets NaN.
+    std::unique_ptr<PowerMeter> meter;
+    if (use_power) {
+        const int power_bus = (power_bus_forced >= 0)
+            ? power_bus_forced
+            : find_i2c_bus(pi, power_addr, Config::I2C_BUS_POWER, {Config::I2C_BUS_HARDWARE, Config::I2C_BUS_EXTRA});
+        if (power_bus >= 0) meter = std::make_unique<PowerMeter>(pi, power_bus, power_addr, power_shunt_ohm, power_i_gain, power_i_offset_ma, power_v_gain);
+        if (meter && meter->available()) {
+            std::cout << "[MIXR-1] Wattmeter found at 0x" << std::hex << power_addr << std::dec << " on /dev/i2c-" << power_bus << ": streaming V / mA / W to the dashboard.\n";
+        } else {
+            std::cout << "[MIXR-1] No wattmeter answered at 0x" << std::hex << power_addr << std::dec << ": the dashboard will show no electrical power.\n";
+            meter.reset();
+        }
+    }
+    PowerSample power_sample;                       // NaN until the first good reading
+    int power_loop_counter = 0;
+    int power_fail_streak = 0;
 
     bool dashboard_connected = false;
     bool simulink_is_active = false;
@@ -1326,6 +1358,17 @@ int main(int argc, char** argv) {
             }
         }
 
+        if (meter && ++power_loop_counter >= Config::POWER_READ_DIV) {
+            power_loop_counter = 0;
+            double v = 0.0, ma = 0.0;
+            if (meter->read(v, ma)) {
+                power_sample.bus_v = v; power_sample.current_ma = ma; power_sample.power_w = v * ma / 1000.0;
+                power_fail_streak = 0;
+            } else if (++power_fail_streak > 10) {          // do not keep sending a stale value after an I2C dropout
+                power_sample = PowerSample{};
+            }
+        }
+
         if (dashboard_active) {
             bool sent;
             if (network->wants_ext()) {
@@ -1333,7 +1376,7 @@ int main(int argc, char** argv) {
                 const double uptime = std::chrono::duration<double>(current_time - loop_start).count();
                 sent = network->send_packet_ext(state.exact_rpm, state.ema_filtered_rpm,
                                                 encoder.get_revolutions(), current_pwm * 100.0 / 4095.0,
-                                                active_target, uptime);
+                                                active_target, uptime, power_sample);
             } else {
                 sent = network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder.get_revolutions());
             }

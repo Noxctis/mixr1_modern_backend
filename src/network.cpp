@@ -17,6 +17,7 @@ void TelemetryServer::disconnect_client() {
     if (client_socket >= 0) close(client_socket);
     client_socket = -1;
     ext_requested = false;
+    power_requested = false;
     send_fail_streak = 0;
     rx_buffer.clear();
 }
@@ -37,6 +38,7 @@ void TelemetryServer::adopt_client(int fd) {
     setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
     rx_buffer.clear();
     ext_requested = false;
+    power_requested = false;
     send_fail_streak = 0;
 }
 
@@ -134,11 +136,16 @@ bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long
 }
 
 bool TelemetryServer::send_packet_ext(double raw_rpm, double feedback_rpm, long long revolutions,
-                                      double pwm_pct, double target_rpm, double elapsed_s) {
+                                      double pwm_pct, double target_rpm, double elapsed_s,
+                                      const PowerSample& power) {
     if (client_socket < 0) return false;
     std::string packet = std::to_string(raw_rpm) + "," + std::to_string(feedback_rpm) + "," +
                          std::to_string(revolutions) + "," + std::to_string(pwm_pct) + "," +
-                         std::to_string(target_rpm) + "," + std::to_string(elapsed_s) + "\n";
+                         std::to_string(target_rpm) + "," + std::to_string(elapsed_s);
+    if (power_requested) {                                      // std::to_string(NaN) gives "nan", which the dashboard reads as "no data"
+        packet += "," + std::to_string(power.bus_v) + "," + std::to_string(power.current_ma) + "," + std::to_string(power.power_w);
+    }
+    packet += "\n";
     return send_to_client(packet);
 }
 
@@ -180,6 +187,7 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
         size_t ki_pos  = line.find("CMD:KI,");
         size_t fa_pos  = line.find("CMD:ALPHA,");
         size_t ext_pos = line.find("CMD:EXT,");
+        size_t pow_pos = line.find("CMD:POWER,");
 
         if (rpm_pos != std::string::npos) {
             try {
@@ -233,6 +241,11 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
             try {
                 ext_requested = (std::stoi(line.substr(ext_pos + 8)) != 0);
                 std::cout << "[MIXR-1] Extended telemetry " << (ext_requested ? "ON" : "OFF") << '\n';
+            } catch (...) {}
+        } else if (pow_pos != std::string::npos) {
+            try {
+                power_requested = (std::stoi(line.substr(pow_pos + 10)) != 0);
+                std::cout << "[MIXR-1] Wattmeter telemetry " << (power_requested ? "ON" : "OFF") << '\n';
             } catch (...) {}
         }
     }

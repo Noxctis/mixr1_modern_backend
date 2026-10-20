@@ -41,7 +41,7 @@
 
 // ------------------------------------------------------------------------ settings (same defaults as the original script)
 struct Settings {
-    std::string port = "/dev/ttyUSB0";
+    std::string port = "/dev/serial0";
     int baud = 9600;
     int slave_id = 1;
     unsigned reg_addr = 0;              // PLACEHOLDER: take from the manual's register map (find it with --probe)
@@ -559,7 +559,7 @@ int main(int argc, char** argv) {
         else if (a.rfind("--duration=", 0) == 0) cfg.watch_duration_s = std::stod(a.substr(11));
         else if (a == "--help" || a == "-h") {
             std::cout << "Usage: torque_calibration [--simulate] [--watch [--duration=S]] [--probe]\n"
-                      << "                           [--port=/dev/ttyUSB0] [--baud=9600] [--slave=1]\n"
+                      << "                           [--port=/dev/serial0] [--baud=9600] [--slave=1]\n"
                       << "                           [--reg=0] [--regcount=2] [--format=int32] [--word-order=big]\n"
                       << "                           [--scale=0.001] [--offset=0] [--capacity=1.0]\n"
                       << "                           [--settle=3] [--samples=10] [--interval=0.2]\n";
