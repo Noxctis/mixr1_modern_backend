@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
+#include "modbus_tare.hpp"
 
 class ModbusTorque {
 public:
@@ -55,6 +56,13 @@ public:
     bool available() const { return ok_; }
     const std::string& last_error() const { return err_; }
     int32_t last_raw() const { return last_raw_; }
+
+    // Zero the amplifier (tare). Only with NO load on the sensor, and before any other thread uses this port (do not call it
+    // while the daemon's torque thread is polling). True = the amplifier acknowledged; read the value back after its filter has settled.
+    bool tare() {
+        if (fd_ < 0) { err_ = "port not open"; return false; }
+        return modbus_tare::send_zero(fd_, cfg_.slave_id, std::max(cfg_.timeout_ms, 300), err_);
+    }
 
     // One raw read: the registers exactly as the amplifier sent them. Returns false on timeout / bad reply.
     bool read_regs(std::vector<uint16_t>& regs) {

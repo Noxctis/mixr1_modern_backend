@@ -41,6 +41,63 @@ void signal_handler(int signum) {
     run_loop = false;
 }
 
+// ---- Zero (tare) the torque amplifier before a run -------------------------------------------------------------------------------------
+// Waits until the shaft is at rest (encoder count unchanged for 1 s, at most 10 s), reads the offset, sends the amplifier's zero command,
+// waits for its digital filter and checks that the reading really is ~0. Call it ONLY with no load on the sensor and BEFORE any other
+// thread polls the same port. It never aborts the run: on a failure it prints a loud warning and carries on (the offset stays in the data).
+template <class Sensor>
+static bool zero_torque_at_rest(Sensor& sensor, AMT102Encoder& encoder, int settle_ms, double tol_nm, const char* tag) {
+    const auto t0 = std::chrono::steady_clock::now();
+    long long last_count = encoder.get_sync_snapshot().count;
+    auto still_since = t0;
+    bool at_rest = false;
+    while (run_loop) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        const auto tw = std::chrono::steady_clock::now();
+        const long long c = encoder.get_sync_snapshot().count;
+        if (c != last_count) { last_count = c; still_since = tw; }
+        if (std::chrono::duration<double>(tw - still_since).count() >= 1.0) { at_rest = true; break; }
+        if (std::chrono::duration<double>(tw - t0).count() >= 10.0) break;
+    }
+    if (!at_rest) {
+        std::cout << tag << " WARNING: the shaft is not at rest: torque NOT zeroed (the zero must be taken at no load).\n";
+        return false;
+    }
+    auto mean_read = [&](int n, double& out) -> bool {
+        double sum = 0.0;
+        int got = 0;
+        for (int i = 0; i < n && run_loop; ++i) {
+            double v = 0.0;
+            if (sensor.read(v)) { sum += v; ++got; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        if (got == 0) return false;
+        out = sum / got;
+        return true;
+    };
+    double before = std::nan("");
+    mean_read(3, before);
+    for (int attempt = 1; attempt <= 2 && run_loop; ++attempt) {
+        if (!sensor.tare()) {
+            std::cout << tag << " Torque zero command was not acknowledged (attempt " << attempt << " of 2).\n";
+            continue;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(settle_ms));
+        double after = std::nan("");
+        if (!mean_read(5, after)) {
+            std::cout << tag << " Torque zero sent, but the read-back failed (attempt " << attempt << " of 2).\n";
+            continue;
+        }
+        if (std::fabs(after) <= tol_nm) {
+            std::cout << tag << " Torque zeroed at no load: " << before << " -> " << after << " N.m\n";
+            return true;
+        }
+        std::cout << tag << " Torque after the zero command is " << after << " N.m (more than +-" << tol_nm << "): attempt " << attempt << " of 2.\n";
+    }
+    std::cout << tag << " WARNING: torque was NOT zeroed. The reading keeps its offset (was " << before << " N.m): check the load, wiring and that nothing else uses the RS485 port.\n";
+    return false;
+}
+
 struct TestOptions {
     bool fifo = false;
     bool use_pi = false;
@@ -95,6 +152,8 @@ struct TestOptions {
     double torque_scale = 0.001;
     double torque_offset = 0.0;
     int torque_div = 5;                    // read the sensor every N-th loop (same idea as --power-div)
+    bool tare = true;                      // zero the torque amplifier at no load before the run (--no-tare to skip)
+    int tare_settle_ms = 1500;             // wait after the zero command so the amplifier's digital filter settles (--tare-settle-ms=N)
     int torque_stop_bits = 1;              // ATO-LCTR-OAR/DY610 factory default is N81 = 1 stop bit (set --torque-stopbits=2 if you changed it to N82)
 };
 
@@ -229,6 +288,12 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.torque_div = std::max(1, std::stoi(argument.substr(13)));
         } else if (argument.rfind("--torque-stopbits=", 0) == 0) {
             options.torque_stop_bits = std::stoi(argument.substr(18));
+        } else if (argument == "--no-tare") {
+            options.tare = false;
+        } else if (argument == "--tare") {
+            options.tare = true;
+        } else if (argument.rfind("--tare-settle-ms=", 0) == 0) {
+            options.tare_settle_ms = std::max(200, std::stoi(argument.substr(17)));
         } else {
             return false;
         }
@@ -376,6 +441,9 @@ int run_test(const TestOptions& options) {
         }
         std::cout << "[TEST] " << (at_rest ? "shaft at rest" : "WARNING: shaft still turning after waiting") << " (waited " << waited << " s)\n";
     }
+
+    // Zero the torque amplifier now: the motor is still off here (the shaft is at rest; the helper checks the encoder itself).
+    if (tsensor && options.tare) zero_torque_at_rest(*tsensor, encoder, options.tare_settle_ms, 2.0 * options.torque_scale, "[TEST]");
 
     const int step_from_counts = static_cast<int>(std::lround(options.step_from_pct / 100.0 * 4095.0));
     const int step_to_counts = static_cast<int>(std::lround(options.step_to_pct / 100.0 * 4095.0));
@@ -1036,6 +1104,8 @@ int main(int argc, char** argv) {
     TorqueSensor::Settings torque_cfg;
     torque_cfg.port = "/dev/ttyUSB0"; torque_cfg.baud = 9600; torque_cfg.slave_id = 1; torque_cfg.reg_addr = 0; torque_cfg.reg_count = 2;
     torque_cfg.value_format = "int32"; torque_cfg.word_order = "big"; torque_cfg.scale = 0.001; torque_cfg.offset = 0.0; torque_cfg.stop_bits = 1;
+    bool do_tare = true;                            // --no-tare: do not zero the torque amplifier at start-up
+    int tare_settle_ms = 1500;                      // --tare-settle-ms=N: wait after the zero command (amplifier digital filter)
     int torque_period_ms = 50;                      // --torque-period-ms=N: background poll period (50 -> 20 Hz)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -1052,6 +1122,9 @@ int main(int argc, char** argv) {
         if (a.rfind("--torque-offset=", 0) == 0) torque_cfg.offset = std::stod(a.substr(16));
         if (a.rfind("--torque-stopbits=", 0) == 0) torque_cfg.stop_bits = std::stoi(a.substr(18));
         if (a.rfind("--torque-period-ms=", 0) == 0) torque_period_ms = std::max(10, std::stoi(a.substr(19)));
+        if (a == "--no-tare") do_tare = false;
+        if (a == "--tare") do_tare = true;
+        if (a.rfind("--tare-settle-ms=", 0) == 0) tare_settle_ms = std::max(200, std::stoi(a.substr(17)));
         if (a == "--no-power") use_power = false;
         if (a == "--power") use_power = true;
         if (a.rfind("--power-addr=", 0) == 0) power_addr = std::stoi(a.substr(13), nullptr, 0);
@@ -1194,6 +1267,8 @@ int main(int argc, char** argv) {
         if (tsensor->available()) {
             std::cout << "[MIXR-1] Torque sensor answering on " << torque_cfg.port << " (slave " << torque_cfg.slave_id << ", reg " << torque_cfg.reg_addr
                       << " x" << torque_cfg.reg_count << ", " << torque_cfg.value_format << "): streaming torque to the dashboard.\n";
+            // Zero the amplifier at no load BEFORE the polling thread starts (nothing else may use the port during the zero command).
+            if (do_tare) zero_torque_at_rest(*tsensor, encoder, tare_settle_ms, 2.0 * torque_cfg.scale, "[MIXR-1]");
             torque_thread = std::thread([&]() {
                 cpu_set_t others;
                 CPU_ZERO(&others);

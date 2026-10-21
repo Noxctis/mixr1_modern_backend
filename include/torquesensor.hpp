@@ -9,6 +9,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include "modbus_tare.hpp"
 
 // RS485 Modbus RTU torque sensor (read holding registers, function code 0x03), e.g. a strain-gauge
 // inline torque transducer read through a USB-RS485 adapter. Mirrors the style of PowerMeter (powermeter.hpp):
@@ -67,6 +68,15 @@ public:
         if (!modbus_read_holding(cfg_.reg_addr, cfg_.reg_count, regs)) return false;
         torque_out = decode(regs) * cfg_.scale + cfg_.offset;
         return true;
+    }
+
+    // Zero the amplifier (tare). Only with NO load on the sensor and while nothing else uses this port.
+    // True = the amplifier acknowledged; read the value back after its filter has settled.
+    bool tare(std::string* err = nullptr) const {
+        std::string e;
+        const bool ok = modbus_tare::send_zero(fd_, cfg_.slave_id, std::max(cfg_.timeout_ms, 300), e);
+        if (err) *err = e;
+        return ok;
     }
 
     // Raw register read at any address/count, for --probe and for registers other than the configured one.
