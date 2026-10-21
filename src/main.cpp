@@ -32,6 +32,7 @@
 #include "ec11.hpp"
 #include "powermeter.hpp"
 #include "torquesensor.hpp"
+#include "modbus_torque.hpp"
 #include "i2c_util.hpp"
 
 std::atomic<bool> run_loop{true};
@@ -1030,10 +1031,10 @@ int main(int argc, char** argv) {
     int power_addr = Config::I2C_POWER_ADDR;        // --power-addr=0x45
     int power_bus_forced = -1;                      // --power-bus=N: use /dev/i2c-N for the wattmeter (default: auto-detect)
     double power_shunt_ohm = 0.010, power_i_gain = 1.0, power_i_offset_ma = 0.0, power_v_gain = 1.0;
-    // RS485 torque amplifier in normal mode: OFF unless --torque is passed (same flags as test mode). Default port = the Pi's UART.
+    // RS485 torque amplifier in normal mode: OFF unless --torque is passed (same flags as test mode). Default port = the USB RS485 adapter (/dev/ttyUSB0).
     bool use_torque = false;
     TorqueSensor::Settings torque_cfg;
-    torque_cfg.port = "/dev/serial0"; torque_cfg.baud = 9600; torque_cfg.slave_id = 1; torque_cfg.reg_addr = 0; torque_cfg.reg_count = 2;
+    torque_cfg.port = "/dev/ttyUSB0"; torque_cfg.baud = 9600; torque_cfg.slave_id = 1; torque_cfg.reg_addr = 0; torque_cfg.reg_count = 2;
     torque_cfg.value_format = "int32"; torque_cfg.word_order = "big"; torque_cfg.scale = 0.001; torque_cfg.offset = 0.0; torque_cfg.stop_bits = 1;
     int torque_period_ms = 50;                      // --torque-period-ms=N: background poll period (50 -> 20 Hz)
     for (int i = 1; i < argc; ++i) {
@@ -1180,12 +1181,16 @@ int main(int argc, char** argv) {
     }
     // Torque sensor (RS485 Modbus): a Modbus request + reply at 9600 baud takes ~20 ms, which would stall the 10 ms control loop, so it is polled
     // in a background thread. The thread is moved OFF the control core and back to normal scheduling (std::thread would inherit core 3 + SCHED_FIFO).
-    std::unique_ptr<TorqueSensor> tsensor;
+    std::unique_ptr<ModbusTorque> tsensor;
     std::atomic<double> torque_value{std::numeric_limits<double>::quiet_NaN()};
     std::atomic<bool> torque_stop{false};
     std::thread torque_thread;
     if (use_torque) {
-        tsensor = std::make_unique<TorqueSensor>(torque_cfg);
+        ModbusTorque::Settings mt;
+        mt.port = torque_cfg.port; mt.baud = torque_cfg.baud; mt.slave_id = torque_cfg.slave_id;
+        mt.reg_addr = torque_cfg.reg_addr; mt.reg_count = torque_cfg.reg_count; mt.value_format = torque_cfg.value_format;
+        mt.word_order = torque_cfg.word_order; mt.scale = torque_cfg.scale; mt.offset = torque_cfg.offset; mt.stop_bits = torque_cfg.stop_bits;
+        tsensor = std::make_unique<ModbusTorque>(mt);
         if (tsensor->available()) {
             std::cout << "[MIXR-1] Torque sensor answering on " << torque_cfg.port << " (slave " << torque_cfg.slave_id << ", reg " << torque_cfg.reg_addr
                       << " x" << torque_cfg.reg_count << ", " << torque_cfg.value_format << "): streaming torque to the dashboard.\n";
@@ -1209,7 +1214,7 @@ int main(int argc, char** argv) {
             });
         } else {
             std::cout << "[MIXR-1] No torque sensor answered on " << torque_cfg.port << " (slave " << torque_cfg.slave_id
-                      << "): check port, baud, slave ID, register and wiring (try ./mixr1_daemon --test-torque). Running without torque.\n";
+                      << "): " << tsensor->last_error() << "\n    check port, baud, slave ID, register and wiring (python3 tools/rs485_probe.py finds them). Running without torque.\n";
             tsensor.reset();
         }
     }

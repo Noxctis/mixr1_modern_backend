@@ -1,0 +1,3 @@
+timestamp,weight_g,lever_arm_mm,trial,baseline_torque_Nm,expected_torque_Nm,reading,reading_std,n_samples,raw_registers,source,unit
+2026-10-21T15:03:36,5.0,150.0,1,0.006280464033514999,0.013635451533515,0.001,0.0,1,,typed,Nm
+2026-10-21T15:03:43,5.0,150.0,2,0.006280464033514999,0.013635451533515,0.001,0.0,10,0|1,modbus,Nm

@@ -3,9 +3,9 @@
 Find out how the DY610 load cell amplifier is really configured, independent of the C++ daemon.
 
   sudo apt install python3-serial
-  python3 rs485_probe.py --loopback            # 1) short the Pi TX and RX pins together: proves the Pi UART itself works
+  python3 rs485_probe.py --loopback            # 1) short the TX and RX pins of the USB adapter together (TTL type): proves the port works
   python3 rs485_probe.py                       # 2) scan baud rates x slave IDs x 1/2 registers, and listen for 'active upload' text
-  python3 rs485_probe.py --port /dev/ttyAMA3 --ids 1-128
+  python3 rs485_probe.py --port /dev/ttyUSB1 --ids 1-128
 
 Make sure the motor daemon is NOT running (nothing else may have the port open).
 """
@@ -65,7 +65,7 @@ def loopback(port):
     print(f"FAIL: sent {len(msg)} bytes, got back {len(back)}.")
     print("  * is the wire really between the TX and RX pins of the SAME UART?")
     print("  * serial login console still on?  sudo raspi-config -> Interface -> Serial: login shell NO, hardware YES, then reboot")
-    print("  * wrong port name?  ls -l /dev/serial0 /dev/ttyAMA* /dev/ttyS0")
+    print("  * wrong port name?  ls -l /dev/ttyUSB* /dev/ttyACM*   (and: dmesg | tail, to see which name the adapter got)")
     return 1
 
 
@@ -87,7 +87,7 @@ def query(ser, sid, count):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", default="/dev/serial0")
+    ap.add_argument("--port", default="/dev/ttyUSB0")
     ap.add_argument("--ids", default="1-8", help="slave IDs to try, e.g. 1-8 or 1-128 or 1,5")
     ap.add_argument("--baud", type=int, help="only try this baud rate")
     ap.add_argument("--loopback", action="store_true")
