@@ -103,7 +103,7 @@ bool LCD1602::tft_init() {
     set_mode(pi_handle, PIN_TFT_DC,  PI_OUTPUT);
     set_mode(pi_handle, PIN_TFT_RES, PI_OUTPUT);
     set_mode(pi_handle, PIN_TFT_CS,  PI_OUTPUT);
-    gpio_write(pi_handle, PIN_TFT_CS, 0);                  // selected for good: the ST7789 is the only device on this SPI bus
+    gpio_write(pi_handle, PIN_TFT_CS, 1);                  // idle high; pulled low only while a transfer is in progress
     gpio_write(pi_handle, PIN_TFT_DC, 0);
 
     // hardware reset
@@ -111,10 +111,11 @@ bool LCD1602::tft_init() {
     gpio_write(pi_handle, PIN_TFT_RES, 0); usleep(20000);
     gpio_write(pi_handle, PIN_TFT_RES, 1); usleep(150000);
 
+    gpio_write(pi_handle, PIN_TFT_CS, 0);                  // selected for the whole init sequence
     // bits 5 and 6 = 1: CE0 / CE1 (GPIO 8 / 7) are NOT taken over by the SPI peripheral. They belong to the extra I2C bus (bus 3).
     const unsigned flags = static_cast<unsigned>(TFT_SPI_MODE & 3) | (1u << 5) | (1u << 6);
     spi_handle = spi_open(pi_handle, static_cast<unsigned>(TFT_SPI_CHANNEL), TFT_SPI_BAUD, flags);
-    if (spi_handle < 0) return false;
+    if (spi_handle < 0) { gpio_write(pi_handle, PIN_TFT_CS, 1); return false; }
 
     tft_command(0x01); usleep(150000);                     // SWRESET
     tft_command(0x11); usleep(120000);                     // SLPOUT
@@ -134,6 +135,7 @@ bool LCD1602::tft_init() {
     tft_command(TFT_INVERT ? 0x21 : 0x20);                 // INVON / INVOFF
     tft_command(0x13);                                     // NORON
     tft_command(0x29); usleep(20000);                      // DISPON
+    gpio_write(pi_handle, PIN_TFT_CS, 1);                  // deselect: the ST7789 re-syncs its byte alignment on every CS rising edge
 
     initialized = true;
     tft_clear();
@@ -143,6 +145,7 @@ bool LCD1602::tft_init() {
 void LCD1602::tft_clear() {
     if (spi_handle < 0) return;
     const int w = TFT_WIDTH, h = TFT_HEIGHT;
+    gpio_write(pi_handle, Config::PIN_TFT_CS, 0);
     tft_window(0, 0, w - 1, h - 1);
     std::vector<unsigned char> chunk(4096);
     for (size_t i = 0; i + 1 < chunk.size(); i += 2) {
@@ -155,6 +158,7 @@ void LCD1602::tft_clear() {
         tft_data(chunk.data(), n);
         remaining -= n;
     }
+    gpio_write(pi_handle, Config::PIN_TFT_CS, 1);
     shadow.assign(static_cast<size_t>(rows), std::string(static_cast<size_t>(cols), ' '));
 }
 
@@ -191,8 +195,10 @@ void LCD1602::tft_draw_run(int row, int col, const std::string& run) {
     }
     const int x0 = TFT_X_MARGIN + col * cw;
     const int y0 = row * ch;
+    gpio_write(pi_handle, Config::PIN_TFT_CS, 0);          // one CS frame per draw
     tft_window(x0, y0, x0 + w - 1, y0 + ch - 1);
     tft_data(buf.data(), buf.size());
+    gpio_write(pi_handle, Config::PIN_TFT_CS, 1);
     for (int k = 0; k < n; ++k) shadow[static_cast<size_t>(row)][static_cast<size_t>(col + k)] = text[static_cast<size_t>(k)];
 }
 

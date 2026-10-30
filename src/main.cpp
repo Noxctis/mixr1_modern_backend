@@ -1320,7 +1320,7 @@ int main(int argc, char** argv) {
     double ec11_rate_cps = 0.0;
     auto ec11_last_click = std::chrono::steady_clock::now() - std::chrono::seconds(10);
     double last_rpm = 0.0;
-    std::string last_lines[4];
+    std::string last_lines[5];
 
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
     kinematics.reset(encoder.get_sync_snapshot());
@@ -1388,7 +1388,7 @@ int main(int argc, char** argv) {
         // ---- EC11: drives the motor only in standalone mode. When the dashboard is
         //      connected the knob is locked, but every event is still printed to the terminal. ----
         auto log_states = [&](const char* event) {
-            const double est_torque_nm = (static_cast<double>(current_pwm) / 4095.0) * Config::TORQUE_ESTIMATE_MAX_NM;
+            const double torque_now = torque_value.load();      // real reading from the RS485 sensor (NaN = no sensor / dropout)
             std::cout << std::fixed << std::setprecision(0)
                       << "[EC11] " << event
                       << " | " << (dashboard_active ? "MODE2 DASHBOARD (knob locked)" : "MODE1 STANDALONE")
@@ -1399,8 +1399,11 @@ int main(int argc, char** argv) {
                 else                   std::cout << " | dash_target=" << dashboard_target_pwm_pct << " %PWM";
             }
             std::cout << " | measured=" << last_rpm << " RPM"
-                      << " | pwm=" << (current_pwm * 100 / 4095) << "%"
-                      << " | torque~" << std::setprecision(2) << est_torque_nm << " Nm\n";
+                      << " | pwm=" << std::lround(current_pwm * 100.0 / 4095.0) << "%";
+            if (std::isfinite(torque_now)) std::cout << " | torque=" << std::setprecision(2) << torque_now << " Nm";
+            else                           std::cout << " | torque=n/a (start the daemon with --torque)";
+            if (std::isfinite(power_sample.power_w)) std::cout << " | power=" << std::setprecision(2) << power_sample.power_w << " W\n";
+            else                                     std::cout << " | power=n/a\n";
         };
 
         if (start_key.pressed() && !dashboard_active) {    // KO key = start / stop the motor (standalone mode only)
@@ -1500,7 +1503,7 @@ int main(int argc, char** argv) {
                 dbg_last_pwm = current_pwm;
                 std::cout << "[DEBUG] " << (dashboard_active ? "DASHBOARD" : "STANDALONE") << " | knob_target=" << standalone_target_rpm
                           << " RPM, dashboard_target=" << (dashboard_pi_mode ? dashboard_target_rpm : static_cast<double>(dashboard_target_pwm_pct))
-                          << (dashboard_pi_mode ? " RPM" : " %PWM") << " | COMMANDED PWM = " << (current_pwm * 100 / 4095) << " % (" << current_pwm
+                          << (dashboard_pi_mode ? " RPM" : " %PWM") << " | COMMANDED PWM = " << std::lround(current_pwm * 100.0 / 4095.0) << " % (" << current_pwm
                           << " counts) | measured = " << state.exact_rpm << " RPM\n";
             }
         }
@@ -1532,9 +1535,9 @@ int main(int argc, char** argv) {
 
         if (update_lcd) {
             const auto lcd_t0 = std::chrono::steady_clock::now();
-            const double est_torque_nm = (static_cast<double>(current_pwm) / 4095.0) * Config::TORQUE_ESTIMATE_MAX_NM;
-            std::ostringstream l1, l2, l3, l4;
-            l1 << (dashboard_active ? "MODE2 DASHBOARD" : (standalone_running ? "MODE1 RUN" : "MODE1 STOPPED"));
+            const double torque_now = torque_value.load();      // real reading from the RS485 sensor (NaN = no sensor / dropout)
+            std::ostringstream l1, l2, l3, l4, l5;
+            l1 << (dashboard_active ? "MODE2 DASHBOARD" : "MODE1 STANDALONE");
             if (open_loop) {
                 l2 << "SET: " << dashboard_target_pwm_pct << " %";
             } else {
@@ -1542,12 +1545,20 @@ int main(int argc, char** argv) {
                    << (dashboard_active ? dashboard_target_rpm : standalone_target_rpm) << " RPM";
             }
             l3 << std::fixed << std::setprecision(0) << "READ: " << state.exact_rpm << " RPM";
-            l4 << std::fixed << std::setprecision(2) << "T:" << est_torque_nm
-               << "NM PWM:" << (current_pwm * 100 / 4095) << "%";
+            if (std::isfinite(torque_now)) {
+                l4 << std::fixed << std::setprecision(2) << "T:" << torque_now
+                   << "NM PWM:" << std::lround(current_pwm * 100.0 / 4095.0) << "%";
+            } else {
+                l4 << "T:-- PWM:" << std::lround(current_pwm * 100.0 / 4095.0) << "%";      // no torque sensor running: show dashes, never a made-up number
+            }
 
-            const std::string lines[4] = {l1.str(), l2.str(), l3.str(), l4.str()};
+            // line 5: electrical power from the wattmeter (INA219). Only shown where there is room (the 10-row TFT); "--" if no meter / dropout
+            if (std::isfinite(power_sample.power_w)) l5 << "POWER: " << std::fixed << std::setprecision(2) << power_sample.power_w << " W";
+            else                                     l5 << "POWER: -- W";
+
+            const std::string lines[5] = {l1.str(), l2.str(), l3.str(), l4.str(), l5.str()};
             const int step = (lcd.row_count() >= 8) ? 2 : 1;   // OLED: rows 0,2,4,6
-            const int n = (lcd.row_count() >= 4) ? 4 : 2;
+            const int n = (lcd.row_count() >= 10) ? 5 : ((lcd.row_count() >= 4) ? 4 : 2);
             for (int i = 0; i < n; ++i) {
                 if (lines[i] != last_lines[i]) {               // only redraw changed lines
                     lcd.print_line(i * step, lines[i]);
