@@ -75,3 +75,29 @@ int EC11Input::read_delta() {
 bool EC11Input::button_pressed() {
     return press_flag.exchange(false, std::memory_order_relaxed);
 }
+
+void PushButton::isr(int, unsigned, unsigned level, uint32_t tick, void* user) {
+    if (level > 1) return;
+    static_cast<PushButton*>(user)->on_edge(level, tick);
+}
+
+void PushButton::on_edge(unsigned level, uint32_t tick) {
+    if (level != 0) return;                                        // act on press (active low)
+    if (last_tick != 0 && (tick - last_tick) < Config::EC11_BUTTON_DEBOUNCE_US) return;
+    last_tick = tick;
+    press_flag.store(true, std::memory_order_relaxed);
+}
+
+PushButton::PushButton(int pi, int gpio) : pi_handle(pi), pin(gpio) {
+    set_mode(pi_handle, pin, PI_INPUT);
+    set_pull_up_down(pi_handle, pin, PI_PUD_UP);
+    cb = callback_ex(pi_handle, pin, EITHER_EDGE, isr, this);
+}
+
+PushButton::~PushButton() {
+    if (cb >= 0) callback_cancel(cb);
+}
+
+bool PushButton::pressed() {
+    return press_flag.exchange(false, std::memory_order_relaxed);
+}

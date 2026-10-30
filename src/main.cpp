@@ -1220,8 +1220,11 @@ int main(int argc, char** argv) {
     std::cout << "[MIXR-1] Motor driver initialised: commanded PWM = 0 %.  (start with --debug-motor to print every PWM the daemon commands)\n";
     const int display_addr = (Config::DISPLAY_TYPE == Config::DisplayType::SSD1306_128x64) ? Config::I2C_OLED_ADDR : Config::I2C_LCD_ADDR;
     int display_bus = Config::I2C_BUS_DISPLAY;
+    const bool spi_display = (Config::DISPLAY_TYPE == Config::DisplayType::ST7789_320x240);
     if (no_lcd) {
-        std::cout << "[MIXR-1] --no-lcd: the I2C display is NOT used.\n";
+        std::cout << "[MIXR-1] --no-lcd: the display is NOT used.\n";
+    } else if (spi_display) {
+        std::cout << "[MIXR-1] ST7789 SPI display: DC=GPIO " << Config::PIN_TFT_DC << ", RES=GPIO " << Config::PIN_TFT_RES << ", CS=GPIO " << Config::PIN_TFT_CS << " (no I2C probe).\n";
     } else {
         display_bus = (lcd_bus_forced >= 0) ? lcd_bus_forced
                                             : find_i2c_bus(pi, display_addr, Config::I2C_BUS_DISPLAY, {Config::I2C_BUS_HARDWARE, Config::I2C_BUS_EXTRA});
@@ -1236,6 +1239,7 @@ int main(int argc, char** argv) {
     }
     LCD1602 lcd(pi, Config::DISPLAY_TYPE, no_lcd ? 0xFFFF : display_addr, display_bus);       // an invalid address makes i2c_open fail at once: every display call becomes a no-op
     EC11Input ec11(pi, Config::PIN_EC11_A, Config::PIN_EC11_B, Config::PIN_EC11_SW);
+    PushButton start_key(pi, Config::PIN_START_KEY);               // module KO key: toggles RUN / STOP in standalone mode
     PIController pi_control;
 
     // Wattmeter (INA219 on its own I2C bus): read at 20 Hz and forwarded to the dashboard. A missing meter is not an error: the dashboard just gets NaN.
@@ -1302,6 +1306,7 @@ int main(int argc, char** argv) {
     bool mode3_notified = false;
     bool prev_open_loop = false;
     double standalone_target_rpm = 0.0;
+    bool standalone_running = Config::STANDALONE_RUN_AT_BOOT;      // KO key toggles this; the knob target only drives the motor while true
     double dashboard_target_rpm = 0.0;
     int dashboard_target_pwm_pct = 0;
     bool dashboard_pi_mode = false;
@@ -1371,6 +1376,7 @@ int main(int argc, char** argv) {
                 std::cout << "[MIXR-1] MODE2: Dashboard connected (EC11 LOCKED, log only)\n";
             } else {
                 standalone_target_rpm = 0.0;   // do not inherit the dashboard's speed
+                standalone_running = Config::STANDALONE_RUN_AT_BOOT;
                 std::cout << "[MIXR-1] MODE1: Standalone (EC11 active)\n";
             }
         }
@@ -1396,6 +1402,12 @@ int main(int argc, char** argv) {
                       << " | pwm=" << (current_pwm * 100 / 4095) << "%"
                       << " | torque~" << std::setprecision(2) << est_torque_nm << " Nm\n";
         };
+
+        if (start_key.pressed() && !dashboard_active) {    // KO key = start / stop the motor (standalone mode only)
+            standalone_running = !standalone_running;
+            pi_control.reset();
+            log_states(standalone_running ? "START   " : "STOP    ");
+        }
 
         if (ec11.button_pressed()) {                       // button = zero the knob target
             standalone_target_rpm = 0.0;
@@ -1463,7 +1475,7 @@ int main(int argc, char** argv) {
         } else {
             const double target = dashboard_active
                 ? std::clamp(dashboard_target_rpm, Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM)
-                : standalone_target_rpm;
+                : (standalone_running ? standalone_target_rpm : 0.0);
             active_target = target;
             if (target > 0.0) {
                 current_pwm = pi_control.compute(target, state.exact_rpm, dt.count());
@@ -1522,7 +1534,7 @@ int main(int argc, char** argv) {
             const auto lcd_t0 = std::chrono::steady_clock::now();
             const double est_torque_nm = (static_cast<double>(current_pwm) / 4095.0) * Config::TORQUE_ESTIMATE_MAX_NM;
             std::ostringstream l1, l2, l3, l4;
-            l1 << (dashboard_active ? "MODE2 DASHBOARD" : "MODE1 STANDALONE");
+            l1 << (dashboard_active ? "MODE2 DASHBOARD" : (standalone_running ? "MODE1 RUN" : "MODE1 STOPPED"));
             if (open_loop) {
                 l2 << "SET: " << dashboard_target_pwm_pct << " %";
             } else {

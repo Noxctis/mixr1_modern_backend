@@ -34,3 +34,24 @@ public:
     int read_delta();          // quadrature transitions since last call (signed)
     bool button_pressed();     // true once per press
 };
+
+// Plain push button (active low, internal pull-up), interrupt driven, for the module's KO / start key.
+class PushButton {
+private:
+    int pi_handle;
+    int pin;
+    int cb = -1;
+    uint32_t last_tick = 0;                 // touched only from the pigpio callback thread
+    std::atomic<bool> press_flag{false};
+
+    static void isr(int pi, unsigned gpio, unsigned level, uint32_t tick, void* user);
+    void on_edge(unsigned level, uint32_t tick);
+
+public:
+    PushButton(int pi, int gpio);
+    ~PushButton();
+    PushButton(const PushButton&) = delete;
+    PushButton& operator=(const PushButton&) = delete;
+
+    bool pressed();                         // true once per press
+};
