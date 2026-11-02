@@ -34,7 +34,7 @@ namespace Config {
     
     constexpr int LOOP_DELAY_US = 10000; 
     constexpr int NETWORK_PRESCALER = 1;
-    constexpr int LCD_PRESCALER = 25;   // 25 x 10ms = 250ms refresh
+    constexpr int LCD_PRESCALER = 10;   // 25 x 10ms = 250ms refresh
     constexpr int SIMULINK_CHECK_INTERVAL = 100;         
     constexpr int TCP_PORT = 5000;                       
 
@@ -66,15 +66,11 @@ namespace Config {
     constexpr unsigned int PIN_EC11_B = 21;
     constexpr unsigned int PIN_EC11_SW = 26;
     constexpr int EC11_TRANSITIONS_PER_CLICK = 4;   // quadrature transitions per detent (set to 2 if your knob needs it)
-    // Smooth turn-speed response (real-knob feel): the step per click grows continuously with click rate
-    //   step = MIN + (MAX - MIN) * min(1, (rate / RATE_FULL)^GAMMA)
-    constexpr double EC11_STEP_MIN_RPM   = 1.0;     // slowest turning: 1 RPM per click
-    constexpr double EC11_STEP_MAX_RPM   = 25.0;    // fastest spinning: this many RPM per click
-    constexpr double EC11_RATE_FULL_CPS  = 30.0;    // clicks/second at which the max step is reached
-    constexpr double EC11_CURVE_GAMMA    = 1.6;     // >1 = more precision at low speed, ramps harder at high speed
-    constexpr double EC11_RATE_SMOOTH    = 0.5;     // 0..1, higher = reacts faster, lower = smoother
-    constexpr int    EC11_IDLE_RESET_MS  = 400;     // pause longer than this restarts at the fine step
-    constexpr unsigned EC11_GLITCH_US = 300;         // hardware-timed debounce on A/B (raise if it double-counts, lower if fast spins are missed)
+    // Knob step: slow turning = 1 RPM per detent, fast turning = jump to the next multiple of 10.
+    // The gap is the time between detents; hysteresis stops it flickering between modes at borderline speed.
+    constexpr double EC11_FAST_ENTER_MS = 50.0;    // detents closer together than this -> fast mode (about 14 detents/s)
+    constexpr double EC11_FAST_EXIT_MS  = 120.0;   // detents further apart than this -> back to 1 RPM steps (keep > ENTER)
+    constexpr unsigned EC11_GLITCH_US = 150;         // hardware-timed debounce on A/B (raise if it double-counts, lower if fast spins are missed)
     constexpr unsigned EC11_BUTTON_DEBOUNCE_US = 30000; // ignore button edges closer than 30 ms
 
     // --- Start key (module "KO" key) ---
@@ -97,5 +93,13 @@ namespace Config {
     // --- Standalone Control ---
     constexpr double STANDALONE_MIN_RPM = 0.0;
     constexpr double STANDALONE_MAX_RPM = 2500.0;
+
+    // --- Impeller selection (menu at start-up; double-click the knob button to come back to it) ---
+    struct ImpellerOption { const char* label; double max_rpm; };
+    constexpr std::array<ImpellerOption, 2> IMPELLERS = {{
+        {"96 MM",  1400.0},     // knob limit for the 96 mm impeller
+        {"174 MM",  350.0}      // knob limit for the 174 mm impeller
+    }};
+    constexpr int DOUBLE_CLICK_MS = 500;                // two presses of the knob button within this time = back to the impeller menu
     constexpr double TORQUE_ESTIMATE_MAX_NM = 1.0;
 }

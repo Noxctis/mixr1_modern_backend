@@ -1307,6 +1307,11 @@ int main(int argc, char** argv) {
     bool prev_open_loop = false;
     double standalone_target_rpm = 0.0;
     bool standalone_running = Config::STANDALONE_RUN_AT_BOOT;      // KO key toggles this; the knob target only drives the motor while true
+    bool impeller_selected = false;                                // false = the impeller menu is showing and the motor stays off
+    int menu_cursor = 0;                                           // highlighted impeller in the menu
+    int impeller_idx = 0;                                          // impeller chosen in the menu
+    double impeller_max_rpm = Config::STANDALONE_MAX_RPM;          // knob limit of the chosen impeller
+    auto last_button_click = std::chrono::steady_clock::now() - std::chrono::hours(1);
     double dashboard_target_rpm = 0.0;
     int dashboard_target_pwm_pct = 0;
     bool dashboard_pi_mode = false;
@@ -1314,14 +1319,14 @@ int main(int argc, char** argv) {
     int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL;
     int lcd_prescaler = 0;
     int ec11_accum = 0;
-    int ec11_last_dir = 0;
     auto ec11_last_edge = std::chrono::steady_clock::now();
     double ec11_last_step = 0.0;
-    double ec11_rate_cps = 0.0;
+    bool ec11_fast = false;
     auto ec11_last_click = std::chrono::steady_clock::now() - std::chrono::seconds(10);
     double last_rpm = 0.0;
     std::string last_lines[5];
 
+    std::cout << "[MENU] select the impeller: turn the knob, press to confirm (double-click the knob button later to come back here). Motor is off until then.\n";
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
     kinematics.reset(encoder.get_sync_snapshot());
     auto next_wake = std::chrono::steady_clock::now();
@@ -1400,22 +1405,45 @@ int main(int argc, char** argv) {
             }
             std::cout << " | measured=" << last_rpm << " RPM"
                       << " | pwm=" << std::lround(current_pwm * 100.0 / 4095.0) << "%";
-            if (std::isfinite(torque_now)) std::cout << " | torque=" << std::setprecision(2) << torque_now << " Nm";
-            else                           std::cout << " | torque=n/a (start the daemon with --torque)";
+            if (std::isfinite(torque_now)) std::cout << " | tau=" << std::setprecision(3) << torque_now << " Nm";
+            else                           std::cout << " | tau=n/a (start the daemon with --torque)";
             if (std::isfinite(power_sample.power_w)) std::cout << " | power=" << std::setprecision(2) << power_sample.power_w << " W\n";
             else                                     std::cout << " | power=n/a\n";
         };
 
-        if (start_key.pressed() && !dashboard_active) {    // KO key = start / stop the motor (standalone mode only)
+        if (start_key.pressed() && !dashboard_active && impeller_selected) {    // KO key = start / stop the motor (standalone mode only)
             standalone_running = !standalone_running;
             pi_control.reset();
             log_states(standalone_running ? "START   " : "STOP    ");
         }
 
-        if (ec11.button_pressed()) {                       // button = zero the knob target
-            standalone_target_rpm = 0.0;
-            if (!dashboard_active) pi_control.reset();
-            log_states("BUTTON  ");
+        if (ec11.button_pressed()) {
+            const auto click_time = std::chrono::steady_clock::now();
+            const bool double_click = (click_time - last_button_click) <= std::chrono::milliseconds(Config::DOUBLE_CLICK_MS);
+            last_button_click = double_click ? click_time - std::chrono::hours(1) : click_time;   // a third press starts a new pair
+
+            if (!dashboard_active && !impeller_selected) {
+                // impeller menu: a press confirms the highlighted impeller
+                impeller_selected = true;
+                impeller_idx = menu_cursor;
+                impeller_max_rpm = Config::IMPELLERS[static_cast<size_t>(impeller_idx)].max_rpm;
+                standalone_target_rpm = 0.0;
+                standalone_running = Config::STANDALONE_RUN_AT_BOOT;
+                pi_control.reset();
+                last_button_click = click_time - std::chrono::hours(1);   // the confirming press is not the first click of a double click
+                std::cout << "[MENU] impeller " << Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label
+                          << " selected: knob limit " << std::fixed << std::setprecision(0) << impeller_max_rpm << " RPM\n";
+            } else if (double_click && !dashboard_active) {
+                // double click = back to the impeller menu, motor off
+                impeller_selected = false;
+                standalone_target_rpm = 0.0;
+                pi_control.reset();
+                std::cout << "[MENU] double click: back to impeller selection (motor off)\n";
+            } else {
+                standalone_target_rpm = 0.0;               // single click = zero the knob target, as before
+                if (!dashboard_active) pi_control.reset();
+                log_states("BUTTON  ");
+            }
         }
 
         {
@@ -1432,31 +1460,36 @@ int main(int argc, char** argv) {
             const int clicks = ec11_accum / Config::EC11_TRANSITIONS_PER_CLICK;
             ec11_accum -= clicks * Config::EC11_TRANSITIONS_PER_CLICK;
 
-            // Smooth velocity response: measure click rate, map it continuously to a step size.
+            if (!dashboard_active && !impeller_selected) {
+                // impeller menu: one detent moves the cursor one place, no speed ramp
+                menu_cursor = std::clamp(menu_cursor + (clicks > 0 ? 1 : -1), 0, static_cast<int>(Config::IMPELLERS.size()) - 1);
+                std::cout << "[MENU] impeller choice: " << Config::IMPELLERS[static_cast<size_t>(menu_cursor)].label << "\n";
+            } else {
+            // Slow: +/-1 RPM per detent.  Fast: snap to the next multiple of 10 in the turning direction.
             const int dir = (clicks > 0) ? 1 : -1;
+            const int n_clicks = std::abs(clicks);
             const auto now_click = std::chrono::steady_clock::now();
+            // average gap per detent (several detents in one loop pass means they were certainly fast)
             const double gap_ms = std::max(
-                1.0, static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(now_click - ec11_last_click).count()) / 1000.0);
+                1.0, static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(now_click - ec11_last_click).count()) / 1000.0 / n_clicks);
             ec11_last_click = now_click;
 
-            if ((dir != ec11_last_dir && ec11_last_dir != 0) || gap_ms > Config::EC11_IDLE_RESET_MS) {
-                ec11_rate_cps = 0.0;                              // reversal or pause -> start fine again
+            if (ec11_fast) { if (gap_ms > Config::EC11_FAST_EXIT_MS) ec11_fast = false; }
+            else if (gap_ms < Config::EC11_FAST_ENTER_MS) ec11_fast = true;
+
+            const double before = standalone_target_rpm;
+            double v = standalone_target_rpm;
+            for (int k = 0; k < n_clicks; ++k) {
+                if (!ec11_fast) v += dir;
+                else if (dir > 0) v = (std::floor(v / 10.0) + 1.0) * 10.0;     // 3 -> 10, 10 -> 20, 40 -> 50
+                else              v = (std::ceil(v / 10.0) - 1.0) * 10.0;      // 44 -> 40, 40 -> 30
+                v = std::clamp(v, Config::STANDALONE_MIN_RPM, impeller_max_rpm);   // limited to the chosen impeller's maximum
             }
-            const double inst_rate = (std::abs(clicks) * 1000.0) / gap_ms;   // clicks per second
-            const double a = Config::EC11_RATE_SMOOTH;
-            ec11_rate_cps = (ec11_rate_cps == 0.0) ? std::min(inst_rate, 2.0) : (a * inst_rate + (1.0 - a) * ec11_rate_cps);
+            standalone_target_rpm = v;
 
-            const double t = std::min(1.0, std::pow(ec11_rate_cps / Config::EC11_RATE_FULL_CPS, Config::EC11_CURVE_GAMMA));
-            const double step_raw = Config::EC11_STEP_MIN_RPM + (Config::EC11_STEP_MAX_RPM - Config::EC11_STEP_MIN_RPM) * t;
-            const int step_rpm = std::max(1, static_cast<int>(std::lround(step_raw)));   // whole RPM only
-
-            ec11_last_dir = dir;
-            ec11_last_step = step_rpm;
-
-            standalone_target_rpm = std::clamp(
-                standalone_target_rpm + static_cast<double>(clicks * step_rpm),
-                Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM);
+            ec11_last_step = std::abs(v - before);
             log_states(dir > 0 ? "TURN CW " : "TURN CCW");
+            }
         }
 
         const bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
@@ -1478,7 +1511,7 @@ int main(int argc, char** argv) {
         } else {
             const double target = dashboard_active
                 ? std::clamp(dashboard_target_rpm, Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM)
-                : (standalone_running ? standalone_target_rpm : 0.0);
+                : ((standalone_running && impeller_selected) ? standalone_target_rpm : 0.0);
             active_target = target;
             if (target > 0.0) {
                 current_pwm = pi_control.compute(target, state.exact_rpm, dt.count());
@@ -1537,7 +1570,8 @@ int main(int argc, char** argv) {
             const auto lcd_t0 = std::chrono::steady_clock::now();
             const double torque_now = torque_value.load();      // real reading from the RS485 sensor (NaN = no sensor / dropout)
             std::ostringstream l1, l2, l3, l4, l5;
-            l1 << (dashboard_active ? "MODE2 DASHBOARD" : "MODE1 STANDALONE");
+            l1 << (dashboard_active ? std::string("MODE2 DASHBOARD")
+                                    : std::string("MODE1 ") + Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label);
             if (open_loop) {
                 l2 << "SET: " << dashboard_target_pwm_pct << " %";
             } else {
@@ -1546,17 +1580,36 @@ int main(int argc, char** argv) {
             }
             l3 << std::fixed << std::setprecision(0) << "READ: " << state.exact_rpm << " RPM";
             if (std::isfinite(torque_now)) {
-                l4 << std::fixed << std::setprecision(2) << "T:" << torque_now
-                   << "NM PWM:" << std::lround(current_pwm * 100.0 / 4095.0) << "%";
+                std::ostringstream tq;
+                tq << std::fixed << std::setprecision(3) << torque_now;                      // 3 decimal places
+                const std::string pwm_pct = std::to_string(std::lround(current_pwm * 100.0 / 4095.0));
+                std::string s4 = std::string(1, '\x01') + ":" + tq.str() + "NM PWM:" + pwm_pct + "%";
+                if (static_cast<int>(s4.size()) > lcd.col_count())                           // too wide (PWM 100% or negative torque): drop the unit so the % is not cut off
+                    s4 = std::string(1, '\x01') + ":" + tq.str() + " PWM:" + pwm_pct + "%";
+                l4 << s4;
             } else {
-                l4 << "T:-- PWM:" << std::lround(current_pwm * 100.0 / 4095.0) << "%";      // no torque sensor running: show dashes, never a made-up number
+                l4 << '\x01' << ":-- PWM:" << std::lround(current_pwm * 100.0 / 4095.0) << "%";      // no torque sensor running: show dashes, never a made-up number
             }
 
             // line 5: electrical power from the wattmeter (INA219). Only shown where there is room (the 10-row TFT); "--" if no meter / dropout
             if (std::isfinite(power_sample.power_w)) l5 << "POWER: " << std::fixed << std::setprecision(2) << power_sample.power_w << " W";
             else                                     l5 << "POWER: -- W";
 
-            const std::string lines[5] = {l1.str(), l2.str(), l3.str(), l4.str(), l5.str()};
+            std::string lines[5] = {l1.str(), l2.str(), l3.str(), l4.str(), l5.str()};
+            if (!dashboard_active && !impeller_selected) {
+                // impeller menu screen
+                auto menu_entry = [&](int idx) {
+                    std::ostringstream o;
+                    o << (menu_cursor == idx ? "> " : "  ") << Config::IMPELLERS[static_cast<size_t>(idx)].label << ' '
+                      << std::fixed << std::setprecision(0) << Config::IMPELLERS[static_cast<size_t>(idx)].max_rpm << " RPM";
+                    return o.str();
+                };
+                lines[0] = "SELECT IMPELLER";
+                lines[1] = menu_entry(0);
+                lines[2] = menu_entry(1);
+                lines[3] = "TURN KNOB: CHOOSE";
+                lines[4] = "PUSH: CONFIRM";
+            }
             const int step = (lcd.row_count() >= 8) ? 2 : 1;   // OLED: rows 0,2,4,6
             const int n = (lcd.row_count() >= 10) ? 5 : ((lcd.row_count() >= 4) ? 4 : 2);
             for (int i = 0; i < n; ++i) {
