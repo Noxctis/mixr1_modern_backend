@@ -6,7 +6,6 @@
 #include <thread>
 #include <chrono>
 #include <cmath>
-#include <limits>
 #include <fstream>
 #include <algorithm>
 #include <numeric>
@@ -32,70 +31,13 @@
 #include "ec11.hpp"
 #include "powermeter.hpp"
 #include "torquesensor.hpp"
-#include "modbus_torque.hpp"
+#include "torque_autotare.hpp"
 #include "i2c_util.hpp"
 
 std::atomic<bool> run_loop{true};
 
 void signal_handler(int signum) {
     run_loop = false;
-}
-
-// ---- Zero (tare) the torque amplifier before a run -------------------------------------------------------------------------------------
-// Waits until the shaft is at rest (encoder count unchanged for 1 s, at most 10 s), reads the offset, sends the amplifier's zero command,
-// waits for its digital filter and checks that the reading really is ~0. Call it ONLY with no load on the sensor and BEFORE any other
-// thread polls the same port. It never aborts the run: on a failure it prints a loud warning and carries on (the offset stays in the data).
-template <class Sensor>
-static bool zero_torque_at_rest(Sensor& sensor, AMT102Encoder& encoder, int settle_ms, double tol_nm, const char* tag) {
-    const auto t0 = std::chrono::steady_clock::now();
-    long long last_count = encoder.get_sync_snapshot().count;
-    auto still_since = t0;
-    bool at_rest = false;
-    while (run_loop) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        const auto tw = std::chrono::steady_clock::now();
-        const long long c = encoder.get_sync_snapshot().count;
-        if (c != last_count) { last_count = c; still_since = tw; }
-        if (std::chrono::duration<double>(tw - still_since).count() >= 1.0) { at_rest = true; break; }
-        if (std::chrono::duration<double>(tw - t0).count() >= 10.0) break;
-    }
-    if (!at_rest) {
-        std::cout << tag << " WARNING: the shaft is not at rest: torque NOT zeroed (the zero must be taken at no load).\n";
-        return false;
-    }
-    auto mean_read = [&](int n, double& out) -> bool {
-        double sum = 0.0;
-        int got = 0;
-        for (int i = 0; i < n && run_loop; ++i) {
-            double v = 0.0;
-            if (sensor.read(v)) { sum += v; ++got; }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        if (got == 0) return false;
-        out = sum / got;
-        return true;
-    };
-    double before = std::nan("");
-    mean_read(3, before);
-    for (int attempt = 1; attempt <= 2 && run_loop; ++attempt) {
-        if (!sensor.tare()) {
-            std::cout << tag << " Torque zero command was not acknowledged (attempt " << attempt << " of 2).\n";
-            continue;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(settle_ms));
-        double after = std::nan("");
-        if (!mean_read(5, after)) {
-            std::cout << tag << " Torque zero sent, but the read-back failed (attempt " << attempt << " of 2).\n";
-            continue;
-        }
-        if (std::fabs(after) <= tol_nm) {
-            std::cout << tag << " Torque zeroed at no load: " << before << " -> " << after << " N.m\n";
-            return true;
-        }
-        std::cout << tag << " Torque after the zero command is " << after << " N.m (more than +-" << tol_nm << "): attempt " << attempt << " of 2.\n";
-    }
-    std::cout << tag << " WARNING: torque was NOT zeroed. The reading keeps its offset (was " << before << " N.m): check the load, wiring and that nothing else uses the RS485 port.\n";
-    return false;
 }
 
 struct TestOptions {
@@ -152,8 +94,7 @@ struct TestOptions {
     double torque_scale = 0.001;
     double torque_offset = 0.0;
     int torque_div = 5;                    // read the sensor every N-th loop (same idea as --power-div)
-    bool tare = true;                      // zero the torque amplifier at no load before the run (--no-tare to skip)
-    int tare_settle_ms = 1500;             // wait after the zero command so the amplifier's digital filter settles (--tare-settle-ms=N)
+    TorqueAutoTare::Settings autotare;    // zero the torque sensor while the shaft is at rest before the run (--no-autotare to disable)
     int torque_stop_bits = 1;              // ATO-LCTR-OAR/DY610 factory default is N81 = 1 stop bit (set --torque-stopbits=2 if you changed it to N82)
 };
 
@@ -288,12 +229,8 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.torque_div = std::max(1, std::stoi(argument.substr(13)));
         } else if (argument.rfind("--torque-stopbits=", 0) == 0) {
             options.torque_stop_bits = std::stoi(argument.substr(18));
-        } else if (argument == "--no-tare") {
-            options.tare = false;
-        } else if (argument == "--tare") {
-            options.tare = true;
-        } else if (argument.rfind("--tare-settle-ms=", 0) == 0) {
-            options.tare_settle_ms = std::max(200, std::stoi(argument.substr(17)));
+        } else if (parse_autotare_arg(argument, options.autotare)) {
+            // --no-autotare / --autotare-* handled
         } else {
             return false;
         }
@@ -442,14 +379,32 @@ int run_test(const TestOptions& options) {
         std::cout << "[TEST] " << (at_rest ? "shaft at rest" : "WARNING: shaft still turning after waiting") << " (waited " << waited << " s)\n";
     }
 
-    // Zero the torque amplifier now: the motor is still off here (the shaft is at rest; the helper checks the encoder itself).
-    if (tsensor && options.tare) zero_torque_at_rest(*tsensor, encoder, options.tare_settle_ms, 2.0 * options.torque_scale, "[TEST]");
-
     const int step_from_counts = static_cast<int>(std::lround(options.step_from_pct / 100.0 * 4095.0));
     const int step_to_counts = static_cast<int>(std::lround(options.step_to_pct / 100.0 * 4095.0));
     int current_pwm = options.step_mode ? step_from_counts : (options.use_pi ? 0 : (options.sweep ? 0 : options.fixed_pwm));
     // PI fixed mode = step response from rest to target_rpm (sweep/sine override this per-iteration).
     double current_target = options.target_rpm;
+
+    // Auto-tare: the motor is still off here. Wait until the encoder has been still for settle_s, then take one clean
+    // window of readings as the zero. The tare is then frozen for the whole run (never re-taken with the motor on).
+    TorqueAutoTare autotare(options.autotare);
+    if (tsensor && options.autotare.enabled) {
+        const auto ta0 = std::chrono::steady_clock::now();
+        const double give_up_s = options.autotare.settle_s + 15.0;
+        bool got = false;
+        double ta_s = 0.0;
+        while (run_loop && !got && ta_s < give_up_s) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            ta_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - ta0).count();
+            double raw = 0.0;
+            const bool ok = tsensor->read(raw);
+            got = autotare.update(ta_s, encoder.get_sync_snapshot().count, true, ok, raw);
+        }
+        if (got) std::cout << std::fixed << std::setprecision(5) << "[TARE] torque zero = " << autotare.tare()
+                           << " (std " << autotare.last_std() << "), applied to every reading of this run\n";
+        else     std::cout << "[TARE] WARNING: no tare taken (" << (autotare.last_reject().empty() ? "shaft never still / no readings" : autotare.last_reject())
+                           << "): logging the amplifier's own zero\n";
+    }
     motor.set_pwm(options.start_at_zero ? 0 : current_pwm);
 
     // Idle draw of the driver board with the motor OFF (only when the motor really is off here); also gives the first row a valid reading.
@@ -493,7 +448,7 @@ int run_test(const TestOptions& options) {
     double last_torque = std::nan("");
     if (tsensor) {
         double t0v = 0.0;
-        if (tsensor->read(t0v)) last_torque = t0v;            // first row gets a real value where possible, same idea as the wattmeter's idle read
+        if (tsensor->read(t0v)) last_torque = autotare.apply(t0v);            // first row gets a real value where possible, same idea as the wattmeter's idle read
     }
 
     const double total_duration = options.sweep ? options.duration_sec * 11.0 : options.duration_sec;
@@ -580,10 +535,8 @@ int run_test(const TestOptions& options) {
 
         if (streaming && net.has_client()) {
             if (options.ext_telemetry || net.wants_ext()) {
-                PowerSample ps;
-                if (meter && std::isfinite(last_v) && std::isfinite(last_ma)) { ps.bus_v = last_v; ps.current_ma = last_ma; ps.power_w = last_v * last_ma / 1000.0; }
                 net.send_packet_ext(state.exact_rpm, fb_rpm, encoder.get_revolutions(),
-                                    current_pwm * 100.0 / 4095.0, current_target, elapsed, ps, last_torque);
+                                    current_pwm * 100.0 / 4095.0, current_target, elapsed);
             } else {
                 net.send_packet(state.exact_rpm, fb_rpm, encoder.get_revolutions());
             }
@@ -602,7 +555,7 @@ int run_test(const TestOptions& options) {
         if (tsensor && (time_samples.size() % static_cast<size_t>(options.torque_div)) == 0) {
             double tq = 0.0;
             if (tsensor->read(tq)) {
-                last_torque = tq; ++torque_ok_reads; torque_fail_streak = 0;
+                last_torque = autotare.apply(tq); ++torque_ok_reads; torque_fail_streak = 0;
             } else {
                 ++torque_fail_reads;
                 if (++torque_fail_streak > 10) { last_torque = std::nan(""); torque_dropout = true; }   // RS485 dropout: stop writing a stale value, same rule as the wattmeter
@@ -813,6 +766,8 @@ int run_test(const TestOptions& options) {
                 const char* st = torque_dropout ? "dropout" : torque_status;
                 tq << " torque_status=" << st;
                 if (options.torque) tq << " torque_reads_ok=" << torque_ok_reads << " torque_reads_fail=" << torque_fail_reads;
+                if (tsensor) tq << std::fixed << std::setprecision(5) << " torque_tare_Nm=" << autotare.tare()
+                                << " torque_tare_taken=" << (autotare.accepted() > 0 ? "yes" : "no");
                 if (tsensor && torque_samples.size() == n_all) {
                     double tm = 0.0;
                     size_t k = 0;
@@ -1095,44 +1050,8 @@ int main(int argc, char** argv) {
     double dbg_loop_max_ms = 0.0, dbg_lcd_max_ms = 0.0;   // --debug-motor timing probes (loop period, OLED redraw time)
     bool no_lcd = false;                            // --no-lcd: do not touch the I2C display at all (isolates a hung I2C bus / display)
     int lcd_bus_forced = -1;                        // --lcd-bus=N: use /dev/i2c-N for the display (default: auto-detect)
-    bool use_power = true;                          // --no-power: do not touch the wattmeter in normal mode
-    int power_addr = Config::I2C_POWER_ADDR;        // --power-addr=0x45
-    int power_bus_forced = -1;                      // --power-bus=N: use /dev/i2c-N for the wattmeter (default: auto-detect)
-    double power_shunt_ohm = 0.010, power_i_gain = 1.0, power_i_offset_ma = 0.0, power_v_gain = 1.0;
-    // RS485 torque amplifier in normal mode: OFF unless --torque is passed (same flags as test mode). Default port = the USB RS485 adapter (/dev/ttyUSB0).
-    bool use_torque = false;
-    TorqueSensor::Settings torque_cfg;
-    torque_cfg.port = "/dev/ttyUSB0"; torque_cfg.baud = 9600; torque_cfg.slave_id = 1; torque_cfg.reg_addr = 0; torque_cfg.reg_count = 2;
-    torque_cfg.value_format = "int32"; torque_cfg.word_order = "big"; torque_cfg.scale = 0.001; torque_cfg.offset = 0.0; torque_cfg.stop_bits = 1;
-    bool do_tare = true;                            // --no-tare: do not zero the torque amplifier at start-up
-    int tare_settle_ms = 1500;                      // --tare-settle-ms=N: wait after the zero command (amplifier digital filter)
-    int torque_period_ms = 50;                      // --torque-period-ms=N: background poll period (50 -> 20 Hz)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--torque") use_torque = true;
-        if (a == "--no-torque") use_torque = false;
-        if (a.rfind("--torque-port=", 0) == 0) torque_cfg.port = a.substr(14);
-        if (a.rfind("--torque-baud=", 0) == 0) torque_cfg.baud = std::stoi(a.substr(14));
-        if (a.rfind("--torque-slave=", 0) == 0) torque_cfg.slave_id = std::stoi(a.substr(15));
-        if (a.rfind("--torque-reg=", 0) == 0) torque_cfg.reg_addr = static_cast<unsigned>(std::stoul(a.substr(13)));
-        if (a.rfind("--torque-regcount=", 0) == 0) torque_cfg.reg_count = static_cast<unsigned>(std::stoul(a.substr(18)));
-        if (a.rfind("--torque-format=", 0) == 0) torque_cfg.value_format = a.substr(16);
-        if (a.rfind("--torque-word-order=", 0) == 0) torque_cfg.word_order = a.substr(20);
-        if (a.rfind("--torque-scale=", 0) == 0) torque_cfg.scale = std::stod(a.substr(15));
-        if (a.rfind("--torque-offset=", 0) == 0) torque_cfg.offset = std::stod(a.substr(16));
-        if (a.rfind("--torque-stopbits=", 0) == 0) torque_cfg.stop_bits = std::stoi(a.substr(18));
-        if (a.rfind("--torque-period-ms=", 0) == 0) torque_period_ms = std::max(10, std::stoi(a.substr(19)));
-        if (a == "--no-tare") do_tare = false;
-        if (a == "--tare") do_tare = true;
-        if (a.rfind("--tare-settle-ms=", 0) == 0) tare_settle_ms = std::max(200, std::stoi(a.substr(17)));
-        if (a == "--no-power") use_power = false;
-        if (a == "--power") use_power = true;
-        if (a.rfind("--power-addr=", 0) == 0) power_addr = std::stoi(a.substr(13), nullptr, 0);
-        if (a.rfind("--power-bus=", 0) == 0) power_bus_forced = std::stoi(a.substr(12));
-        if (a.rfind("--power-shunt-ohm=", 0) == 0) power_shunt_ohm = std::stod(a.substr(18));
-        if (a.rfind("--power-i-gain=", 0) == 0) power_i_gain = std::stod(a.substr(15));
-        if (a.rfind("--power-i-offset-ma=", 0) == 0) power_i_offset_ma = std::stod(a.substr(20));
-        if (a.rfind("--power-v-gain=", 0) == 0) power_v_gain = std::stod(a.substr(15));
         if (a == "--debug-motor") debug_motor = true;
         if (a == "--no-lcd") no_lcd = true;
         if (a.rfind("--lcd-bus=", 0) == 0) lcd_bus_forced = std::stoi(a.substr(10));
@@ -1220,11 +1139,8 @@ int main(int argc, char** argv) {
     std::cout << "[MIXR-1] Motor driver initialised: commanded PWM = 0 %.  (start with --debug-motor to print every PWM the daemon commands)\n";
     const int display_addr = (Config::DISPLAY_TYPE == Config::DisplayType::SSD1306_128x64) ? Config::I2C_OLED_ADDR : Config::I2C_LCD_ADDR;
     int display_bus = Config::I2C_BUS_DISPLAY;
-    const bool spi_display = (Config::DISPLAY_TYPE == Config::DisplayType::ST7789_320x240);
     if (no_lcd) {
-        std::cout << "[MIXR-1] --no-lcd: the display is NOT used.\n";
-    } else if (spi_display) {
-        std::cout << "[MIXR-1] ST7789 SPI display: DC=GPIO " << Config::PIN_TFT_DC << ", RES=GPIO " << Config::PIN_TFT_RES << ", CS=GPIO " << Config::PIN_TFT_CS << " (no I2C probe).\n";
+        std::cout << "[MIXR-1] --no-lcd: the I2C display is NOT used.\n";
     } else {
         display_bus = (lcd_bus_forced >= 0) ? lcd_bus_forced
                                             : find_i2c_bus(pi, display_addr, Config::I2C_BUS_DISPLAY, {Config::I2C_BUS_HARDWARE, Config::I2C_BUS_EXTRA});
@@ -1239,79 +1155,13 @@ int main(int argc, char** argv) {
     }
     LCD1602 lcd(pi, Config::DISPLAY_TYPE, no_lcd ? 0xFFFF : display_addr, display_bus);       // an invalid address makes i2c_open fail at once: every display call becomes a no-op
     EC11Input ec11(pi, Config::PIN_EC11_A, Config::PIN_EC11_B, Config::PIN_EC11_SW);
-    PushButton start_key(pi, Config::PIN_START_KEY);               // module KO key: toggles RUN / STOP in standalone mode
     PIController pi_control;
-
-    // Wattmeter (INA219 on its own I2C bus): read at 20 Hz and forwarded to the dashboard. A missing meter is not an error: the dashboard just gets NaN.
-    std::unique_ptr<PowerMeter> meter;
-    if (use_power) {
-        const int power_bus = (power_bus_forced >= 0)
-            ? power_bus_forced
-            : find_i2c_bus(pi, power_addr, Config::I2C_BUS_POWER, {Config::I2C_BUS_HARDWARE, Config::I2C_BUS_EXTRA});
-        if (power_bus >= 0) meter = std::make_unique<PowerMeter>(pi, power_bus, power_addr, power_shunt_ohm, power_i_gain, power_i_offset_ma, power_v_gain);
-        if (meter && meter->available()) {
-            std::cout << "[MIXR-1] Wattmeter found at 0x" << std::hex << power_addr << std::dec << " on /dev/i2c-" << power_bus << ": streaming V / mA / W to the dashboard.\n";
-        } else {
-            std::cout << "[MIXR-1] No wattmeter answered at 0x" << std::hex << power_addr << std::dec << ": the dashboard will show no electrical power.\n";
-            meter.reset();
-        }
-    }
-    // Torque sensor (RS485 Modbus): a Modbus request + reply at 9600 baud takes ~20 ms, which would stall the 10 ms control loop, so it is polled
-    // in a background thread. The thread is moved OFF the control core and back to normal scheduling (std::thread would inherit core 3 + SCHED_FIFO).
-    std::unique_ptr<ModbusTorque> tsensor;
-    std::atomic<double> torque_value{std::numeric_limits<double>::quiet_NaN()};
-    std::atomic<bool> torque_stop{false};
-    std::thread torque_thread;
-    if (use_torque) {
-        ModbusTorque::Settings mt;
-        mt.port = torque_cfg.port; mt.baud = torque_cfg.baud; mt.slave_id = torque_cfg.slave_id;
-        mt.reg_addr = torque_cfg.reg_addr; mt.reg_count = torque_cfg.reg_count; mt.value_format = torque_cfg.value_format;
-        mt.word_order = torque_cfg.word_order; mt.scale = torque_cfg.scale; mt.offset = torque_cfg.offset; mt.stop_bits = torque_cfg.stop_bits;
-        tsensor = std::make_unique<ModbusTorque>(mt);
-        if (tsensor->available()) {
-            std::cout << "[MIXR-1] Torque sensor answering on " << torque_cfg.port << " (slave " << torque_cfg.slave_id << ", reg " << torque_cfg.reg_addr
-                      << " x" << torque_cfg.reg_count << ", " << torque_cfg.value_format << "): streaming torque to the dashboard.\n";
-            // Zero the amplifier at no load BEFORE the polling thread starts (nothing else may use the port during the zero command).
-            if (do_tare) zero_torque_at_rest(*tsensor, encoder, tare_settle_ms, 2.0 * torque_cfg.scale, "[MIXR-1]");
-            torque_thread = std::thread([&]() {
-                cpu_set_t others;
-                CPU_ZERO(&others);
-                for (int c = 0; c < 3; ++c) CPU_SET(c, &others);
-                pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &others);
-                sched_param normal{};
-                normal.sched_priority = 0;
-                pthread_setschedparam(pthread_self(), SCHED_OTHER, &normal);
-                int fails = 0;
-                auto next = std::chrono::steady_clock::now();
-                while (!torque_stop.load()) {
-                    next += std::chrono::milliseconds(torque_period_ms);
-                    std::this_thread::sleep_until(next);
-                    double tq = 0.0;
-                    if (tsensor->read(tq)) { torque_value.store(tq); fails = 0; }
-                    else if (++fails > 10) torque_value.store(std::numeric_limits<double>::quiet_NaN());   // no stale value after an RS485 dropout
-                }
-            });
-        } else {
-            std::cout << "[MIXR-1] No torque sensor answered on " << torque_cfg.port << " (slave " << torque_cfg.slave_id
-                      << "): " << tsensor->last_error() << "\n    check port, baud, slave ID, register and wiring (python3 tools/rs485_probe.py finds them). Running without torque.\n";
-            tsensor.reset();
-        }
-    }
-    PowerSample power_sample;                       // NaN until the first good reading
-    int power_loop_counter = 0;
-    int power_fail_streak = 0;
 
     bool dashboard_connected = false;
     bool simulink_is_active = false;
     bool mode3_notified = false;
     bool prev_open_loop = false;
     double standalone_target_rpm = 0.0;
-    bool standalone_running = Config::STANDALONE_RUN_AT_BOOT;      // KO key toggles this; the knob target only drives the motor while true
-    bool impeller_selected = false;                                // false = the impeller menu is showing and the motor stays off
-    int menu_cursor = 0;                                           // highlighted impeller in the menu
-    int impeller_idx = 0;                                          // impeller chosen in the menu
-    double impeller_max_rpm = Config::STANDALONE_MAX_RPM;          // knob limit of the chosen impeller
-    auto last_button_click = std::chrono::steady_clock::now() - std::chrono::hours(1);
     double dashboard_target_rpm = 0.0;
     int dashboard_target_pwm_pct = 0;
     bool dashboard_pi_mode = false;
@@ -1319,14 +1169,14 @@ int main(int argc, char** argv) {
     int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL;
     int lcd_prescaler = 0;
     int ec11_accum = 0;
+    int ec11_last_dir = 0;
     auto ec11_last_edge = std::chrono::steady_clock::now();
     double ec11_last_step = 0.0;
-    bool ec11_fast = false;
+    double ec11_rate_cps = 0.0;
     auto ec11_last_click = std::chrono::steady_clock::now() - std::chrono::seconds(10);
     double last_rpm = 0.0;
-    std::string last_lines[5];
+    std::string last_lines[4];
 
-    std::cout << "[MENU] select the impeller: turn the knob, press to confirm (double-click the knob button later to come back here). Motor is off until then.\n";
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
     kinematics.reset(encoder.get_sync_snapshot());
     auto next_wake = std::chrono::steady_clock::now();
@@ -1381,7 +1231,6 @@ int main(int argc, char** argv) {
                 std::cout << "[MIXR-1] MODE2: Dashboard connected (EC11 LOCKED, log only)\n";
             } else {
                 standalone_target_rpm = 0.0;   // do not inherit the dashboard's speed
-                standalone_running = Config::STANDALONE_RUN_AT_BOOT;
                 std::cout << "[MIXR-1] MODE1: Standalone (EC11 active)\n";
             }
         }
@@ -1393,7 +1242,7 @@ int main(int argc, char** argv) {
         // ---- EC11: drives the motor only in standalone mode. When the dashboard is
         //      connected the knob is locked, but every event is still printed to the terminal. ----
         auto log_states = [&](const char* event) {
-            const double torque_now = torque_value.load();      // real reading from the RS485 sensor (NaN = no sensor / dropout)
+            const double est_torque_nm = (static_cast<double>(current_pwm) / 4095.0) * Config::TORQUE_ESTIMATE_MAX_NM;
             std::cout << std::fixed << std::setprecision(0)
                       << "[EC11] " << event
                       << " | " << (dashboard_active ? "MODE2 DASHBOARD (knob locked)" : "MODE1 STANDALONE")
@@ -1404,46 +1253,14 @@ int main(int argc, char** argv) {
                 else                   std::cout << " | dash_target=" << dashboard_target_pwm_pct << " %PWM";
             }
             std::cout << " | measured=" << last_rpm << " RPM"
-                      << " | pwm=" << std::lround(current_pwm * 100.0 / 4095.0) << "%";
-            if (std::isfinite(torque_now)) std::cout << " | tau=" << std::setprecision(3) << torque_now << " Nm";
-            else                           std::cout << " | tau=n/a (start the daemon with --torque)";
-            if (std::isfinite(power_sample.power_w)) std::cout << " | power=" << std::setprecision(2) << power_sample.power_w << " W\n";
-            else                                     std::cout << " | power=n/a\n";
+                      << " | pwm=" << (current_pwm * 100 / 4095) << "%"
+                      << " | torque~" << std::setprecision(2) << est_torque_nm << " Nm\n";
         };
 
-        if (start_key.pressed() && !dashboard_active && impeller_selected) {    // KO key = start / stop the motor (standalone mode only)
-            standalone_running = !standalone_running;
-            pi_control.reset();
-            log_states(standalone_running ? "START   " : "STOP    ");
-        }
-
-        if (ec11.button_pressed()) {
-            const auto click_time = std::chrono::steady_clock::now();
-            const bool double_click = (click_time - last_button_click) <= std::chrono::milliseconds(Config::DOUBLE_CLICK_MS);
-            last_button_click = double_click ? click_time - std::chrono::hours(1) : click_time;   // a third press starts a new pair
-
-            if (!dashboard_active && !impeller_selected) {
-                // impeller menu: a press confirms the highlighted impeller
-                impeller_selected = true;
-                impeller_idx = menu_cursor;
-                impeller_max_rpm = Config::IMPELLERS[static_cast<size_t>(impeller_idx)].max_rpm;
-                standalone_target_rpm = 0.0;
-                standalone_running = Config::STANDALONE_RUN_AT_BOOT;
-                pi_control.reset();
-                last_button_click = click_time - std::chrono::hours(1);   // the confirming press is not the first click of a double click
-                std::cout << "[MENU] impeller " << Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label
-                          << " selected: knob limit " << std::fixed << std::setprecision(0) << impeller_max_rpm << " RPM\n";
-            } else if (double_click && !dashboard_active) {
-                // double click = back to the impeller menu, motor off
-                impeller_selected = false;
-                standalone_target_rpm = 0.0;
-                pi_control.reset();
-                std::cout << "[MENU] double click: back to impeller selection (motor off)\n";
-            } else {
-                standalone_target_rpm = 0.0;               // single click = zero the knob target, as before
-                if (!dashboard_active) pi_control.reset();
-                log_states("BUTTON  ");
-            }
+        if (ec11.button_pressed()) {                       // button = zero the knob target
+            standalone_target_rpm = 0.0;
+            if (!dashboard_active) pi_control.reset();
+            log_states("BUTTON  ");
         }
 
         {
@@ -1460,36 +1277,31 @@ int main(int argc, char** argv) {
             const int clicks = ec11_accum / Config::EC11_TRANSITIONS_PER_CLICK;
             ec11_accum -= clicks * Config::EC11_TRANSITIONS_PER_CLICK;
 
-            if (!dashboard_active && !impeller_selected) {
-                // impeller menu: one detent moves the cursor one place, no speed ramp
-                menu_cursor = std::clamp(menu_cursor + (clicks > 0 ? 1 : -1), 0, static_cast<int>(Config::IMPELLERS.size()) - 1);
-                std::cout << "[MENU] impeller choice: " << Config::IMPELLERS[static_cast<size_t>(menu_cursor)].label << "\n";
-            } else {
-            // Slow: +/-1 RPM per detent.  Fast: snap to the next multiple of 10 in the turning direction.
+            // Smooth velocity response: measure click rate, map it continuously to a step size.
             const int dir = (clicks > 0) ? 1 : -1;
-            const int n_clicks = std::abs(clicks);
             const auto now_click = std::chrono::steady_clock::now();
-            // average gap per detent (several detents in one loop pass means they were certainly fast)
             const double gap_ms = std::max(
-                1.0, static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(now_click - ec11_last_click).count()) / 1000.0 / n_clicks);
+                1.0, static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(now_click - ec11_last_click).count()) / 1000.0);
             ec11_last_click = now_click;
 
-            if (ec11_fast) { if (gap_ms > Config::EC11_FAST_EXIT_MS) ec11_fast = false; }
-            else if (gap_ms < Config::EC11_FAST_ENTER_MS) ec11_fast = true;
-
-            const double before = standalone_target_rpm;
-            double v = standalone_target_rpm;
-            for (int k = 0; k < n_clicks; ++k) {
-                if (!ec11_fast) v += dir;
-                else if (dir > 0) v = (std::floor(v / 10.0) + 1.0) * 10.0;     // 3 -> 10, 10 -> 20, 40 -> 50
-                else              v = (std::ceil(v / 10.0) - 1.0) * 10.0;      // 44 -> 40, 40 -> 30
-                v = std::clamp(v, Config::STANDALONE_MIN_RPM, impeller_max_rpm);   // limited to the chosen impeller's maximum
+            if ((dir != ec11_last_dir && ec11_last_dir != 0) || gap_ms > Config::EC11_IDLE_RESET_MS) {
+                ec11_rate_cps = 0.0;                              // reversal or pause -> start fine again
             }
-            standalone_target_rpm = v;
+            const double inst_rate = (std::abs(clicks) * 1000.0) / gap_ms;   // clicks per second
+            const double a = Config::EC11_RATE_SMOOTH;
+            ec11_rate_cps = (ec11_rate_cps == 0.0) ? std::min(inst_rate, 2.0) : (a * inst_rate + (1.0 - a) * ec11_rate_cps);
 
-            ec11_last_step = std::abs(v - before);
+            const double t = std::min(1.0, std::pow(ec11_rate_cps / Config::EC11_RATE_FULL_CPS, Config::EC11_CURVE_GAMMA));
+            const double step_raw = Config::EC11_STEP_MIN_RPM + (Config::EC11_STEP_MAX_RPM - Config::EC11_STEP_MIN_RPM) * t;
+            const int step_rpm = std::max(1, static_cast<int>(std::lround(step_raw)));   // whole RPM only
+
+            ec11_last_dir = dir;
+            ec11_last_step = step_rpm;
+
+            standalone_target_rpm = std::clamp(
+                standalone_target_rpm + static_cast<double>(clicks * step_rpm),
+                Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM);
             log_states(dir > 0 ? "TURN CW " : "TURN CCW");
-            }
         }
 
         const bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
@@ -1511,7 +1323,7 @@ int main(int argc, char** argv) {
         } else {
             const double target = dashboard_active
                 ? std::clamp(dashboard_target_rpm, Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM)
-                : ((standalone_running && impeller_selected) ? standalone_target_rpm : 0.0);
+                : standalone_target_rpm;
             active_target = target;
             if (target > 0.0) {
                 current_pwm = pi_control.compute(target, state.exact_rpm, dt.count());
@@ -1536,19 +1348,8 @@ int main(int argc, char** argv) {
                 dbg_last_pwm = current_pwm;
                 std::cout << "[DEBUG] " << (dashboard_active ? "DASHBOARD" : "STANDALONE") << " | knob_target=" << standalone_target_rpm
                           << " RPM, dashboard_target=" << (dashboard_pi_mode ? dashboard_target_rpm : static_cast<double>(dashboard_target_pwm_pct))
-                          << (dashboard_pi_mode ? " RPM" : " %PWM") << " | COMMANDED PWM = " << std::lround(current_pwm * 100.0 / 4095.0) << " % (" << current_pwm
+                          << (dashboard_pi_mode ? " RPM" : " %PWM") << " | COMMANDED PWM = " << (current_pwm * 100 / 4095) << " % (" << current_pwm
                           << " counts) | measured = " << state.exact_rpm << " RPM\n";
-            }
-        }
-
-        if (meter && ++power_loop_counter >= Config::POWER_READ_DIV) {
-            power_loop_counter = 0;
-            double v = 0.0, ma = 0.0;
-            if (meter->read(v, ma)) {
-                power_sample.bus_v = v; power_sample.current_ma = ma; power_sample.power_w = v * ma / 1000.0;
-                power_fail_streak = 0;
-            } else if (++power_fail_streak > 10) {          // do not keep sending a stale value after an I2C dropout
-                power_sample = PowerSample{};
             }
         }
 
@@ -1559,7 +1360,7 @@ int main(int argc, char** argv) {
                 const double uptime = std::chrono::duration<double>(current_time - loop_start).count();
                 sent = network->send_packet_ext(state.exact_rpm, state.ema_filtered_rpm,
                                                 encoder.get_revolutions(), current_pwm * 100.0 / 4095.0,
-                                                active_target, uptime, power_sample, torque_value.load());
+                                                active_target, uptime);
             } else {
                 sent = network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder.get_revolutions());
             }
@@ -1568,10 +1369,9 @@ int main(int argc, char** argv) {
 
         if (update_lcd) {
             const auto lcd_t0 = std::chrono::steady_clock::now();
-            const double torque_now = torque_value.load();      // real reading from the RS485 sensor (NaN = no sensor / dropout)
-            std::ostringstream l1, l2, l3, l4, l5;
-            l1 << (dashboard_active ? std::string("MODE2 DASHBOARD")
-                                    : std::string("MODE1 ") + Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label);
+            const double est_torque_nm = (static_cast<double>(current_pwm) / 4095.0) * Config::TORQUE_ESTIMATE_MAX_NM;
+            std::ostringstream l1, l2, l3, l4;
+            l1 << (dashboard_active ? "MODE2 DASHBOARD" : "MODE1 STANDALONE");
             if (open_loop) {
                 l2 << "SET: " << dashboard_target_pwm_pct << " %";
             } else {
@@ -1579,39 +1379,12 @@ int main(int argc, char** argv) {
                    << (dashboard_active ? dashboard_target_rpm : standalone_target_rpm) << " RPM";
             }
             l3 << std::fixed << std::setprecision(0) << "READ: " << state.exact_rpm << " RPM";
-            if (std::isfinite(torque_now)) {
-                std::ostringstream tq;
-                tq << std::fixed << std::setprecision(3) << torque_now;                      // 3 decimal places
-                const std::string pwm_pct = std::to_string(std::lround(current_pwm * 100.0 / 4095.0));
-                std::string s4 = std::string(1, '\x01') + ":" + tq.str() + "NM PWM:" + pwm_pct + "%";
-                if (static_cast<int>(s4.size()) > lcd.col_count())                           // too wide (PWM 100% or negative torque): drop the unit so the % is not cut off
-                    s4 = std::string(1, '\x01') + ":" + tq.str() + " PWM:" + pwm_pct + "%";
-                l4 << s4;
-            } else {
-                l4 << '\x01' << ":-- PWM:" << std::lround(current_pwm * 100.0 / 4095.0) << "%";      // no torque sensor running: show dashes, never a made-up number
-            }
+            l4 << std::fixed << std::setprecision(2) << "T:" << est_torque_nm
+               << "NM PWM:" << (current_pwm * 100 / 4095) << "%";
 
-            // line 5: electrical power from the wattmeter (INA219). Only shown where there is room (the 10-row TFT); "--" if no meter / dropout
-            if (std::isfinite(power_sample.power_w)) l5 << "POWER: " << std::fixed << std::setprecision(2) << power_sample.power_w << " W";
-            else                                     l5 << "POWER: -- W";
-
-            std::string lines[5] = {l1.str(), l2.str(), l3.str(), l4.str(), l5.str()};
-            if (!dashboard_active && !impeller_selected) {
-                // impeller menu screen
-                auto menu_entry = [&](int idx) {
-                    std::ostringstream o;
-                    o << (menu_cursor == idx ? "> " : "  ") << Config::IMPELLERS[static_cast<size_t>(idx)].label << ' '
-                      << std::fixed << std::setprecision(0) << Config::IMPELLERS[static_cast<size_t>(idx)].max_rpm << " RPM";
-                    return o.str();
-                };
-                lines[0] = "SELECT IMPELLER";
-                lines[1] = menu_entry(0);
-                lines[2] = menu_entry(1);
-                lines[3] = "TURN KNOB: CHOOSE";
-                lines[4] = "PUSH: CONFIRM";
-            }
+            const std::string lines[4] = {l1.str(), l2.str(), l3.str(), l4.str()};
             const int step = (lcd.row_count() >= 8) ? 2 : 1;   // OLED: rows 0,2,4,6
-            const int n = (lcd.row_count() >= 10) ? 5 : ((lcd.row_count() >= 4) ? 4 : 2);
+            const int n = (lcd.row_count() >= 4) ? 4 : 2;
             for (int i = 0; i < n; ++i) {
                 if (lines[i] != last_lines[i]) {               // only redraw changed lines
                     lcd.print_line(i * step, lines[i]);
@@ -1623,8 +1396,6 @@ int main(int argc, char** argv) {
     }
 
     motor.stop_motor();
-    torque_stop = true;
-    if (torque_thread.joinable()) torque_thread.join();
     network->stop_server();
 
     pigpio_stop(pi);
