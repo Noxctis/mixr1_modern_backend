@@ -21,7 +21,14 @@ private:
     std::atomic<long long> sync_count{0}; 
     std::atomic<uint32_t> sync_tick{0};   
     
-    std::atomic<long long> revolutions{0};
+    std::atomic<long long> revolutions{0};          // index (X) pulses that passed the check below, signed by direction
+    // Index validation: a pulse only counts if the A/B count has moved most of a turn since the last accepted pulse.
+    long long last_index_count = 0;                  // A/B count at the last accepted index pulse (callback thread only)
+    bool index_seen = false;
+    int last_step_dir = 0;                           // direction of the latest A/B step (+1 / -1), callback thread only
+    int last_cross_dir = 0;                          // direction of the last counted index crossing
+    std::atomic<long long> index_rejected{0};        // pulses rejected as noise (no real turn behind them)
+    std::atomic<long long> index_missed{0};          // turns the A/B count saw without an index pulse
     
     uint8_t state = 0;
     uint8_t val_a = 0;
@@ -39,4 +46,6 @@ public:
     
     [[nodiscard]] EncoderSnapshot get_sync_snapshot() const; // NEW: Retrieves the aligned snapshot
     [[nodiscard]] long long get_revolutions() const;
+    [[nodiscard]] long long get_index_rejected() const { return index_rejected.load(std::memory_order_relaxed); }
+    [[nodiscard]] long long get_index_missed() const { return index_missed.load(std::memory_order_relaxed); }
 };

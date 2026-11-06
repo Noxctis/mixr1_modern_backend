@@ -41,6 +41,9 @@ void signal_handler(int signum) {
     run_loop = false;
 }
 
+// Shaft revolutions of the current run, counted by the encoder's index (X) pulse (validated against A/B in encoder.cpp).
+static long long revs_since(const AMT102Encoder& enc, long long origin) { return enc.get_revolutions() - origin; }
+
 // ---- Zero (tare) the torque amplifier before a run -------------------------------------------------------------------------------------
 // Waits until the shaft is at rest (encoder count unchanged for 1 s, at most 10 s), reads the offset, sends the amplifier's zero command,
 // waits for its digital filter and checks that the reading really is ~0. Call it ONLY with no load on the sensor and BEFORE any other
@@ -468,6 +471,7 @@ int run_test(const TestOptions& options) {
     }
 
     kinematics.reset(encoder.get_sync_snapshot());
+    const long long rev_origin = encoder.get_revolutions();             // revolutions column starts at 0 with the run
     controller.reset();
     controller.set_max_pwm(options.max_duty_pct / 100.0 * 4095.0);
     if (options.start_at_zero) motor.set_pwm(current_pwm);          // the motor starts exactly at t = 0 of the log
@@ -582,10 +586,10 @@ int run_test(const TestOptions& options) {
             if (options.ext_telemetry || net.wants_ext()) {
                 PowerSample ps;
                 if (meter && std::isfinite(last_v) && std::isfinite(last_ma)) { ps.bus_v = last_v; ps.current_ma = last_ma; ps.power_w = last_v * last_ma / 1000.0; }
-                net.send_packet_ext(state.exact_rpm, fb_rpm, encoder.get_revolutions(),
+                net.send_packet_ext(state.exact_rpm, fb_rpm, revs_since(encoder, rev_origin),
                                     current_pwm * 100.0 / 4095.0, current_target, elapsed, ps, last_torque);
             } else {
-                net.send_packet(state.exact_rpm, fb_rpm, encoder.get_revolutions());
+                net.send_packet(state.exact_rpm, fb_rpm, revs_since(encoder, rev_origin));
             }
         }
 
@@ -1408,6 +1412,8 @@ int main(int argc, char** argv) {
     long long rest_anchor = encoder.get_sync_snapshot().count;
     auto rest_since = std::chrono::steady_clock::now();
     bool prev_wants_motor = false;
+    long long rev_origin = encoder.get_revolutions();              // revolutions are counted from the start of the current run
+    long long rej_origin = encoder.get_index_rejected(), miss_origin = encoder.get_index_missed();
     int tare_phase = 0;                                            // 0 none | 1 waiting for the shaft to stop | 2 zeroing (motor held only if it was asked to run)
     bool zero_valid = boot_zero_ok;                                // a zero was taken since the motor last turned -> START needs no wait
     bool idle_zero_tried = boot_zero_ok;                           // one automatic idle zero per stop (no endless retries on a broken sensor)
@@ -1464,6 +1470,7 @@ int main(int argc, char** argv) {
                 dashboard_target_pwm_pct = 0;
                 dashboard_pi_mode = false;
                 standalone_target_rpm = 0.0;   // knob preview restarts from 0
+                rev_origin = encoder.get_revolutions();           // the dashboard's revolutions column starts at 0 for its session
                 ec11_accum = 0;
                 std::cout << "[MIXR-1] MODE2: Dashboard connected (EC11 LOCKED, log only)\n";
             } else {
@@ -1623,6 +1630,18 @@ int main(int argc, char** argv) {
             std::cout << "[TORQUE] Shaft at rest: zeroing the torque amplifier now (ready for the next START)...\n";
         }
         // START: if the idle zero is done the motor starts at once; if it is still running, the motor waits for it to finish.
+        if (wants_motor && !prev_wants_motor && current_pwm == 0) {                         // new run: revolutions back to 0
+            rev_origin = encoder.get_revolutions();
+            rej_origin = encoder.get_index_rejected();
+            miss_origin = encoder.get_index_missed();
+        }
+        if (!wants_motor && prev_wants_motor) {                                              // end of run: index check report
+            const long long rej = encoder.get_index_rejected() - rej_origin, miss = encoder.get_index_missed() - miss_origin;
+            std::cout << "[ENCODER] Run ended: " << revs_since(encoder, rev_origin) << " revolutions (index pulse)";
+            if (rej == 0 && miss == 0) std::cout << ", index signal clean.\n";
+            else std::cout << " | WARNING: " << rej << " noise pulses rejected, " << miss
+                           << " index pulses missed: check the X (index) wire, its ground and keep it away from the motor leads.\n";
+        }
         if (wants_motor && !prev_wants_motor && current_pwm == 0 && !zero_valid) request_tare("Start of run");
         prev_wants_motor = wants_motor;
         if (network->take_tare_request()) {
@@ -1716,10 +1735,10 @@ int main(int argc, char** argv) {
                 // Extended packet: raw, display EMA (same smoothed trace as the 3-field packet), revs, PWM %, PI target, uptime
                 const double uptime = std::chrono::duration<double>(current_time - loop_start).count();
                 sent = network->send_packet_ext(state.exact_rpm, state.ema_filtered_rpm,
-                                                encoder.get_revolutions(), current_pwm * 100.0 / 4095.0,
+                                                revs_since(encoder, rev_origin), current_pwm * 100.0 / 4095.0,
                                                 active_target, uptime, power_sample, torque_value.load());
             } else {
-                sent = network->send_packet(state.exact_rpm, state.ema_filtered_rpm, encoder.get_revolutions());
+                sent = network->send_packet(state.exact_rpm, state.ema_filtered_rpm, revs_since(encoder, rev_origin));
             }
             (void)sent;      // a dead / stalled dashboard is dropped (and reported once) inside TelemetryServer; no per-loop message
         }
