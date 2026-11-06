@@ -52,7 +52,7 @@ static long long revs_since(const AMT102Encoder& enc, long long origin) { return
 // waits for its digital filter and checks that the reading really is ~0. Call it ONLY with no load on the sensor and BEFORE any other
 // thread polls the same port. It never aborts the run: on a failure it prints a loud warning and carries on (the offset stays in the data).
 template <class Sensor>
-static bool zero_torque_at_rest(Sensor& sensor, AMT102Encoder& encoder, int settle_ms, double tol_nm, const char* tag) {
+static bool zero_torque_at_rest(Sensor& sensor, AMT102Encoder& encoder, int settle_ms, double scale, const char* tag) {
     const auto t0 = std::chrono::steady_clock::now();
     long long last_count = encoder.get_sync_snapshot().count;
     auto still_since = t0;
@@ -69,38 +69,71 @@ static bool zero_torque_at_rest(Sensor& sensor, AMT102Encoder& encoder, int sett
         std::cout << tag << " WARNING: the shaft is not at rest: torque NOT zeroed (the zero must be taken at no load).\n";
         return false;
     }
-    auto mean_read = [&](int n, double& out) -> bool {
-        double sum = 0.0;
-        int got = 0;
-        for (int i = 0; i < n && run_loop; ++i) {
+    // Same rule as the zero before every run: send the zero command, wait until the reading has STOPPED moving (at least
+    // TORQUE_TARE_MIN_SETTLE_MS, then 1 s of readings within 1 count and no creep), and accept it only if the AMPLIFIER ITSELF
+    // then reads 0.000 (|value| < half a count). Otherwise send the zero command again, up to TORQUE_TARE_ATTEMPTS times.
+    double before = std::nan("");
+    {
+        double v = 0.0;
+        if (sensor.read(v)) before = v;
+    }
+    const double band = Config::TORQUE_TARE_STABLE_COUNTS * scale;
+    const double creep = Config::TORQUE_TARE_CREEP_COUNTS * scale;
+    const double exact = Config::TORQUE_ZERO_EXACT_COUNTS * scale;
+    double after = std::nan("");
+    for (int attempt = 1; attempt <= Config::TORQUE_TARE_ATTEMPTS && run_loop; ++attempt) {
+        if (!sensor.tare()) {
+            std::cout << tag << " Torque zero command was not acknowledged (attempt " << attempt << " of " << Config::TORQUE_TARE_ATTEMPTS << ").\n";
+            continue;
+        }
+        const auto t_cmd = std::chrono::steady_clock::now();
+        const auto t_min = t_cmd + std::chrono::milliseconds(Config::TORQUE_TARE_MIN_SETTLE_MS);
+        const auto t_end = t_cmd + std::chrono::milliseconds(std::max(settle_ms, Config::TORQUE_TARE_MAX_SETTLE_MS));
+        std::deque<double> win;
+        bool settled = false;
+        while (run_loop && std::chrono::steady_clock::now() < t_end) {
             double v = 0.0;
-            if (sensor.read(v)) { sum += v; ++got; }
+            if (sensor.read(v)) {
+                win.push_back(v);
+                if (static_cast<int>(win.size()) > Config::TORQUE_TARE_STABLE_READS) win.pop_front();
+                if (std::chrono::steady_clock::now() >= t_min && static_cast<int>(win.size()) == Config::TORQUE_TARE_STABLE_READS) {
+                    const auto [mn, mx] = std::minmax_element(win.begin(), win.end());
+                    const auto half = win.begin() + static_cast<long>(win.size() / 2);
+                    const double m1 = std::accumulate(win.begin(), half, 0.0) / static_cast<double>(win.size() / 2);
+                    const double m2 = std::accumulate(half, win.end(), 0.0) / static_cast<double>(win.size() - win.size() / 2);
+                    if (*mx - *mn <= band && std::fabs(m2 - m1) < creep) { settled = true; break; }
+                }
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
-        if (got == 0) return false;
-        out = sum / got;
-        return true;
-    };
-    double before = std::nan("");
-    mean_read(3, before);
-    for (int attempt = 1; attempt <= 2 && run_loop; ++attempt) {
-        if (!sensor.tare()) {
-            std::cout << tag << " Torque zero command was not acknowledged (attempt " << attempt << " of 2).\n";
+        if (!win.empty()) after = std::accumulate(win.begin(), win.end(), 0.0) / static_cast<double>(win.size());
+        if (settled && std::fabs(after) < exact) {
+            // Confirm it STAYS at 0.000: a slow amplifier filter can still creep after looking settled. 2 s later, average 0.5 s.
+            std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+            double sum = 0.0;
+            int got = 0;
+            for (int i = 0; i < 10 && run_loop; ++i) {
+                double v = 0.0;
+                if (sensor.read(v)) { sum += v; ++got; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            const double confirm = got ? sum / got : std::nan("");
+            if (got && std::fabs(confirm) < exact) {
+                std::cout << std::fixed << std::setprecision(4) << tag << " Torque zeroed at no load: " << before << " -> " << confirm
+                          << " N.m (settled and confirmed 2 s later; the amplifier reads 0.000).\n";
+                return true;
+            }
+            after = confirm;
+            std::cout << std::fixed << std::setprecision(4) << tag << " Torque crept to " << confirm
+                      << " N.m 2 s after the zero (not 0.000): sending the zero command again (attempt " << attempt << " of "
+                      << Config::TORQUE_TARE_ATTEMPTS << ").\n";
             continue;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(settle_ms));
-        double after = std::nan("");
-        if (!mean_read(5, after)) {
-            std::cout << tag << " Torque zero sent, but the read-back failed (attempt " << attempt << " of 2).\n";
-            continue;
-        }
-        if (std::fabs(after) <= tol_nm) {
-            std::cout << tag << " Torque zeroed at no load: " << before << " -> " << after << " N.m\n";
-            return true;
-        }
-        std::cout << tag << " Torque after the zero command is " << after << " N.m (more than +-" << tol_nm << "): attempt " << attempt << " of 2.\n";
+        std::cout << std::fixed << std::setprecision(4) << tag << " Torque after the zero command " << (settled ? "settled at " : "still moving, at ") << after
+                  << " N.m (not 0.000): sending the zero command again (attempt " << attempt << " of " << Config::TORQUE_TARE_ATTEMPTS << ").\n";
     }
-    std::cout << tag << " WARNING: torque was NOT zeroed. The reading keeps its offset (was " << before << " N.m): check the load, wiring and that nothing else uses the RS485 port.\n";
+    std::cout << tag << " WARNING: torque was NOT zeroed (amplifier reads " << after << " N.m, was " << before
+              << "): check the load, wiring and that nothing else uses the RS485 port.\n";
     return false;
 }
 
@@ -449,7 +482,7 @@ int run_test(const TestOptions& options) {
     }
 
     // Zero the torque amplifier now: the motor is still off here (the shaft is at rest; the helper checks the encoder itself).
-    if (tsensor && options.tare) zero_torque_at_rest(*tsensor, encoder, options.tare_settle_ms, 2.0 * options.torque_scale, "[TEST]");
+    if (tsensor && options.tare) zero_torque_at_rest(*tsensor, encoder, options.tare_settle_ms, options.torque_scale, "[TEST]");
 
     const int step_from_counts = static_cast<int>(std::lround(options.step_from_pct / 100.0 * 4095.0));
     const int step_to_counts = static_cast<int>(std::lround(options.step_to_pct / 100.0 * 4095.0));
@@ -1316,7 +1349,7 @@ int main(int argc, char** argv) {
             std::cout << "[MIXR-1] Torque sensor answering on " << torque_cfg.port << " (slave " << torque_cfg.slave_id << ", reg " << torque_cfg.reg_addr
                       << " x" << torque_cfg.reg_count << ", " << torque_cfg.value_format << "): streaming torque to the dashboard.\n";
             // Zero the amplifier at no load BEFORE the polling thread starts (nothing else may use the port during the zero command).
-            if (do_tare) boot_zero_ok = zero_torque_at_rest(*tsensor, encoder, tare_settle_ms, 2.0 * torque_cfg.scale, "[MIXR-1]");
+            if (do_tare) boot_zero_ok = zero_torque_at_rest(*tsensor, encoder, tare_settle_ms, torque_cfg.scale, "[MIXR-1]");
             torque_thread = std::thread([&]() {
                 cpu_set_t others;
                 CPU_ZERO(&others);
@@ -1757,10 +1790,10 @@ int main(int argc, char** argv) {
                 const double mean = std::accumulate(rest_torque.begin(), rest_torque.end(), 0.0) / static_cast<double>(rest_torque.size());
                 std::cout << std::fixed << std::setprecision(4);
                 if (std::fabs(mean) > tol) {
-                    std::cout << "[TORQUE] Check before start: reads " << mean << " N.m at rest (not 0, limit +-" << tol << "): re-zeroing.\n";
+                    std::cout << "[TORQUE] Check before start: reads " << mean << " N.m at rest, not 0.000: zeroing the amplifier again.\n";
                     zero_valid = false;
                 } else {
-                    std::cout << "[TORQUE] Check before start: " << mean << " N.m at rest: zero OK.\n";
+                    std::cout << "[TORQUE] Check before start: amplifier reads 0.000 at rest: OK.\n";
                 }
             } else if (current_time - last_zero_time < std::chrono::seconds(2)) {
                 std::cout << "[TORQUE] Check before start: zero taken just now: OK.\n";

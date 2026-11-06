@@ -78,17 +78,18 @@ namespace Config {
     constexpr bool STANDALONE_RUN_AT_BOOT = false;        // false = Mode 1 starts STOPPED: turning the knob only sets the target, the KO key starts / stops the motor
 
     // --- Power safety cap (power_limiter.hpp) ---
-    // The motor may never draw more than POWER_LIMIT_W: above it the PWM ceiling is cut back automatically (Mode 1, Mode 2 and --test).
-    // Measured with the wattmeter (electrical input power); without a wattmeter, torque x speed is used instead.
-    constexpr double POWER_LIMIT_W = 80.0;               // hard ceiling: the power must never go above this
-    constexpr double POWER_LIMIT_AIM = 0.90;             // the limiter regulates at 90 % of it (~72 W), leaving room for the one wattmeter
-                                                         // reading it needs to react, so short peaks (start-up, load changes) stay under 72 W
+    // The motor runs at most at POWER_LIMIT_W x POWER_LIMIT_AIM (72 W) and never goes above POWER_LIMIT_W (80 W): above the aim the PWM
+    // ceiling is cut back automatically (Mode 1, Mode 2 and --test). Measured with the wattmeter (electrical input power); without a
+    // wattmeter, torque x speed is used instead.
+    constexpr double POWER_LIMIT_W = 90.0;               // hard ceiling: the power must never go above this
+    constexpr double POWER_LIMIT_AIM = 0.90;             // the limiter regulates at 90 % of it = 80 W. The 10 W gap is room for the ~30 ms
+                                                         // the wattmeter needs per reading, so short peaks (start-up, load changes) stay under 80 W
     constexpr double POWER_LIMIT_RECOVER_PCT_S = 10.0;   // ceiling released again by 10 % of full PWM per second once 5 % below the aim
-    constexpr double POWER_TRIP_FACTOR = 1.25;           // still above 125 % of the limit (90 W) ...
+    constexpr double POWER_TRIP_FACTOR = 1.0;            // above 100 % of the limit (90 W) ...
     constexpr int    POWER_TRIP_READINGS = 3;            // ... for 3 readings in a row (~0.1 s) -> motor OFF until the operator stops it
     constexpr double PWM_SLEW_PCT_S = 200.0;             // Mode 1 / 2: PWM may rise at most 200 % per second (0 -> 100 % in 0.5 s), so the
                                                          // power can never jump faster than the wattmeter (~30 readings/s) can see it
-    // Stall trip: with the power capped, a jammed impeller would sit at 80 W forever. PWM above STALL_PWM_PCT while the shaft
+    // Stall trip: with the power capped, a jammed impeller would sit at the cap (72 W) forever. PWM above STALL_PWM_PCT while the shaft
     // turns slower than STALL_RPM for STALL_TIME_S -> motor OFF until the operator stops it (Mode 1, Mode 2 and --test).
     constexpr double STALL_PWM_PCT = 25.0;
     constexpr double STALL_RPM = 20.0;
@@ -119,12 +120,12 @@ namespace Config {
                                                          // sliding after the command, and can pass through 0 on the way to its final value)
     constexpr int    TORQUE_TARE_STABLE_READS = 20;      // ... then until 20 readings in a row (1 s) ...
     constexpr double TORQUE_TARE_STABLE_COUNTS = 1.0;    // ... agree within 1 count, AND the average of the 2nd half differs from the
-    constexpr double TORQUE_TARE_CREEP_COUNTS = 0.2;     // 1st half by less than 0.2 count (no slow creep). Only that value is checked
-                                                         // against 0 (+-2 counts) and its small residual trimmed.
+    constexpr double TORQUE_TARE_CREEP_COUNTS = 0.2;     // 1st half by less than 0.2 count (no slow creep). Only that settled value is checked:
+                                                         // it must read 0.000 (TORQUE_ZERO_EXACT_COUNTS), else the zero command is sent again.
     constexpr int    TORQUE_TARE_MAX_SETTLE_MS = 4000;   // give up waiting for stability after this (then the next attempt / software zero)
     constexpr double TORQUE_ZERO_EXACT_COUNTS = 0.5;     // the settled amplifier reading must round to 0.000 (|value| < half a count)
-    constexpr double TORQUE_ZERO_CHECK_COUNTS = 1.0;     // before every start AND while idle at rest: the torque (0.5 s average) must be within
-                                                         // 1 count of 0, else the amplifier is zeroed again (idle: at most 3 times per stop)
+    constexpr double TORQUE_ZERO_CHECK_COUNTS = 0.5;     // before every start AND while idle at rest: the torque (0.5 s average) must read
+                                                         // 0.000 (under half a count), else the amplifier is zeroed again (idle: max 3x per stop)
     constexpr int    TORQUE_IDLE_REZERO_MAX = 3;
     constexpr double TORQUE_TARE_REST_WAIT_S = 10.0;     // how long to wait for the shaft (and the fluid) to stop; then start WITHOUT a new zero
 
