@@ -1262,8 +1262,11 @@ int main(int argc, char** argv) {
     std::unique_ptr<ModbusTorque> tsensor;
     std::atomic<double> torque_value{std::numeric_limits<double>::quiet_NaN()};   // already zeroed (software tare subtracted)
     std::atomic<bool> torque_stop{false};
-    std::atomic<int> tare_cmd{0};                   // 0 = idle, 1 = main loop asks for a zero, 2 = torque thread finished it (main loop sets it back to 0)
-    std::atomic<double> tare_offset{0.0};           // software zero currently subtracted from every reading
+    std::atomic<int> tare_cmd{0};                   // 0 idle | 1 main loop asks for a zero | 2 done: amplifier zeroed | 3 done: amplifier refused, software zero used
+                                                    // | 4 failed: no reading at all (main loop sets it back to 0)
+    std::atomic<double> tare_offset{0.0};           // software zero currently subtracted (0 after a good amplifier zero)
+    std::atomic<double> tare_before{std::numeric_limits<double>::quiet_NaN()};   // reading before the zero command
+    std::atomic<double> tare_after{std::numeric_limits<double>::quiet_NaN()};    // read-back after the zero command
     std::thread torque_thread;
     if (use_torque) {
         ModbusTorque::Settings mt;
@@ -1285,30 +1288,66 @@ int main(int argc, char** argv) {
                 normal.sched_priority = 0;
                 pthread_setschedparam(pthread_self(), SCHED_OTHER, &normal);
                 int fails = 0;
-                double offset = 0.0;                        // software zero (this thread owns it; published through tare_offset)
-                double tare_sum = 0.0;
-                int tare_n = 0;
+                double offset = 0.0;                        // software zero (only used if the amplifier refuses its zero command)
+                const double tol = 2.0 * torque_cfg.scale;  // read-back must be within +-2 counts of 0 (same rule as the zero at boot)
+                auto cancelled = [&]() { return torque_stop.load() || tare_cmd.load() != 1; };
+                // average n raw readings (amplifier value, no software offset); false if none came back
+                auto mean_read = [&](int n, double& out) -> bool {
+                    double sum = 0.0;
+                    int got = 0;
+                    for (int i = 0; i < n && !cancelled(); ++i) {
+                        double v = 0.0;
+                        if (tsensor->read(v)) { sum += v; ++got; torque_value.store(v - offset); }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(torque_period_ms));
+                    }
+                    if (got == 0) return false;
+                    out = sum / got;
+                    return true;
+                };
+                // The zero itself: runs here because this thread is the only one that talks to the RS485 port.
+                // The main loop holds the motor off and has already waited until the shaft is at rest.
+                auto do_tare = [&]() {
+                    double before = std::numeric_limits<double>::quiet_NaN(), after = before;
+                    mean_read(3, before);
+                    bool zeroed = false;
+                    for (int attempt = 1; attempt <= Config::TORQUE_TARE_ATTEMPTS && !cancelled(); ++attempt) {
+                        if (!tsensor->tare()) continue;                     // 0x10 write-0, fallback 0x05 clear (modbus_tare.hpp)
+                        for (int w = 0; w < tare_settle_ms / 50 && !cancelled(); ++w)       // amplifier digital filter settles
+                            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        if (!mean_read(Config::TORQUE_TARE_READBACK, after)) continue;
+                        if (std::fabs(after) <= tol) { zeroed = true; break; }
+                    }
+                    if (cancelled()) return;
+                    int result;
+                    double new_offset = offset;
+                    if (zeroed) {
+                        new_offset = 0.0;                                   // the amplifier itself reads 0 now: no software correction
+                        result = 2;
+                    } else {
+                        if (!std::isfinite(after)) mean_read(Config::TORQUE_TARE_READBACK, after);
+                        if (std::isfinite(after)) { new_offset = after; result = 3; }   // amplifier refused: subtract the no-load reading
+                        else result = 4;                                    // no reading at all: keep the previous zero
+                    }
+                    tare_before.store(before);
+                    tare_after.store(after);
+                    int expected = 1;
+                    if (tare_cmd.compare_exchange_strong(expected, result)) {   // not cancelled by the main loop's timeout meanwhile
+                        offset = new_offset;
+                        tare_offset.store(offset);
+                    }
+                };
                 auto next = std::chrono::steady_clock::now();
                 while (!torque_stop.load()) {
+                    if (tare_cmd.load() == 1) {
+                        do_tare();
+                        next = std::chrono::steady_clock::now();            // resume normal polling after the (long) zero procedure
+                        continue;
+                    }
                     next += std::chrono::milliseconds(torque_period_ms);
                     std::this_thread::sleep_until(next);
                     double tq = 0.0;
                     if (tsensor->read(tq)) {
                         fails = 0;
-                        if (tare_cmd.load() == 1) {         // the main loop holds the motor off while we average the no-load reading
-                            tare_sum += tq;
-                            if (++tare_n >= Config::TORQUE_TARE_SAMPLES) {
-                                const double new_offset = tare_sum / tare_n;
-                                int expected = 1;
-                                if (tare_cmd.compare_exchange_strong(expected, 2)) {   // not cancelled by a timeout in the meantime
-                                    offset = new_offset;
-                                    tare_offset.store(offset);
-                                }
-                                tare_sum = 0.0; tare_n = 0;
-                            }
-                        } else {
-                            tare_sum = 0.0; tare_n = 0;
-                        }
                         torque_value.store(tq - offset);
                     } else if (++fails > 10) {
                         torque_value.store(std::numeric_limits<double>::quiet_NaN());   // no stale value after an RS485 dropout
@@ -1353,7 +1392,7 @@ int main(int argc, char** argv) {
     long long rest_anchor = encoder.get_sync_snapshot().count;
     auto rest_since = std::chrono::steady_clock::now();
     bool prev_wants_motor = false;
-    bool tare_hold = false;                                        // true = motor held off while the torque thread takes the zero
+    int tare_phase = 0;                                            // 0 none | 1 motor held, waiting for the shaft to stop | 2 motor held, zeroing
     auto tare_deadline = std::chrono::steady_clock::now();
 
     std::cout << "[MENU] select the impeller: turn the knob, press to confirm (double-click the knob button later to come back here). Motor is off until then.\n";
@@ -1547,16 +1586,14 @@ int main(int argc, char** argv) {
         const bool wants_motor = open_loop ? (dashboard_target_pwm_pct > 0) : (target > 0.0);
 
         // ---- Torque zero at the start of every run (both modes) ----
+        // The motor is held off; the zero is taken as soon as the shaft has been still for TORQUE_TARE_REST_S (we WAIT for it, never skip it).
         auto request_tare = [&](const char* why) {
-            if (!tsensor) return;                                  // no torque sensor running: nothing to zero, start at once
-            if (!shaft_at_rest) {
-                std::cout << "[TORQUE] " << why << ": shaft not at rest, keeping the previous zero.\n";
-                return;
-            }
-            tare_cmd.store(1);
-            tare_hold = true;
-            tare_deadline = current_time + std::chrono::milliseconds(Config::TORQUE_TARE_TIMEOUT_MS);
-            std::cout << "[TORQUE] " << why << ": zeroing torque at no load (motor held off for a moment)...\n";
+            if (!tsensor || tare_phase != 0) return;               // no torque sensor running, or a zero is already in progress
+            tare_phase = 1;
+            tare_deadline = current_time + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                               std::chrono::duration<double>(Config::TORQUE_TARE_REST_WAIT_S));
+            std::cout << "[TORQUE] " << why << ": motor held off, "
+                      << (shaft_at_rest ? "zeroing the torque amplifier...\n" : "waiting for the shaft to stop before zeroing...\n");
         };
         if (wants_motor && !prev_wants_motor && current_pwm == 0) request_tare("Start of run");
         prev_wants_motor = wants_motor;
@@ -1564,18 +1601,36 @@ int main(int argc, char** argv) {
             if (wants_motor) std::cout << "[TORQUE] Dashboard CMD:TARE ignored: the motor is commanded to run (set it to 0 first).\n";
             else             request_tare("Dashboard CMD:TARE");
         }
-        if (tare_hold) {
-            if (tare_cmd.load() == 2) {
-                tare_cmd.store(0);
-                tare_hold = false;
-                std::cout << std::fixed << std::setprecision(4) << "[TORQUE] Zeroed: offset " << tare_offset.load()
-                          << " N.m removed, this run starts at 0 N.m.\n";
+        if (tare_phase == 1) {
+            if (shaft_at_rest) {
+                tare_cmd.store(1);                                 // the torque thread sends the zero command and reads it back
+                tare_phase = 2;
+                tare_deadline = current_time + std::chrono::milliseconds(Config::TORQUE_TARE_TIMEOUT_MS);
             } else if (current_time >= tare_deadline) {
+                tare_phase = 0;
+                std::cout << "[TORQUE] WARNING: the shaft did not come to rest within " << Config::TORQUE_TARE_REST_WAIT_S
+                          << " s: starting WITHOUT a new zero (previous zero kept).\n";
+            }
+        } else if (tare_phase == 2) {
+            const int r = tare_cmd.load();
+            if (r >= 2) {
                 tare_cmd.store(0);
-                tare_hold = false;
+                tare_phase = 0;
+                std::cout << std::fixed << std::setprecision(4);
+                if (r == 2)
+                    std::cout << "[TORQUE] Amplifier zeroed: " << tare_before.load() << " -> " << tare_after.load() << " N.m. Run starts at 0.\n";
+                else if (r == 3)
+                    std::cout << "[TORQUE] WARNING: the amplifier did not zero (read-back " << tare_after.load()
+                              << " N.m): that value is subtracted in software instead, so the run still starts at 0.\n";
+                else
+                    std::cout << "[TORQUE] WARNING: no torque reading during the zero (RS485 dropout?): previous zero kept.\n";
+            } else if (current_time >= tare_deadline) {
+                tare_cmd.store(0);                                 // cancels the torque thread's procedure
+                tare_phase = 0;
                 std::cout << "[TORQUE] WARNING: torque zero timed out (sensor not answering?): starting with the previous zero.\n";
             }
         }
+        const bool tare_hold = (tare_phase != 0);
 
         double active_target = 0.0;      // PI target actually being tracked (0 in open loop)
         if (tare_hold) {

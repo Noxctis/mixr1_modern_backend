@@ -83,12 +83,15 @@ namespace Config {
     constexpr int HEARTBEAT_TIMEOUT_MS = 2000;
     constexpr unsigned TCP_USER_TIMEOUT_MS = 3000;       // unacknowledged telemetry for this long (cable pulled) -> connection dropped
 
-    // --- Torque zero before every experiment (software tare) ---
-    // Every time the motor is started from standstill (Mode 1: KO key / knob up from 0, Mode 2: first non-zero RPM or PWM command),
-    // the motor is held off for a moment, the torque reading is averaged and that offset is subtracted, so every run starts at 0 N.m.
-    constexpr int    TORQUE_TARE_SAMPLES    = 8;         // readings averaged (8 x 50 ms = 0.4 s)
-    constexpr int    TORQUE_TARE_TIMEOUT_MS = 2000;      // give up (start anyway, keep the old zero) if the sensor does not answer in time
-    constexpr double TORQUE_TARE_REST_S     = 1.0;       // the shaft must have been still this long, otherwise no zero is taken
+    // --- Torque zero before every experiment (amplifier zero command over RS485, same as the zero at boot) ---
+    // Every time the motor is started from standstill (Mode 1: KO key / knob up from 0, Mode 2: first non-zero RPM or PWM command)
+    // the motor is held off, the daemon WAITS until the shaft has stopped, sends the amplifier's zero command, waits for its filter
+    // to settle and reads the value back to check it really is ~0. If the amplifier refuses, the read-back is subtracted in software instead.
+    constexpr int    TORQUE_TARE_READBACK   = 5;         // readings averaged for the before / after check
+    constexpr int    TORQUE_TARE_ATTEMPTS   = 2;         // zero command attempts before falling back to a software zero
+    constexpr int    TORQUE_TARE_TIMEOUT_MS = 8000;      // whole zero procedure (2 x (settle 1.5 s + read-back)); after that: start anyway
+    constexpr double TORQUE_TARE_REST_S     = 1.0;       // the shaft must have been still this long before the zero is taken
+    constexpr double TORQUE_TARE_REST_WAIT_S = 10.0;     // how long to wait for the shaft (and the fluid) to stop; then start WITHOUT a new zero
 
     // --- ST7789 2.4" SPI TFT (pigpio hardware SPI0: SCL = GPIO 11, SDA/MOSI = GPIO 10) ---
     constexpr unsigned int PIN_TFT_DC  = 16;              // DC / RS
