@@ -138,10 +138,10 @@ struct TestOptions {
     double power_warn_w = -1.0;
     double max_duty_pct = 100.0; // hard cap on the PI output in % duty (water safety: the speed cannot exceed what this duty gives)
     bool start_at_zero = false;  // keep the motor off during the 250 ms preparation and switch it on exactly when the log starts (records the ramp from rest)
-    // RS485 Modbus torque sensor (an inline strain-gauge amplifier, read with function code 0x03). OFF unless you pass --torque.
+    // RS485 Modbus torque sensor (an inline strain-gauge amplifier, read with function code 0x03). ON by default; --no-torque turns it off.
     // Register address, width, byte order and scale are amplifier-specific: set them from the manual, or find them with
     // tools/torque_calibration --probe. Mirrors --power in every way (same always-present-columns CSV pattern, same div cadence).
-    bool torque = false;
+    bool torque = true;
     std::string torque_port = "/dev/ttyUSB0";
     int torque_baud = 9600;
     int torque_slave_id = 1;
@@ -1099,8 +1099,9 @@ int main(int argc, char** argv) {
     int power_addr = Config::I2C_POWER_ADDR;        // --power-addr=0x45
     int power_bus_forced = -1;                      // --power-bus=N: use /dev/i2c-N for the wattmeter (default: auto-detect)
     double power_shunt_ohm = 0.010, power_i_gain = 1.0, power_i_offset_ma = 0.0, power_v_gain = 1.0;
-    // RS485 torque amplifier in normal mode: OFF unless --torque is passed (same flags as test mode). Default port = the USB RS485 adapter (/dev/ttyUSB0).
-    bool use_torque = false;
+    // RS485 torque amplifier in normal mode: ON by default (--no-torque turns it off). Default port = the USB RS485 adapter (/dev/ttyUSB0).
+    // A missing sensor is not an error: the daemon prints a note and runs without torque.
+    bool use_torque = true;
     TorqueSensor::Settings torque_cfg;
     torque_cfg.port = "/dev/ttyUSB0"; torque_cfg.baud = 9600; torque_cfg.slave_id = 1; torque_cfg.reg_addr = 0; torque_cfg.reg_count = 2;
     torque_cfg.value_format = "int32"; torque_cfg.word_order = "big"; torque_cfg.scale = 0.001; torque_cfg.offset = 0.0; torque_cfg.stop_bits = 1;
@@ -1259,8 +1260,10 @@ int main(int argc, char** argv) {
     // Torque sensor (RS485 Modbus): a Modbus request + reply at 9600 baud takes ~20 ms, which would stall the 10 ms control loop, so it is polled
     // in a background thread. The thread is moved OFF the control core and back to normal scheduling (std::thread would inherit core 3 + SCHED_FIFO).
     std::unique_ptr<ModbusTorque> tsensor;
-    std::atomic<double> torque_value{std::numeric_limits<double>::quiet_NaN()};
+    std::atomic<double> torque_value{std::numeric_limits<double>::quiet_NaN()};   // already zeroed (software tare subtracted)
     std::atomic<bool> torque_stop{false};
+    std::atomic<int> tare_cmd{0};                   // 0 = idle, 1 = main loop asks for a zero, 2 = torque thread finished it (main loop sets it back to 0)
+    std::atomic<double> tare_offset{0.0};           // software zero currently subtracted from every reading
     std::thread torque_thread;
     if (use_torque) {
         ModbusTorque::Settings mt;
@@ -1282,13 +1285,34 @@ int main(int argc, char** argv) {
                 normal.sched_priority = 0;
                 pthread_setschedparam(pthread_self(), SCHED_OTHER, &normal);
                 int fails = 0;
+                double offset = 0.0;                        // software zero (this thread owns it; published through tare_offset)
+                double tare_sum = 0.0;
+                int tare_n = 0;
                 auto next = std::chrono::steady_clock::now();
                 while (!torque_stop.load()) {
                     next += std::chrono::milliseconds(torque_period_ms);
                     std::this_thread::sleep_until(next);
                     double tq = 0.0;
-                    if (tsensor->read(tq)) { torque_value.store(tq); fails = 0; }
-                    else if (++fails > 10) torque_value.store(std::numeric_limits<double>::quiet_NaN());   // no stale value after an RS485 dropout
+                    if (tsensor->read(tq)) {
+                        fails = 0;
+                        if (tare_cmd.load() == 1) {         // the main loop holds the motor off while we average the no-load reading
+                            tare_sum += tq;
+                            if (++tare_n >= Config::TORQUE_TARE_SAMPLES) {
+                                const double new_offset = tare_sum / tare_n;
+                                int expected = 1;
+                                if (tare_cmd.compare_exchange_strong(expected, 2)) {   // not cancelled by a timeout in the meantime
+                                    offset = new_offset;
+                                    tare_offset.store(offset);
+                                }
+                                tare_sum = 0.0; tare_n = 0;
+                            }
+                        } else {
+                            tare_sum = 0.0; tare_n = 0;
+                        }
+                        torque_value.store(tq - offset);
+                    } else if (++fails > 10) {
+                        torque_value.store(std::numeric_limits<double>::quiet_NaN());   // no stale value after an RS485 dropout
+                    }
                 }
             });
         } else {
@@ -1323,8 +1347,14 @@ int main(int argc, char** argv) {
     double ec11_last_step = 0.0;
     bool ec11_fast = false;
     auto ec11_last_click = std::chrono::steady_clock::now() - std::chrono::seconds(10);
-    double last_rpm = 0.0;
+    double last_rpm = 0.0;                                         // filtered (EMA) speed, used for the display and the terminal log
     std::string last_lines[5];
+    // Torque zero before every run from standstill
+    long long rest_anchor = encoder.get_sync_snapshot().count;
+    auto rest_since = std::chrono::steady_clock::now();
+    bool prev_wants_motor = false;
+    bool tare_hold = false;                                        // true = motor held off while the torque thread takes the zero
+    auto tare_deadline = std::chrono::steady_clock::now();
 
     std::cout << "[MENU] select the impeller: turn the knob, press to confirm (double-click the knob button later to come back here). Motor is off until then.\n";
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -1403,10 +1433,10 @@ int main(int argc, char** argv) {
                 if (dashboard_pi_mode) std::cout << " | dash_target=" << dashboard_target_rpm << " RPM";
                 else                   std::cout << " | dash_target=" << dashboard_target_pwm_pct << " %PWM";
             }
-            std::cout << " | measured=" << last_rpm << " RPM"
+            std::cout << " | measured=" << last_rpm << " RPM (filtered)"
                       << " | pwm=" << std::lround(current_pwm * 100.0 / 4095.0) << "%";
             if (std::isfinite(torque_now)) std::cout << " | tau=" << std::setprecision(3) << torque_now << " Nm";
-            else                           std::cout << " | tau=n/a (start the daemon with --torque)";
+            else                           std::cout << " | tau=n/a (no torque sensor)";
             if (std::isfinite(power_sample.power_w)) std::cout << " | power=" << std::setprecision(2) << power_sample.power_w << " W\n";
             else                                     std::cout << " | power=n/a\n";
         };
@@ -1437,6 +1467,7 @@ int main(int argc, char** argv) {
                 // double click = back to the impeller menu, motor off
                 impeller_selected = false;
                 standalone_target_rpm = 0.0;
+                standalone_running = false;                  // after choosing again the KO key must be pressed to start
                 pi_control.reset();
                 std::cout << "[MENU] double click: back to impeller selection (motor off)\n";
             } else {
@@ -1495,8 +1526,14 @@ int main(int argc, char** argv) {
         const bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
         if (update_lcd) lcd_prescaler = 0;
 
-        auto state = kinematics.process(encoder.get_sync_snapshot(), current_pwm, update_lcd);
-        last_rpm = state.exact_rpm;
+        const EncoderSnapshot snap = encoder.get_sync_snapshot();
+        auto state = kinematics.process(snap, current_pwm, update_lcd);
+        last_rpm = state.ema_filtered_rpm;
+
+        // Shaft at rest = motor off and the encoder has not moved (beyond jitter) for TORQUE_TARE_REST_S.
+        if (std::llabs(snap.count - rest_anchor) > Config::DEADBAND_TICK_THRESHOLD) { rest_anchor = snap.count; rest_since = current_time; }
+        const bool shaft_at_rest = (current_pwm == 0) &&
+                                   std::chrono::duration<double>(current_time - rest_since).count() >= Config::TORQUE_TARE_REST_S;
 
         const bool open_loop = dashboard_active && !dashboard_pi_mode;
         if (open_loop != prev_open_loop) {
@@ -1504,14 +1541,51 @@ int main(int argc, char** argv) {
             prev_open_loop = open_loop;
         }
 
+        const double target = dashboard_active
+            ? std::clamp(dashboard_target_rpm, Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM)
+            : ((standalone_running && impeller_selected) ? standalone_target_rpm : 0.0);
+        const bool wants_motor = open_loop ? (dashboard_target_pwm_pct > 0) : (target > 0.0);
+
+        // ---- Torque zero at the start of every run (both modes) ----
+        auto request_tare = [&](const char* why) {
+            if (!tsensor) return;                                  // no torque sensor running: nothing to zero, start at once
+            if (!shaft_at_rest) {
+                std::cout << "[TORQUE] " << why << ": shaft not at rest, keeping the previous zero.\n";
+                return;
+            }
+            tare_cmd.store(1);
+            tare_hold = true;
+            tare_deadline = current_time + std::chrono::milliseconds(Config::TORQUE_TARE_TIMEOUT_MS);
+            std::cout << "[TORQUE] " << why << ": zeroing torque at no load (motor held off for a moment)...\n";
+        };
+        if (wants_motor && !prev_wants_motor && current_pwm == 0) request_tare("Start of run");
+        prev_wants_motor = wants_motor;
+        if (network->take_tare_request()) {
+            if (wants_motor) std::cout << "[TORQUE] Dashboard CMD:TARE ignored: the motor is commanded to run (set it to 0 first).\n";
+            else             request_tare("Dashboard CMD:TARE");
+        }
+        if (tare_hold) {
+            if (tare_cmd.load() == 2) {
+                tare_cmd.store(0);
+                tare_hold = false;
+                std::cout << std::fixed << std::setprecision(4) << "[TORQUE] Zeroed: offset " << tare_offset.load()
+                          << " N.m removed, this run starts at 0 N.m.\n";
+            } else if (current_time >= tare_deadline) {
+                tare_cmd.store(0);
+                tare_hold = false;
+                std::cout << "[TORQUE] WARNING: torque zero timed out (sensor not answering?): starting with the previous zero.\n";
+            }
+        }
+
         double active_target = 0.0;      // PI target actually being tracked (0 in open loop)
-        if (open_loop) {
+        if (tare_hold) {
+            current_pwm = 0;                                       // motor stays off until the zero is taken
+            pi_control.reset();
+            motor.set_pwm(0);
+        } else if (open_loop) {
             current_pwm = std::clamp((dashboard_target_pwm_pct * 4095) / 100, 0, 4095);
             motor.set_pwm(current_pwm);
         } else {
-            const double target = dashboard_active
-                ? std::clamp(dashboard_target_rpm, Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM)
-                : ((standalone_running && impeller_selected) ? standalone_target_rpm : 0.0);
             active_target = target;
             if (target > 0.0) {
                 current_pwm = pi_control.compute(target, state.exact_rpm, dt.count());
@@ -1570,15 +1644,17 @@ int main(int argc, char** argv) {
             const auto lcd_t0 = std::chrono::steady_clock::now();
             const double torque_now = torque_value.load();      // real reading from the RS485 sensor (NaN = no sensor / dropout)
             std::ostringstream l1, l2, l3, l4, l5;
-            l1 << (dashboard_active ? std::string("MODE2 DASHBOARD")
-                                    : std::string("MODE1 ") + Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label);
+            if (tare_hold)             l1 << "ZEROING TORQUE";
+            else if (dashboard_active) l1 << "MODE2 DASHBOARD";
+            else                       l1 << "MODE1 " << Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label
+                                          << (standalone_running ? " RUN" : " STOP");
             if (open_loop) {
                 l2 << "SET: " << dashboard_target_pwm_pct << " %";
             } else {
                 l2 << std::fixed << std::setprecision(0) << "SET: "
                    << (dashboard_active ? dashboard_target_rpm : standalone_target_rpm) << " RPM";
             }
-            l3 << std::fixed << std::setprecision(0) << "READ: " << state.exact_rpm << " RPM";
+            l3 << "READ: " << std::lround(state.ema_filtered_rpm) << " RPM";      // filtered (EMA) speed: steady digits; lround avoids "-0"
             if (std::isfinite(torque_now)) {
                 std::ostringstream tq;
                 tq << std::fixed << std::setprecision(3) << torque_now;                      // 3 decimal places

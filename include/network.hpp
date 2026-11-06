@@ -3,6 +3,7 @@
 #pragma once
 #include <string>
 #include <limits>
+#include <chrono>
 
 // One wattmeter reading for the dashboard. NaN = no reading (no wattmeter, or an I2C dropout).
 struct PowerSample {
@@ -20,6 +21,9 @@ private:
     bool torque_requested = false; // client sent CMD:TORQUE,1 -> wants 1 extra field (torque, Nm) after the power fields (if any)
     bool power_requested = false; // client sent CMD:POWER,1 -> wants 3 extra fields (bus V, current mA, power W) after the 6 extended ones
     int send_fail_streak = 0;     // consecutive sends the peer did not take (a stalled / sleeping dashboard)
+    bool heartbeat_seen = false;  // client has sent CMD:HB at least once -> the heartbeat timeout is enforced
+    bool tare_requested = false;  // client sent CMD:TARE
+    std::chrono::steady_clock::time_point last_rx{};   // last time ANY byte arrived from the client
 
     void disconnect_client();
     void adopt_client(int fd);                       // tune a freshly accepted socket (keepalive, small send buffer)
@@ -50,6 +54,7 @@ public:
     // Updated signature for dual-mode control
     bool receive_command(double& target_rpm, int& target_pwm_pct, bool& pi_mode);
     
+    bool take_tare_request() { const bool r = tare_requested; tare_requested = false; return r; }   // CMD:TARE from the dashboard (read once)
     void drop_client() { disconnect_client(); }      // the main loop can drop the dashboard explicitly
     void stop_server();
 };

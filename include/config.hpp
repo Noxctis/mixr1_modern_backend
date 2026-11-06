@@ -75,7 +75,20 @@ namespace Config {
 
     // --- Start key (module "KO" key) ---
     constexpr unsigned int PIN_START_KEY = 4;             // to GND when pressed, internal pull-up
-    constexpr bool STANDALONE_RUN_AT_BOOT = true;         // true = Mode 1 behaves exactly as before (knob drives the motor); KO then toggles STOP / RUN
+    constexpr bool STANDALONE_RUN_AT_BOOT = false;        // false = Mode 1 starts STOPPED: turning the knob only sets the target, the KO key starts / stops the motor
+
+    // --- Dashboard heartbeat ---
+    // The dashboard should send "CMD:HB" (any line counts) every ~500 ms. Once the daemon has seen one, a dashboard that stays silent
+    // for longer than this is dropped -> Mode 1, motor stopped. Dashboards that never send CMD:HB are still caught by the TCP timeouts below.
+    constexpr int HEARTBEAT_TIMEOUT_MS = 2000;
+    constexpr unsigned TCP_USER_TIMEOUT_MS = 3000;       // unacknowledged telemetry for this long (cable pulled) -> connection dropped
+
+    // --- Torque zero before every experiment (software tare) ---
+    // Every time the motor is started from standstill (Mode 1: KO key / knob up from 0, Mode 2: first non-zero RPM or PWM command),
+    // the motor is held off for a moment, the torque reading is averaged and that offset is subtracted, so every run starts at 0 N.m.
+    constexpr int    TORQUE_TARE_SAMPLES    = 8;         // readings averaged (8 x 50 ms = 0.4 s)
+    constexpr int    TORQUE_TARE_TIMEOUT_MS = 2000;      // give up (start anyway, keep the old zero) if the sensor does not answer in time
+    constexpr double TORQUE_TARE_REST_S     = 1.0;       // the shaft must have been still this long, otherwise no zero is taken
 
     // --- ST7789 2.4" SPI TFT (pigpio hardware SPI0: SCL = GPIO 11, SDA/MOSI = GPIO 10) ---
     constexpr unsigned int PIN_TFT_DC  = 16;              // DC / RS

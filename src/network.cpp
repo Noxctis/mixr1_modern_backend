@@ -19,6 +19,8 @@ void TelemetryServer::disconnect_client() {
     ext_requested = false;
     power_requested = false;
     torque_requested = false;
+    heartbeat_seen = false;
+    tare_requested = false;
     send_fail_streak = 0;
     rx_buffer.clear();
 }
@@ -29,11 +31,11 @@ void TelemetryServer::adopt_client(int fd) {
     int flag = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
     setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &flag, sizeof(flag));
-    int idle = 5, interval = 2, count = 3;                      // a silent peer is declared dead after about 5 + 2 x 3 = 11 s
+    int idle = 2, interval = 1, count = 2;                      // an idle, silent peer is declared dead after about 2 + 1 x 2 = 4 s
     setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
     setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
     setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
-    unsigned int user_timeout_ms = 10000;                       // unacknowledged data for 10 s -> the connection is dropped
+    unsigned int user_timeout_ms = Config::TCP_USER_TIMEOUT_MS;   // telemetry not acknowledged for 3 s (cable pulled) -> the connection is dropped
     setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &user_timeout_ms, sizeof(user_timeout_ms));
     int sndbuf = 16384;                                         // small buffer: a peer that stops reading is noticed within seconds
     setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
@@ -41,7 +43,10 @@ void TelemetryServer::adopt_client(int fd) {
     ext_requested = false;
     power_requested = false;
     torque_requested = false;
+    heartbeat_seen = false;
+    tare_requested = false;
     send_fail_streak = 0;
+    last_rx = std::chrono::steady_clock::now();
 }
 
 // Never blocks the control loop. A peer that is gone or not reading is dropped (the main loop then falls back to standalone, motor target 0).
@@ -162,6 +167,7 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
         if (bytes > 0) {
             chunk[bytes] = '\0';
             rx_buffer += chunk;
+            last_rx = std::chrono::steady_clock::now();
         } else if (bytes == 0) {
             std::cout << "[MIXR-1] Dashboard disconnected.\n";
             disconnect_client();
@@ -176,6 +182,14 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
         }
     }
     if (rx_buffer.size() > 4096) rx_buffer.clear();                // garbage without a newline must not grow forever
+
+    // Heartbeat: once the dashboard has proved it sends CMD:HB, silence means the link is gone (cable pulled, PC asleep, app frozen).
+    if (heartbeat_seen && std::chrono::steady_clock::now() - last_rx > std::chrono::milliseconds(Config::HEARTBEAT_TIMEOUT_MS)) {
+        std::cout << "[MIXR-1] Dashboard heartbeat lost (nothing received for " << Config::HEARTBEAT_TIMEOUT_MS
+                  << " ms): dropped. Motor falls back to standalone (stopped).\n";
+        disconnect_client();
+        return updated;
+    }
 
     size_t pos;
     while ((pos = rx_buffer.find('\n')) != std::string::npos) {
@@ -192,6 +206,16 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
         size_t ext_pos = line.find("CMD:EXT,");
         size_t pow_pos = line.find("CMD:POWER,");
         size_t tq_pos  = line.find("CMD:TORQUE,");
+
+        if (line.find("CMD:HB") != std::string::npos) {           // heartbeat: arms the timeout check, nothing else to do
+            if (!heartbeat_seen) std::cout << "[MIXR-1] Dashboard heartbeat active (timeout " << Config::HEARTBEAT_TIMEOUT_MS << " ms)\n";
+            heartbeat_seen = true;
+            continue;
+        }
+        if (line.find("CMD:TARE") != std::string::npos) {
+            tare_requested = true;
+            continue;
+        }
 
         if (rpm_pos != std::string::npos) {
             try {
