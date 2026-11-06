@@ -116,7 +116,7 @@ namespace Config {
     // --- Impeller selection (menu at start-up; double-click the knob button to come back to it) ---
     struct ImpellerOption { const char* label; double max_rpm; };
     constexpr std::array<ImpellerOption, 2> IMPELLERS = {{
-        {"96 MM",  1300.0},     // knob limit for the 96 mm impeller
+        {"96 MM",  1400.0},     // knob limit for the 96 mm impeller (covers the 1326 and 1362 RPM test speeds)
         {"174 MM",  350.0}      // knob limit for the 174 mm impeller
     }};
     constexpr int DOUBLE_CLICK_MS = 500;                // two presses of the knob button within this time = back to the impeller menu
