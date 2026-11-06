@@ -5,6 +5,8 @@
 #include <memory>
 #include <thread>
 #include <chrono>
+#include <deque>
+#include <numeric>
 #include <cmath>
 #include <limits>
 #include <fstream>
@@ -1326,7 +1328,6 @@ int main(int argc, char** argv) {
                 int fails = 0;
                 double offset = 0.0;                        // software zero (only used if the amplifier refuses its zero command)
                 double last_raw = std::numeric_limits<double>::quiet_NaN();   // latest amplifier reading (for the before/after log line)
-                const double tol = 2.0 * torque_cfg.scale;  // read-back must be within +-2 counts of 0 (same rule as the zero at boot)
                 auto cancelled = [&]() { return torque_stop.load() || tare_cmd.load() != 1; };
                 // average n raw readings (amplifier value, no software offset); false if none came back
                 auto mean_read = [&](int n, double& out) -> bool {
@@ -1349,29 +1350,46 @@ int main(int argc, char** argv) {
                     bool zeroed = false;
                     for (int attempt = 1; attempt <= Config::TORQUE_TARE_ATTEMPTS && !cancelled(); ++attempt) {
                         if (!tsensor->tare()) continue;                     // 0x10 write-0, fallback 0x05 clear (modbus_tare.hpp)
-                        // Read back continuously: done as soon as TORQUE_TARE_SETTLED_READS readings in a row are at 0,
-                        // instead of always waiting the full settle time. --tare-settle-ms is now only the upper limit.
-                        const auto t_end = std::chrono::steady_clock::now() + std::chrono::milliseconds(tare_settle_ms);
-                        int in_tol = 0;
-                        double sum = 0.0;
+                        // Read back until the value has STOPPED MOVING (the amplifier's filter keeps sliding for a while after the
+                        // command, and can pass through 0 on its way to its final value): at least TORQUE_TARE_MIN_SETTLE_MS, then
+                        // TORQUE_TARE_STABLE_READS readings in a row within TORQUE_TARE_STABLE_COUNTS of each other. Only that settled
+                        // value is checked against 0. Upper limit TORQUE_TARE_MAX_SETTLE_MS (or --tare-settle-ms if longer).
+                        const auto t_cmd = std::chrono::steady_clock::now();
+                        const auto t_min = t_cmd + std::chrono::milliseconds(Config::TORQUE_TARE_MIN_SETTLE_MS);
+                        const auto t_end = t_cmd + std::chrono::milliseconds(std::max(tare_settle_ms, Config::TORQUE_TARE_MAX_SETTLE_MS));
+                        const double band = Config::TORQUE_TARE_STABLE_COUNTS * torque_cfg.scale;
+                        std::deque<double> win;
+                        bool settled = false;
                         while (!cancelled() && std::chrono::steady_clock::now() < t_end) {
                             double v = 0.0;
                             if (tsensor->read(v)) {
                                 last_raw = v;
                                 torque_value.store(v - offset);
-                                if (std::fabs(v) <= tol) { sum += v; if (++in_tol >= Config::TORQUE_TARE_SETTLED_READS) break; }
-                                else                     { sum = 0.0; in_tol = 0; }
+                                win.push_back(v);
+                                if (static_cast<int>(win.size()) > Config::TORQUE_TARE_STABLE_READS) win.pop_front();
+                                if (std::chrono::steady_clock::now() >= t_min && static_cast<int>(win.size()) == Config::TORQUE_TARE_STABLE_READS) {
+                                    const auto [mn, mx] = std::minmax_element(win.begin(), win.end());
+                                    const auto half = win.begin() + static_cast<long>(win.size() / 2);
+                                    const double m1 = std::accumulate(win.begin(), half, 0.0) / static_cast<double>(win.size() / 2);
+                                    const double m2 = std::accumulate(half, win.end(), 0.0) / static_cast<double>(win.size() - win.size() / 2);
+                                    const bool no_creep = std::fabs(m2 - m1) < Config::TORQUE_TARE_CREEP_COUNTS * torque_cfg.scale;
+                                    if (*mx - *mn <= band && no_creep) { settled = true; break; }
+                                }
                             }
                             std::this_thread::sleep_for(std::chrono::milliseconds(torque_period_ms));
                         }
-                        if (in_tol >= Config::TORQUE_TARE_SETTLED_READS) { after = sum / in_tol; zeroed = true; break; }
-                        mean_read(Config::TORQUE_TARE_READBACK, after);     // did not settle at 0: measure where it is
+                        if (!win.empty()) after = std::accumulate(win.begin(), win.end(), 0.0) / static_cast<double>(win.size());
+                        if (settled && std::isfinite(after) && std::fabs(after) < Config::TORQUE_ZERO_EXACT_COUNTS * torque_cfg.scale) {
+                            zeroed = true;                                  // the amplifier ITSELF settled at 0.000
+                            break;
+                        }
+                        // not settled, or settled away from 0.000: send the zero command again (next attempt), shaft still at rest
                     }
                     if (cancelled()) return;
                     int result;
                     double new_offset = offset;
                     if (zeroed) {
-                        new_offset = 0.0;                                   // the amplifier itself reads 0 now: no software correction
+                        new_offset = 0.0;                                   // the amplifier reads 0.000 itself: no software correction at all
                         result = 2;
                     } else {
                         if (!std::isfinite(after)) mean_read(Config::TORQUE_TARE_READBACK, after);
@@ -1447,6 +1465,9 @@ int main(int argc, char** argv) {
     auto start_confirm_deadline = std::chrono::steady_clock::now();
     PowerLimiter limiter;                                          // 72 W safety cap (Config::POWER_LIMIT_W)
     bool limit_reported = false;                                   // "power limit active" already announced
+    std::deque<double> rest_torque;                                // published torque while the shaft is at rest (check before each start)
+    auto last_zero_time = std::chrono::steady_clock::now() - std::chrono::hours(1);
+    int idle_rezeros = 0;                                          // automatic re-zeros during this stop (limit TORQUE_IDLE_REZERO_MAX)
     std::string trip_msg;                                          // shown on the screen after a safety trip, until the next start
     int shaft_power_counter = 0;
     if (meter)        std::cout << "[SAFETY] Power cap " << Config::POWER_LIMIT_W << " W active, measured with the wattmeter (electrical power).\n";
@@ -1705,6 +1726,49 @@ int main(int argc, char** argv) {
             else std::cout << " | WARNING: " << rej << " noise pulses rejected, " << miss
                            << " index pulses missed: check the X (index) wire, its ground and keep it away from the motor leads.\n";
         }
+        // Rolling average of the (zeroed) torque while idle and at rest: the zero is CHECKED before every start, not trusted.
+        {
+            const double tq_now = torque_value.load();
+            if (tsensor && shaft_at_rest && !wants_motor && tare_phase == 0 && std::isfinite(tq_now)) {
+                rest_torque.push_back(tq_now);
+                if (rest_torque.size() > 50) rest_torque.pop_front();       // last 0.5 s
+            } else if (!shaft_at_rest || tare_phase != 0) {
+                rest_torque.clear();
+            }
+        }
+        if (current_pwm > 0) idle_rezeros = 0;
+        // Idle at rest after a zero: if the amplifier drifts away from 0.000, send the zero command again (no waiting for START).
+        if (tsensor && zero_valid && tare_phase == 0 && !wants_motor && shaft_at_rest && rest_torque.size() >= 50
+            && idle_rezeros < Config::TORQUE_IDLE_REZERO_MAX && current_time - last_zero_time > std::chrono::seconds(2)) {
+            const double mean = std::accumulate(rest_torque.begin(), rest_torque.end(), 0.0) / static_cast<double>(rest_torque.size());
+            if (std::fabs(mean) > Config::TORQUE_ZERO_CHECK_COUNTS * torque_cfg.scale) {
+                ++idle_rezeros;
+                std::cout << std::fixed << std::setprecision(4) << "[TORQUE] Idle check: amplifier reads " << mean
+                          << " N.m, not 0.000: sending the zero command again (" << idle_rezeros << "/" << Config::TORQUE_IDLE_REZERO_MAX << ").\n";
+                rest_torque.clear();
+                tare_cmd.store(1);
+                tare_phase = 2;
+                tare_deadline = current_time + std::chrono::milliseconds(Config::TORQUE_TARE_TIMEOUT_MS);
+            }
+        }
+        if (wants_motor && !prev_wants_motor && current_pwm == 0 && zero_valid && tsensor) {
+            const double tol = Config::TORQUE_ZERO_CHECK_COUNTS * torque_cfg.scale;
+            if (rest_torque.size() >= 30) {      // (uses the same 0.5 s at-rest average as the idle check)
+                const double mean = std::accumulate(rest_torque.begin(), rest_torque.end(), 0.0) / static_cast<double>(rest_torque.size());
+                std::cout << std::fixed << std::setprecision(4);
+                if (std::fabs(mean) > tol) {
+                    std::cout << "[TORQUE] Check before start: reads " << mean << " N.m at rest (not 0, limit +-" << tol << "): re-zeroing.\n";
+                    zero_valid = false;
+                } else {
+                    std::cout << "[TORQUE] Check before start: " << mean << " N.m at rest: zero OK.\n";
+                }
+            } else if (current_time - last_zero_time < std::chrono::seconds(2)) {
+                std::cout << "[TORQUE] Check before start: zero taken just now: OK.\n";
+            } else {
+                std::cout << "[TORQUE] Check before start: not enough at-rest readings to verify the zero: re-zeroing.\n";
+                zero_valid = false;
+            }
+        }
         if (wants_motor && !prev_wants_motor && current_pwm == 0 && !zero_valid) request_tare("Start of run");
         prev_wants_motor = wants_motor;
         if (network->take_tare_request()) {
@@ -1726,13 +1790,15 @@ int main(int argc, char** argv) {
             if (r >= 2) {
                 tare_cmd.store(0);
                 tare_phase = 0;
-                if (r == 2 || r == 3) zero_valid = true;
+                if (r == 2 || r == 3) { zero_valid = true; last_zero_time = current_time; }
                 std::cout << std::fixed << std::setprecision(4);
                 if (r == 2)
-                    std::cout << "[TORQUE] Amplifier zeroed: " << tare_before.load() << " -> " << tare_after.load() << " N.m. Next run starts at 0.\n";
+                    std::cout << "[TORQUE] Amplifier zeroed: " << tare_before.load() << " -> " << tare_after.load()
+                              << " N.m (settled; the amplifier itself reads 0.000, no software correction).\n";
                 else if (r == 3)
-                    std::cout << "[TORQUE] WARNING: the amplifier did not zero (read-back " << tare_after.load()
-                              << " N.m): that value is subtracted in software instead, so the run still starts at 0.\n";
+                    std::cout << "[TORQUE] WARNING: the amplifier still reads " << tare_after.load() << " N.m after "
+                              << Config::TORQUE_TARE_ATTEMPTS << " zero commands. As a last resort that value is subtracted in software "
+                              << "so the run starts at 0. Check the amplifier / RS485 if this repeats.\n";
                 else
                     std::cout << "[TORQUE] WARNING: no torque reading during the zero (RS485 dropout?): previous zero kept.\n";
             } else if (current_time >= tare_deadline) {
