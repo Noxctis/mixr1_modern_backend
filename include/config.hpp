@@ -84,13 +84,16 @@ namespace Config {
     constexpr unsigned TCP_USER_TIMEOUT_MS = 3000;       // unacknowledged telemetry for this long (cable pulled) -> connection dropped
 
     // --- Torque zero before every experiment (amplifier zero command over RS485, same as the zero at boot) ---
+    // The zero is normally taken WHILE IDLE: as soon as the shaft is at rest after a STOP (or after boot), so START is instant.
+    // Only if START comes before that idle zero has finished is the motor held until it is done.
     // Every time the motor is started from standstill (Mode 1: KO key / knob up from 0, Mode 2: first non-zero RPM or PWM command)
     // the motor is held off, the daemon WAITS until the shaft has stopped, sends the amplifier's zero command, waits for its filter
     // to settle and reads the value back to check it really is ~0. If the amplifier refuses, the read-back is subtracted in software instead.
     constexpr int    TORQUE_TARE_READBACK   = 5;         // readings averaged for the before / after check
     constexpr int    TORQUE_TARE_ATTEMPTS   = 2;         // zero command attempts before falling back to a software zero
     constexpr int    TORQUE_TARE_TIMEOUT_MS = 8000;      // whole zero procedure (2 x (settle 1.5 s + read-back)); after that: start anyway
-    constexpr double TORQUE_TARE_REST_S     = 1.0;       // the shaft must have been still this long before the zero is taken
+    constexpr double TORQUE_TARE_REST_S     = 0.5;       // the shaft must have been still this long before the zero is taken
+    constexpr int    TORQUE_TARE_SETTLED_READS = 3;      // read-back finishes as soon as this many readings in a row are at 0 (~0.15 s), max --tare-settle-ms
     constexpr double TORQUE_TARE_REST_WAIT_S = 10.0;     // how long to wait for the shaft (and the fluid) to stop; then start WITHOUT a new zero
 
     // --- ST7789 2.4" SPI TFT (pigpio hardware SPI0: SCL = GPIO 11, SDA/MOSI = GPIO 10) ---
