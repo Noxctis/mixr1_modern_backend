@@ -54,6 +54,8 @@ public:
     // Updated signature for dual-mode control
     bool receive_command(double& target_rpm, int& target_pwm_pct, bool& pi_mode);
     
+    // One-off event line for the dashboard ("EVT:<text>"), e.g. POWER_LIMIT,1 / POWER_LIMIT,0 / POWER_TRIP. Older dashboards ignore it.
+    bool send_event(const std::string& text);
     bool take_tare_request() { const bool r = tare_requested; tare_requested = false; return r; }   // CMD:TARE from the dashboard (read once)
     void drop_client() { disconnect_client(); }      // the main loop can drop the dashboard explicitly
     void stop_server();

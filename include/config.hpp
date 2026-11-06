@@ -77,6 +77,27 @@ namespace Config {
     constexpr unsigned int PIN_START_KEY = 4;             // to GND when pressed, internal pull-up
     constexpr bool STANDALONE_RUN_AT_BOOT = false;        // false = Mode 1 starts STOPPED: turning the knob only sets the target, the KO key starts / stops the motor
 
+    // --- Power safety cap (power_limiter.hpp) ---
+    // The motor may never draw more than POWER_LIMIT_W: above it the PWM ceiling is cut back automatically (Mode 1, Mode 2 and --test).
+    // Measured with the wattmeter (electrical input power); without a wattmeter, torque x speed is used instead.
+    constexpr double POWER_LIMIT_W = 72.0;               // hard ceiling: the power must never go above this
+    constexpr double POWER_LIMIT_AIM = 0.92;             // the limiter regulates at 92 % of it (~66 W), leaving room for the one wattmeter
+                                                         // reading it needs to react, so short peaks (start-up, load changes) stay under 72 W
+    constexpr double POWER_LIMIT_RECOVER_PCT_S = 10.0;   // ceiling released again by 10 % of full PWM per second once 5 % below the aim
+    constexpr double POWER_TRIP_FACTOR = 1.25;           // still above 125 % of the limit (90 W) ...
+    constexpr int    POWER_TRIP_READINGS = 3;            // ... for 3 readings in a row (~0.1 s) -> motor OFF until the operator stops it
+    constexpr double PWM_SLEW_PCT_S = 200.0;             // Mode 1 / 2: PWM may rise at most 200 % per second (0 -> 100 % in 0.5 s), so the
+                                                         // power can never jump faster than the wattmeter (~30 readings/s) can see it
+    // Stall trip: with the power capped, a jammed impeller would sit at 72 W forever. PWM above STALL_PWM_PCT while the shaft
+    // turns slower than STALL_RPM for STALL_TIME_S -> motor OFF until the operator stops it (Mode 1, Mode 2 and --test).
+    constexpr double STALL_PWM_PCT = 25.0;
+    constexpr double STALL_RPM = 20.0;
+    constexpr double STALL_TIME_S = 1.5;
+
+    // --- Impeller check before every start in Mode 1 ---
+    // The first KO press shows "IMPELLER 96 MM?"; a second KO press within this time starts the motor, a knob push cancels.
+    constexpr int START_CONFIRM_TIMEOUT_MS = 10000;
+
     // --- Dashboard heartbeat ---
     // The dashboard should send "CMD:HB" (any line counts) every ~500 ms. Once the daemon has seen one, a dashboard that stays silent
     // for longer than this is dropped -> Mode 1, motor stopped. Dashboards that never send CMD:HB are still caught by the TCP timeouts below.

@@ -142,6 +142,11 @@ bool TelemetryServer::send_packet(double raw_rpm, double filtered_rpm, long long
     return send_to_client(packet);
 }
 
+bool TelemetryServer::send_event(const std::string& text) {
+    if (client_socket < 0) return false;
+    return send_to_client("EVT:" + text + "\n");
+}
+
 bool TelemetryServer::send_packet_ext(double raw_rpm, double feedback_rpm, long long revolutions,
                                       double pwm_pct, double target_rpm, double elapsed_s,
                                       const PowerSample& power, double torque_nm) {

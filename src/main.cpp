@@ -31,6 +31,7 @@
 #include "network.hpp"
 #include "ec11.hpp"
 #include "powermeter.hpp"
+#include "power_limiter.hpp"
 #include "torquesensor.hpp"
 #include "modbus_torque.hpp"
 #include "i2c_util.hpp"
@@ -123,7 +124,7 @@ struct TestOptions {
     double step_to_pct = 0.0;
     double step_at_s = 3.0;
     // Wattmeter (DFRobot SEN0291 / INA219) on I2C bus 1: logs bus voltage, current and power next to every sample. OFF unless you pass --power.
-    bool power = false;              // OFF by default: enable with --power (test runs only; the normal daemon never touches the wattmeter)
+    bool power = true;               // ON by default: it also feeds the 72 W power cap. --no-power turns it off (then torque x speed is used)
     int power_addr = 0x45;
     int power_bus = -1;              // -1 = auto-detect (Config::I2C_BUS_POWER first, then the other bus); --power-bus=N forces one
     int power_div = 5;               // read the wattmeter every N-th loop (5 -> 20 Hz): keeps the control loop timing undisturbed
@@ -473,7 +474,12 @@ int run_test(const TestOptions& options) {
     kinematics.reset(encoder.get_sync_snapshot());
     const long long rev_origin = encoder.get_revolutions();             // revolutions column starts at 0 with the run
     controller.reset();
-    controller.set_max_pwm(options.max_duty_pct / 100.0 * 4095.0);
+    const int duty_cap_counts = static_cast<int>(options.max_duty_pct / 100.0 * 4095.0);
+    controller.set_max_pwm(duty_cap_counts);
+    PowerLimiter limiter;                                           // 72 W safety cap, same as the normal daemon
+    bool limit_reported = false;
+    if (!meter && !tsensor)
+        std::cout << "[SAFETY] WARNING: no wattmeter and no torque sensor: the " << Config::POWER_LIMIT_W << " W power cap CANNOT work in this run.\n";
     if (options.start_at_zero) motor.set_pwm(current_pwm);          // the motor starts exactly at t = 0 of the log
 
     const auto start = std::chrono::steady_clock::now();
@@ -574,8 +580,31 @@ int run_test(const TestOptions& options) {
 
         if (options.use_pi && options.ref_step_to > 0.0 && elapsed >= options.ref_step_at) current_target = options.ref_step_to;
         if (options.use_pi && options.ref_step_to2 > 0.0 && elapsed >= options.ref_step_at2) current_target = options.ref_step_to2;
+        // ---- 72 W power cap + stall trip ----
+        limiter.check_stall(current_pwm, state.ema_filtered_rpm);
+        if (limiter.tripped()) {
+            motor.set_pwm(0);
+            aborted = true;
+            abort_peak_rpm = state.exact_rpm;
+            abort_time_s = elapsed;
+            if (std::string(limiter.trip_reason()) == "STALL")
+                std::cout << "[SAFETY] STALL TRIP at t=" << elapsed << " s: PWM on but the shaft is not turning - motor stopped, run aborted\n";
+            else
+                std::cout << "[SAFETY] POWER TRIP: " << std::fixed << std::setprecision(1) << limiter.last_power() << " W (> "
+                          << Config::POWER_LIMIT_W * Config::POWER_TRIP_FACTOR << " W) at t=" << elapsed << " s - motor stopped, run aborted\n";
+            break;
+        }
+        if (limiter.limiting() != limit_reported) {
+            limit_reported = limiter.limiting();
+            std::cout << "[SAFETY] t=" << std::fixed << std::setprecision(2) << elapsed << " s: "
+                      << (limit_reported ? "power limit reached, PWM capped" : "power back under the limit, cap released") << "\n";
+        }
+        controller.set_max_pwm(std::min(duty_cap_counts, limiter.max_pwm()));
         if (options.use_pi) {
             current_pwm = controller.compute(current_target, state.exact_rpm, period / 1000000.0);
+            motor.set_pwm(current_pwm);
+        } else if (current_pwm > limiter.max_pwm()) {               // open loop (step / sweep / sine / fixed): clamp to the ceiling
+            current_pwm = limiter.max_pwm();
             motor.set_pwm(current_pwm);
         }
 
@@ -597,6 +626,7 @@ int run_test(const TestOptions& options) {
             double v = 0.0, ma = 0.0;
             if (meter->read(v, ma)) {
                 last_v = v; last_ma = ma; ++power_ok_reads; power_fail_streak = 0;
+                limiter.update(v * ma / 1000.0, current_pwm);
             } else {
                 ++power_fail_reads;
                 if (++power_fail_streak > 10) { last_v = std::nan(""); last_ma = std::nan(""); power_dropout = true; }   // do not keep writing a stale value
@@ -607,6 +637,7 @@ int run_test(const TestOptions& options) {
             double tq = 0.0;
             if (tsensor->read(tq)) {
                 last_torque = tq; ++torque_ok_reads; torque_fail_streak = 0;
+                if (!meter) limiter.update(tq * state.ema_filtered_rpm * 2.0 * M_PI / 60.0, current_pwm);   // no wattmeter: cap on shaft power
             } else {
                 ++torque_fail_reads;
                 if (++torque_fail_streak > 10) { last_torque = std::nan(""); torque_dropout = true; }   // RS485 dropout: stop writing a stale value, same rule as the wattmeter
@@ -1412,6 +1443,17 @@ int main(int argc, char** argv) {
     long long rest_anchor = encoder.get_sync_snapshot().count;
     auto rest_since = std::chrono::steady_clock::now();
     bool prev_wants_motor = false;
+    bool start_confirm_pending = false;                            // Mode 1: KO pressed once, waiting for the impeller confirmation
+    auto start_confirm_deadline = std::chrono::steady_clock::now();
+    PowerLimiter limiter;                                          // 72 W safety cap (Config::POWER_LIMIT_W)
+    bool limit_reported = false;                                   // "power limit active" already announced
+    std::string trip_msg;                                          // shown on the screen after a safety trip, until the next start
+    int shaft_power_counter = 0;
+    if (meter)        std::cout << "[SAFETY] Power cap " << Config::POWER_LIMIT_W << " W active, measured with the wattmeter (electrical power).\n";
+    else if (tsensor) std::cout << "[SAFETY] Power cap " << Config::POWER_LIMIT_W << " W active, measured as torque x speed (no wattmeter: "
+                                   "the motor's electrical power is somewhat higher than this).\n";
+    else              std::cout << "[SAFETY] WARNING: no wattmeter and no torque sensor: the " << Config::POWER_LIMIT_W
+                                << " W power cap CANNOT work. Connect the wattmeter.\n";
     long long rev_origin = encoder.get_revolutions();              // revolutions are counted from the start of the current run
     long long rej_origin = encoder.get_index_rejected(), miss_origin = encoder.get_index_missed();
     int tare_phase = 0;                                            // 0 none | 1 waiting for the shaft to stop | 2 zeroing (motor held only if it was asked to run)
@@ -1506,12 +1548,33 @@ int main(int argc, char** argv) {
         };
 
         if (start_key.pressed() && !dashboard_active && impeller_selected) {    // KO key = start / stop the motor (standalone mode only)
-            standalone_running = !standalone_running;
-            pi_control.reset();
-            log_states(standalone_running ? "START   " : "STOP    ");
+            if (standalone_running) {                                // STOP: always immediate
+                standalone_running = false;
+                pi_control.reset();
+                log_states("STOP    ");
+            } else if (!start_confirm_pending) {                     // first press: safety question on the screen
+                start_confirm_pending = true;
+                start_confirm_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(Config::START_CONFIRM_TIMEOUT_MS);
+                std::cout << "[SAFETY] Is the " << Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label
+                          << " impeller fitted? Press KO again to START, push the knob to cancel.\n";
+            } else {                                                 // second press: confirmed
+                start_confirm_pending = false;
+                standalone_running = true;
+                pi_control.reset();
+                log_states("START   ");
+            }
+        }
+        if (start_confirm_pending && (dashboard_active || !impeller_selected || std::chrono::steady_clock::now() >= start_confirm_deadline)) {
+            start_confirm_pending = false;
+            std::cout << "[SAFETY] Start not confirmed: motor stays stopped.\n";
         }
 
-        if (ec11.button_pressed()) {
+        const bool knob_pushed = ec11.button_pressed();            // read ONCE: reading it consumes the press
+        if (knob_pushed && start_confirm_pending) {
+            start_confirm_pending = false;                           // knob push = "no, wrong impeller": cancel, do not start
+            last_button_click = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            std::cout << "[SAFETY] Start cancelled with the knob: motor stays stopped. Double-click the knob to choose another impeller.\n";
+        } else if (knob_pushed) {
             const auto click_time = std::chrono::steady_clock::now();
             const bool double_click = (click_time - last_button_click) <= std::chrono::milliseconds(Config::DOUBLE_CLICK_MS);
             last_button_click = double_click ? click_time - std::chrono::hours(1) : click_time;   // a third press starts a new pair
@@ -1680,13 +1743,56 @@ int main(int argc, char** argv) {
         }
         const bool tare_hold = (tare_phase != 0) && wants_motor;   // an idle zero never blocks anything; it only holds a START that comes mid-zero
 
+        // ---- 72 W power cap ----
+        if (!wants_motor) {
+            if (limit_reported) { limit_reported = false; network->send_event("POWER_LIMIT,0"); }
+            limiter.reset();                                       // the operator stopped the motor: cap (and a trip) released
+        }
+        if (wants_motor && !prev_wants_motor) trip_msg.clear();
+        limiter.check_stall(current_pwm, state.ema_filtered_rpm);  // jammed impeller: PWM on, shaft not turning
+        if (limiter.tripped() && wants_motor) {                    // overload or stall: switch OFF, operator must restart
+            const std::string reason = limiter.trip_reason();
+            if (reason == "STALL")
+                std::cout << "[SAFETY] STALL TRIP: PWM " << std::lround(current_pwm * 100.0 / 4095.0) << " % but the shaft is not turning ("
+                          << std::fixed << std::setprecision(0) << state.ema_filtered_rpm << " RPM) for " << Config::STALL_TIME_S
+                          << " s. Motor switched OFF. Check the impeller / shaft before restarting.\n";
+            else
+                std::cout << "[SAFETY] POWER TRIP: " << std::fixed << std::setprecision(1) << limiter.last_power() << " W (> "
+                          << Config::POWER_LIMIT_W * Config::POWER_TRIP_FACTOR << " W). Motor switched OFF. Check the impeller / shaft before restarting.\n";
+            trip_msg = "TRIP: " + reason;
+            standalone_running = false;
+            dashboard_target_rpm = 0.0;
+            dashboard_target_pwm_pct = 0;
+            network->send_event("POWER_TRIP," + reason);
+            current_pwm = 0;
+            pi_control.reset();
+            motor.set_pwm(0);
+            limiter.reset();
+            continue;                                              // next loop sees wants_motor = false
+        }
+        if (limiter.limiting() && !limit_reported) {
+            limit_reported = true;
+            std::cout << "[SAFETY] Power limit " << Config::POWER_LIMIT_W << " W reached (" << std::fixed << std::setprecision(1)
+                      << limiter.last_power() << " W): PWM capped at " << std::lround(limiter.max_pwm() * 100.0 / 4095.0) << " %.\n";
+            network->send_event("POWER_LIMIT,1");
+        } else if (!limiter.limiting() && limit_reported) {
+            limit_reported = false;
+            std::cout << "[SAFETY] Power back under the limit: PWM cap released.\n";
+            network->send_event("POWER_LIMIT,0");
+        }
+        // PWM ceiling = power cap, and at most PWM_SLEW_PCT_S faster than last loop (no power jump the wattmeter cannot see yet).
+        // It goes into the PI (whose anti-windup uses it) and clamps the open-loop command.
+        const int slew_step = std::max(1, static_cast<int>(Config::PWM_SLEW_PCT_S / 100.0 * 4095.0 * std::max(dt.count(), 0.001)));
+        const int pwm_ceiling = std::min(limiter.max_pwm(), current_pwm + slew_step);
+        pi_control.set_max_pwm(pwm_ceiling);
+
         double active_target = 0.0;      // PI target actually being tracked (0 in open loop)
         if (tare_hold) {
             current_pwm = 0;                                       // motor stays off until the zero is taken
             pi_control.reset();
             motor.set_pwm(0);
         } else if (open_loop) {
-            current_pwm = std::clamp((dashboard_target_pwm_pct * 4095) / 100, 0, 4095);
+            current_pwm = std::clamp((dashboard_target_pwm_pct * 4095) / 100, 0, pwm_ceiling);   // open loop: power cap + slew limit
             motor.set_pwm(current_pwm);
         } else {
             active_target = target;
@@ -1724,9 +1830,16 @@ int main(int argc, char** argv) {
             if (meter->read(v, ma)) {
                 power_sample.bus_v = v; power_sample.current_ma = ma; power_sample.power_w = v * ma / 1000.0;
                 power_fail_streak = 0;
+                limiter.update(power_sample.power_w, current_pwm);
             } else if (++power_fail_streak > 10) {          // do not keep sending a stale value after an I2C dropout
                 power_sample = PowerSample{};
             }
+        }
+
+        if (!meter && tsensor && ++shaft_power_counter >= 5) {   // no wattmeter: cap on shaft power (torque x speed), 20 Hz
+            shaft_power_counter = 0;
+            const double tq = torque_value.load();
+            if (std::isfinite(tq)) limiter.update(tq * state.ema_filtered_rpm * 2.0 * M_PI / 60.0, current_pwm);
         }
 
         if (dashboard_active) {
@@ -1747,7 +1860,9 @@ int main(int argc, char** argv) {
             const auto lcd_t0 = std::chrono::steady_clock::now();
             const double torque_now = torque_value.load();      // real reading from the RS485 sensor (NaN = no sensor / dropout)
             std::ostringstream l1, l2, l3, l4, l5;
-            if (tare_hold)             l1 << "ZEROING TORQUE";
+            if (!trip_msg.empty())     l1 << trip_msg;
+            else if (limit_reported)   l1 << "POWER LIMIT " << std::lround(Config::POWER_LIMIT_W) << "W";
+            else if (tare_hold)        l1 << "ZEROING TORQUE";
             else if (dashboard_active) l1 << "MODE2 DASHBOARD";
             else                       l1 << "MODE1 " << Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label
                                           << (standalone_running ? " RUN" : " STOP");
@@ -1788,6 +1903,13 @@ int main(int argc, char** argv) {
                 lines[2] = menu_entry(1);
                 lines[3] = "TURN KNOB: CHOOSE";
                 lines[4] = "PUSH: CONFIRM";
+            } else if (!dashboard_active && start_confirm_pending) {
+                // safety question before the motor starts
+                lines[0] = std::string("IMPELLER ") + Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label + "?";
+                lines[1] = "KO=YES PUSH=NO";
+                lines[2] = "CHECK THE SHAFT";
+                lines[3] = "BEFORE STARTING";
+                lines[4] = "AUTO-CANCEL 10 S";
             }
             const int step = (lcd.row_count() >= 8) ? 2 : 1;   // OLED: rows 0,2,4,6
             const int n = (lcd.row_count() >= 10) ? 5 : ((lcd.row_count() >= 4) ? 4 : 2);
