@@ -366,6 +366,15 @@ int run_test(const TestOptions& options) {
         if (!fifo_active) std::cerr << "[TEST] SCHED_FIFO request failed; continuing without it.\n";
     }
 
+    // GPIO 13 / 17 / 27 are shared with the pump: never run a test while a MATLAB model drives them.
+    ProcessMonitor matlab_monitor;
+    matlab_monitor.start();
+    if (matlab_monitor.active()) {
+        std::cerr << "[TEST] A MATLAB model is running (" << matlab_monitor.program() << "): it owns GPIO 13/17/27. Stop the model first. NOT starting.\n";
+        matlab_monitor.stop();
+        pigpio_stop(pi);
+        return 1;
+    }
     AMT102Encoder encoder(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
     MotorController motor(pi);
     KinematicsEngine kinematics;
@@ -556,6 +565,14 @@ int run_test(const TestOptions& options) {
         const auto now = std::chrono::steady_clock::now();
         const double elapsed = std::chrono::duration<double>(now - start).count();
         if (elapsed >= total_duration) break;
+        if (matlab_monitor.active()) {                       // a model started mid-test: mixer off, pins left to the model
+            motor.release();
+            aborted = true;
+            abort_time_s = elapsed;
+            std::cout << "[TEST] ABORT: MATLAB model started (" << matlab_monitor.program() << ") at t=" << elapsed
+                      << " s - mixer driver switched off, GPIO 13/17/27 left to the model\n";
+            break;
+        }
 
         if (options.sine_mode && options.use_pi) {
             current_target = options.target_rpm + (options.sine_amplitude * std::sin(2.0 * M_PI * options.sine_freq_hz * elapsed));
@@ -1287,8 +1304,14 @@ int main(int argc, char** argv) {
 
     KinematicsEngine kinematics;
     AMT102Encoder encoder(pi, Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X);
-    MotorController motor(pi);
-    std::cout << "[MIXR-1] Motor driver initialised: commanded PWM = 0 %.  (start with --debug-motor to print every PWM the daemon commands)\n";
+    // A MATLAB model may already be running: then GPIO 13 / 17 / 27 are the pump's, and the motor driver only gets EN low.
+    ProcessMonitor matlab_monitor;
+    matlab_monitor.start();
+    MotorController motor(pi, matlab_monitor.active());
+    if (motor.is_released())
+        std::cout << "[MIXR-1] MATLAB model already running (" << matlab_monitor.program() << "): motor driver held OFF, GPIO 13/17/27 left to the model.\n";
+    else
+        std::cout << "[MIXR-1] Motor driver initialised: commanded PWM = 0 %.  (start with --debug-motor to print every PWM the daemon commands)\n";
     const int display_addr = (Config::DISPLAY_TYPE == Config::DisplayType::SSD1306_128x64) ? Config::I2C_OLED_ADDR : Config::I2C_LCD_ADDR;
     int display_bus = Config::I2C_BUS_DISPLAY;
     const bool spi_display = (Config::DISPLAY_TYPE == Config::DisplayType::ST7789_320x240);
@@ -1470,7 +1493,6 @@ int main(int argc, char** argv) {
     int power_fail_streak = 0;
 
     bool dashboard_connected = false;
-    bool simulink_is_active = false;
     bool mode3_notified = false;
     bool prev_open_loop = false;
     double standalone_target_rpm = 0.0;
@@ -1484,7 +1506,6 @@ int main(int argc, char** argv) {
     int dashboard_target_pwm_pct = 0;
     bool dashboard_pi_mode = false;
     int current_pwm = 0;
-    int simulink_check_counter = Config::SIMULINK_CHECK_INTERVAL;
     int lcd_prescaler = 0;
     int ec11_accum = 0;
     auto ec11_last_edge = std::chrono::steady_clock::now();
@@ -1538,27 +1559,65 @@ int main(int argc, char** argv) {
 
         network->poll_for_client();
 
-        if (++simulink_check_counter >= Config::SIMULINK_CHECK_INTERVAL) {
-            simulink_check_counter = 0;
-            simulink_is_active = ProcessMonitor::is_simulink_running();
-        }
-
-        if (simulink_is_active) {
+        // ---- Mode 3: a MATLAB / Simulink model owns the rig ----
+        // GPIO 13 / 17 / 27 are shared with the pump. While the model runs the daemon switches the mixer driver OFF (EN low) and
+        // does not write those pins at all; every motor command is forgotten, so nothing restarts by itself when control comes back.
+        if (matlab_monitor.active()) {
             if (!mode3_notified) {
-                std::cout << "[MIXR-1] MATLAB detected. Releasing motor control...\n";
                 mode3_notified = true;
+                const bool was_running = current_pwm > 0;
+                motor.release();                                   // EN low: mixer off at once. GPIO 13 untouched (pump PWM)
+                current_pwm = 0;
+                standalone_running = false;                        // Mode 1: STOPPED afterwards, KO must be pressed again
+                standalone_target_rpm = 0.0;
+                start_confirm_pending = false;
+                tare_on_this_start = false;
+                dashboard_target_rpm = 0.0;                        // Mode 2: target 0 afterwards (the dashboard also sends 0)
+                dashboard_target_pwm_pct = 0;
+                dashboard_pi_mode = false;
+                prev_wants_motor = false;
+                prev_open_loop = false;
                 pi_control.reset();
+                limiter.reset();
+                if (limit_reported) { limit_reported = false; network->send_event("POWER_LIMIT,0"); }
+                trip_msg.clear();
+                if (tare_phase != 0) { tare_cmd.store(0); tare_phase = 0; }   // a zero in progress is cancelled (motor is off anyway)
+                ec11_accum = 0;
+                std::cout << "[MIXR-1] MODE3: MATLAB model detected (" << matlab_monitor.program() << "). Mixer motor switched OFF"
+                          << (was_running ? " (it was running)" : "") << ", all motor targets cleared, GPIO 13/17/27 handed to the model.\n";
+                const char* lock[5] = {"MODE3 MATLAB", "MIXER LOCKED", "MOTOR OFF", "SIMULINK RUNNING", "STOP MODEL: EXIT"};   // <= 17 chars (TFT width)
+                const int step = (lcd.row_count() >= 8) ? 2 : 1;
+                const int n = (lcd.row_count() >= 10) ? 5 : ((lcd.row_count() >= 4) ? 4 : 2);
+                for (int i = 0; i < n; ++i) { lcd.print_line(i * step, lock[i]); last_lines[i] = lock[i]; }
             }
-            motor.set_pwm(0);
-            if (network->has_client()) network->send_packet(-2.0, -2.0, -2);
+            if (network->has_client()) network->send_packet(-2.0, -2.0, -2);   // dashboard: locked page
             continue;
         }
 
         if (mode3_notified) {
-            std::cout << "[MIXR-1] MATLAB teardown complete.\n";
             mode3_notified = false;
+            motor.reclaim();                                       // EN low, INA/INB back to the mixer's direction, PWM 0 %, EN high
+            current_pwm = 0;
+            // Anything that piled up while MATLAB had the rig is thrown away: KO / knob presses, knob turns, and dashboard commands
+            // (an RPM queued during the lock must never start the motor). The dashboard re-sends RPM 0 and its settings itself.
+            (void)start_key.pressed();
+            (void)ec11.button_pressed();
+            (void)ec11.read_delta();
+            ec11_accum = 0;
+            if (network->has_client()) {
+                double ignore_rpm = 0.0; int ignore_pwm = 0; bool ignore_mode = false;
+                network->receive_command(ignore_rpm, ignore_pwm, ignore_mode);
+                (void)network->take_tare_request();
+            }
             kinematics.reset(encoder.get_sync_snapshot());
             pi_control.reset();
+            limiter.reset();
+            rest_anchor = encoder.get_sync_snapshot().count;
+            rest_since = current_time;
+            rev_origin = encoder.get_revolutions();
+            for (auto& line : last_lines) line.clear();            // redraw the whole screen
+            std::cout << "[MIXR-1] MATLAB model gone: control handed back to the daemon (motor STOPPED, "
+                      << (network->has_client() ? "MODE2 dashboard" : "MODE1 knob: press KO to start") << ").\n";
         }
 
         // ---- Connection edge: the dashboard owns control while connected ----

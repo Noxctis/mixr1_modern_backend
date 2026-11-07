@@ -35,7 +35,10 @@ namespace Config {
     constexpr int LOOP_DELAY_US = 10000; 
     constexpr int NETWORK_PRESCALER = 1;
     constexpr int LCD_PRESCALER = 10;   // 25 x 10ms = 250ms refresh
-    constexpr int SIMULINK_CHECK_INTERVAL = 100;         
+    // MATLAB / Simulink detection (process_monitor.hpp): any <model>.elf the Simulink Pi package runs. Take-over within one scan,
+    // hand-back only after the model has been gone this long (a Monitor & Tune restart does not bounce control back and forth).
+    constexpr int MATLAB_SCAN_PERIOD_MS = 200;
+    constexpr int MATLAB_RELEASE_DEBOUNCE_MS = 1000;
     constexpr int TCP_PORT = 5000;                       
 
     // --- Hardware Pinout (BCM GPIO) ---
@@ -46,7 +49,14 @@ namespace Config {
     constexpr unsigned int PIN_M1_EN = 18;               
     constexpr unsigned int PIN_M1_INA = 27;              
     constexpr unsigned int PIN_M1_INB = 17;              
-    constexpr unsigned int PIN_M1_PWM = 13;              
+    constexpr unsigned int PIN_M1_PWM = 13;
+    // --- Fluid controller outputs (Simulink act_wrapper.c). The pump SHARES GPIO 13 / 17 / 27 with the mixer above. ---
+    // The daemon never drives these; it only parks them OFF whenever it owns the rig (start-up and every hand-back from MATLAB),
+    // so a model that was killed instead of stopped cannot leave the pump or the valve switched on.
+    constexpr unsigned int PIN_FLUID_PUMP_EN = 15;
+    constexpr unsigned int PIN_FLUID_SOL_INA = 5;
+    constexpr unsigned int PIN_FLUID_SOL_INB = 6;
+    constexpr unsigned int PIN_FLUID_SOL_PWM = 12;       // hardware PWM0 in the model; parked as a plain output, low
     // --- I2C buses (Linux /dev/i2c-N) ---
     // Each device is looked for on its preferred bus first, then on the other one, so the daemon also works if you move a device.
     constexpr int I2C_BUS_HARDWARE = 1;                  // the Pi's hardware I2C: GPIO 2 = SDA, GPIO 3 = SCL
