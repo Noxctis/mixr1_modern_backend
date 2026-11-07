@@ -1498,6 +1498,8 @@ int main(int argc, char** argv) {
     auto rest_since = std::chrono::steady_clock::now();
     bool prev_wants_motor = false;
     bool start_confirm_pending = false;                            // Mode 1: KO pressed once, waiting for the impeller confirmation
+    bool start_tare_choice = true;                                 // Mode 1: TARE yes/no on the confirmation screen (knob turn toggles it)
+    bool tare_on_this_start = false;                               // Mode 1: the choice that was confirmed with the second KO press
     auto start_confirm_deadline = std::chrono::steady_clock::now();
     PowerLimiter limiter;                                          // 72 W safety cap (Config::POWER_LIMIT_W)
     bool limit_reported = false;                                   // "power limit active" already announced
@@ -1611,13 +1613,16 @@ int main(int argc, char** argv) {
                 log_states("STOP    ");
             } else if (!start_confirm_pending) {                     // first press: safety question on the screen
                 start_confirm_pending = true;
+                start_tare_choice = true;                            // default answer YES; turn the knob to change it
                 start_confirm_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(Config::START_CONFIRM_TIMEOUT_MS);
                 std::cout << "[SAFETY] Is the " << Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label
-                          << " impeller fitted? Press KO again to START, push the knob to cancel.\n";
+                          << " impeller fitted? Turn the knob to choose TARE yes/no (now YES), press KO again to START, push the knob to cancel.\n";
             } else {                                                 // second press: confirmed
                 start_confirm_pending = false;
+                tare_on_this_start = start_tare_choice;
                 standalone_running = true;
                 pi_control.reset();
+                std::cout << "[TORQUE] Operator chose TARE " << (tare_on_this_start ? "YES" : "NO") << " for this start.\n";
                 log_states("START   ");
             }
         }
@@ -1679,6 +1684,11 @@ int main(int argc, char** argv) {
                 // impeller menu: one detent moves the cursor one place, no speed ramp
                 menu_cursor = std::clamp(menu_cursor + (clicks > 0 ? 1 : -1), 0, static_cast<int>(Config::IMPELLERS.size()) - 1);
                 std::cout << "[MENU] impeller choice: " << Config::IMPELLERS[static_cast<size_t>(menu_cursor)].label << "\n";
+            } else if (!dashboard_active && start_confirm_pending) {
+                // start confirmation screen: any turn flips TARE YES <-> NO (the motor target is NOT changed)
+                if (std::abs(clicks) % 2 == 1) start_tare_choice = !start_tare_choice;
+                start_confirm_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(Config::START_CONFIRM_TIMEOUT_MS);   // still busy: restart the 10 s
+                std::cout << "[TORQUE] Tare choice: " << (start_tare_choice ? "YES" : "NO") << "\n";
             } else {
             // Slow: +/-1 RPM per detent.  Fast: snap to the next multiple of 10 in the turning direction.
             const int dir = (clicks > 0) ? 1 : -1;
@@ -1805,7 +1815,13 @@ int main(int argc, char** argv) {
                 zero_valid = false;
             }
         }
-        if (wants_motor && !prev_wants_motor && current_pwm == 0 && (!kAutoTare || !zero_valid)) request_tare("Start of run");
+        if (wants_motor && !prev_wants_motor && current_pwm == 0) {
+            // Standalone: tare only if the operator answered YES on the confirmation screen. Dashboard: no knob, so every start tares (CMD:TARE also works).
+            const bool need_tare = kAutoTare ? !zero_valid : (dashboard_active || tare_on_this_start);
+            if (need_tare) request_tare("Start of run");
+            else if (tsensor) std::cout << "[TORQUE] Start WITHOUT tare (operator chose NO): zero from before is kept.\n";
+            tare_on_this_start = false;                            // the answer is valid for this start only
+        }
         prev_wants_motor = wants_motor;
         if (network->take_tare_request()) {
             if (wants_motor) std::cout << "[TORQUE] Dashboard CMD:TARE ignored: the motor is commanded to run (set it to 0 first).\n";
@@ -2008,10 +2024,10 @@ int main(int argc, char** argv) {
             } else if (!dashboard_active && start_confirm_pending) {
                 // safety question before the motor starts
                 lines[0] = std::string("IMPELLER ") + Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label + "?";
-                lines[1] = "KO=YES PUSH=NO";
-                lines[2] = "CHECK THE SHAFT";
-                lines[3] = "BEFORE STARTING";
-                lines[4] = "AUTO-CANCEL 10 S";
+                lines[1] = std::string("TARE: ") + (start_tare_choice ? "YES" : "NO");
+                lines[2] = "TURN: YES/NO";
+                lines[3] = "KO=GO PUSH=ABORT";
+                lines[4] = "CHECK THE SHAFT";
             }
             const int step = (lcd.row_count() >= 8) ? 2 : 1;   // OLED: rows 0,2,4,6
             const int n = (lcd.row_count() >= 10) ? 5 : ((lcd.row_count() >= 4) ? 4 : 2);
