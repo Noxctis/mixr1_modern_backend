@@ -1329,6 +1329,9 @@ int main(int argc, char** argv) {
     }
     // Torque sensor (RS485 Modbus): a Modbus request + reply at 9600 baud takes ~20 ms, which would stall the 10 ms control loop, so it is polled
     // in a background thread. The thread is moved OFF the control core and back to normal scheduling (std::thread would inherit core 3 + SCHED_FIFO).
+    // TEST VERSION: no automatic tare. The torque amplifier is zeroed ONLY at the start of a run (and by an explicit dashboard CMD:TARE).
+    // Set to true to get back the old behaviour (boot zero, idle zero after a stop, idle re-zero on drift, check before start).
+    constexpr bool kAutoTare = false;
     std::unique_ptr<ModbusTorque> tsensor;
     std::atomic<double> torque_value{std::numeric_limits<double>::quiet_NaN()};   // already zeroed (software tare subtracted)
     std::atomic<bool> torque_stop{false};
@@ -1349,7 +1352,7 @@ int main(int argc, char** argv) {
             std::cout << "[MIXR-1] Torque sensor answering on " << torque_cfg.port << " (slave " << torque_cfg.slave_id << ", reg " << torque_cfg.reg_addr
                       << " x" << torque_cfg.reg_count << ", " << torque_cfg.value_format << "): streaming torque to the dashboard.\n";
             // Zero the amplifier at no load BEFORE the polling thread starts (nothing else may use the port during the zero command).
-            if (do_tare) boot_zero_ok = zero_torque_at_rest(*tsensor, encoder, tare_settle_ms, torque_cfg.scale, "[MIXR-1]");
+            if (kAutoTare && do_tare) boot_zero_ok = zero_torque_at_rest(*tsensor, encoder, tare_settle_ms, torque_cfg.scale, "[MIXR-1]");
             torque_thread = std::thread([&]() {
                 cpu_set_t others;
                 CPU_ZERO(&others);
@@ -1614,7 +1617,6 @@ int main(int argc, char** argv) {
             } else {                                                 // second press: confirmed
                 start_confirm_pending = false;
                 standalone_running = true;
-                trip_msg.clear();                                    // new run: remove the old TRIP label
                 pi_control.reset();
                 log_states("START   ");
             }
@@ -1638,7 +1640,6 @@ int main(int argc, char** argv) {
                 // impeller menu: a press confirms the highlighted impeller
                 impeller_selected = true;
                 impeller_idx = menu_cursor;
-                trip_msg.clear();                                    // new impeller choice: remove the old TRIP label
                 impeller_max_rpm = Config::IMPELLERS[static_cast<size_t>(impeller_idx)].max_rpm;
                 standalone_target_rpm = 0.0;
                 standalone_running = Config::STANDALONE_RUN_AT_BOOT;
@@ -1649,7 +1650,6 @@ int main(int argc, char** argv) {
             } else if (double_click && !dashboard_active) {
                 // double click = back to the impeller menu, motor off
                 impeller_selected = false;
-                trip_msg.clear();                            // back to the menu: remove the old TRIP label
                 standalone_target_rpm = 0.0;
                 standalone_running = false;                  // after choosing again the KO key must be pressed to start
                 pi_control.reset();
@@ -1742,7 +1742,7 @@ int main(int argc, char** argv) {
         };
         if (current_pwm > 0) { zero_valid = false; idle_zero_tried = false; }   // the motor ran: the next run needs a fresh zero
         // Idle zero: the shaft has come to rest after a stop -> zero now, while nothing waits for it.
-        if (tsensor && tare_phase == 0 && !wants_motor && !zero_valid && !idle_zero_tried && shaft_at_rest) {
+        if (kAutoTare && tsensor && tare_phase == 0 && !wants_motor && !zero_valid && !idle_zero_tried && shaft_at_rest) {
             idle_zero_tried = true;
             tare_cmd.store(1);
             tare_phase = 2;
@@ -1774,7 +1774,7 @@ int main(int argc, char** argv) {
         }
         if (current_pwm > 0) idle_rezeros = 0;
         // Idle at rest after a zero: if the amplifier drifts away from 0.000, send the zero command again (no waiting for START).
-        if (tsensor && zero_valid && tare_phase == 0 && !wants_motor && shaft_at_rest && rest_torque.size() >= 50
+        if (kAutoTare && tsensor && zero_valid && tare_phase == 0 && !wants_motor && shaft_at_rest && rest_torque.size() >= 50
             && idle_rezeros < Config::TORQUE_IDLE_REZERO_MAX && current_time - last_zero_time > std::chrono::seconds(2)) {
             const double mean = std::accumulate(rest_torque.begin(), rest_torque.end(), 0.0) / static_cast<double>(rest_torque.size());
             if (std::fabs(mean) > Config::TORQUE_ZERO_CHECK_COUNTS * torque_cfg.scale) {
@@ -1787,7 +1787,7 @@ int main(int argc, char** argv) {
                 tare_deadline = current_time + std::chrono::milliseconds(Config::TORQUE_TARE_TIMEOUT_MS);
             }
         }
-        if (wants_motor && !prev_wants_motor && current_pwm == 0 && zero_valid && tsensor) {
+        if (kAutoTare && wants_motor && !prev_wants_motor && current_pwm == 0 && zero_valid && tsensor) {
             const double tol = Config::TORQUE_ZERO_CHECK_COUNTS * torque_cfg.scale;
             if (rest_torque.size() >= 30) {      // (uses the same 0.5 s at-rest average as the idle check)
                 const double mean = std::accumulate(rest_torque.begin(), rest_torque.end(), 0.0) / static_cast<double>(rest_torque.size());
@@ -1805,8 +1805,7 @@ int main(int argc, char** argv) {
                 zero_valid = false;
             }
         }
-        if (wants_motor && !prev_wants_motor && current_pwm == 0 && !zero_valid) request_tare("Start of run");
-        if (wants_motor && !prev_wants_motor) trip_msg.clear();   // must come BEFORE prev_wants_motor is updated (also covers dashboard starts)
+        if (wants_motor && !prev_wants_motor && current_pwm == 0 && (!kAutoTare || !zero_valid)) request_tare("Start of run");
         prev_wants_motor = wants_motor;
         if (network->take_tare_request()) {
             if (wants_motor) std::cout << "[TORQUE] Dashboard CMD:TARE ignored: the motor is commanded to run (set it to 0 first).\n";
@@ -1851,6 +1850,7 @@ int main(int argc, char** argv) {
             if (limit_reported) { limit_reported = false; network->send_event("POWER_LIMIT,0"); }
             limiter.reset();                                       // the operator stopped the motor: cap (and a trip) released
         }
+        if (wants_motor && !prev_wants_motor) trip_msg.clear();
         limiter.check_stall(current_pwm, state.ema_filtered_rpm);  // jammed impeller: PWM on, shaft not turning
         if (limiter.tripped() && wants_motor) {                    // overload or stall: switch OFF, operator must restart
             const std::string reason = limiter.trip_reason();
