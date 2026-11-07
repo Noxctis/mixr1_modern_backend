@@ -1614,6 +1614,7 @@ int main(int argc, char** argv) {
             } else {                                                 // second press: confirmed
                 start_confirm_pending = false;
                 standalone_running = true;
+                trip_msg.clear();                                    // new run: remove the old TRIP label
                 pi_control.reset();
                 log_states("START   ");
             }
@@ -1637,6 +1638,7 @@ int main(int argc, char** argv) {
                 // impeller menu: a press confirms the highlighted impeller
                 impeller_selected = true;
                 impeller_idx = menu_cursor;
+                trip_msg.clear();                                    // new impeller choice: remove the old TRIP label
                 impeller_max_rpm = Config::IMPELLERS[static_cast<size_t>(impeller_idx)].max_rpm;
                 standalone_target_rpm = 0.0;
                 standalone_running = Config::STANDALONE_RUN_AT_BOOT;
@@ -1647,6 +1649,7 @@ int main(int argc, char** argv) {
             } else if (double_click && !dashboard_active) {
                 // double click = back to the impeller menu, motor off
                 impeller_selected = false;
+                trip_msg.clear();                            // back to the menu: remove the old TRIP label
                 standalone_target_rpm = 0.0;
                 standalone_running = false;                  // after choosing again the KO key must be pressed to start
                 pi_control.reset();
@@ -1803,6 +1806,7 @@ int main(int argc, char** argv) {
             }
         }
         if (wants_motor && !prev_wants_motor && current_pwm == 0 && !zero_valid) request_tare("Start of run");
+        if (wants_motor && !prev_wants_motor) trip_msg.clear();   // must come BEFORE prev_wants_motor is updated (also covers dashboard starts)
         prev_wants_motor = wants_motor;
         if (network->take_tare_request()) {
             if (wants_motor) std::cout << "[TORQUE] Dashboard CMD:TARE ignored: the motor is commanded to run (set it to 0 first).\n";
@@ -1847,7 +1851,6 @@ int main(int argc, char** argv) {
             if (limit_reported) { limit_reported = false; network->send_event("POWER_LIMIT,0"); }
             limiter.reset();                                       // the operator stopped the motor: cap (and a trip) released
         }
-        if (wants_motor && !prev_wants_motor) trip_msg.clear();
         limiter.check_stall(current_pwm, state.ema_filtered_rpm);  // jammed impeller: PWM on, shaft not turning
         if (limiter.tripped() && wants_motor) {                    // overload or stall: switch OFF, operator must restart
             const std::string reason = limiter.trip_reason();
