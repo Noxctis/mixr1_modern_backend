@@ -102,45 +102,63 @@ void LCD1602::tft_window(int x0, int y0, int x1, int y1) const {
 
 bool LCD1602::tft_init() {
     using namespace Config;
+    constexpr int INIT_PASSES = 2;                         // the whole reset + init sequence is sent twice: the ST7789 cannot be read back, so this is the cheap insurance against a lost command
+
     set_mode(pi_handle, PIN_TFT_DC,  PI_OUTPUT);
     set_mode(pi_handle, PIN_TFT_RES, PI_OUTPUT);
     set_mode(pi_handle, PIN_TFT_CS,  PI_OUTPUT);
-    gpio_write(pi_handle, PIN_TFT_CS, 1);                  // idle high; pulled low only while a transfer is in progress
+    gpio_write(pi_handle, PIN_TFT_CS, 1);                  // CS HIGH while the SPI peripheral takes over the pins: a clock glitch now is ignored by the screen
     gpio_write(pi_handle, PIN_TFT_DC, 0);
+    gpio_write(pi_handle, PIN_TFT_RES, 1);
 
-    // hardware reset
-    gpio_write(pi_handle, PIN_TFT_RES, 1); usleep(10000);
-    gpio_write(pi_handle, PIN_TFT_RES, 0); usleep(20000);
-    gpio_write(pi_handle, PIN_TFT_RES, 1); usleep(150000);
-
-    gpio_write(pi_handle, PIN_TFT_CS, 0);                  // selected for the whole init sequence
     // bits 5 and 6 = 1: CE0 / CE1 (GPIO 8 / 7) are NOT taken over by the SPI peripheral. They belong to the extra I2C bus (bus 3).
     const unsigned flags = static_cast<unsigned>(TFT_SPI_MODE & 3) | (1u << 5) | (1u << 6);
-    spi_handle = spi_open(pi_handle, static_cast<unsigned>(TFT_SPI_CHANNEL), TFT_SPI_BAUD, flags);
-    if (spi_handle < 0) { gpio_write(pi_handle, PIN_TFT_CS, 1); return false; }
+    if (spi_handle < 0) spi_handle = spi_open(pi_handle, static_cast<unsigned>(TFT_SPI_CHANNEL), TFT_SPI_BAUD, flags);
+    if (spi_handle < 0) return false;                      // CS is already high
+    usleep(10000);                                         // SCLK / MOSI settle at their idle level, still with CS high
 
-    tft_command(0x01); usleep(150000);                     // SWRESET
-    tft_command(0x11); usleep(120000);                     // SLPOUT
-    { const unsigned char a[] = {0x55};                                         tft_command(0x3A, a, 1); }   // COLMOD: 16 bit / pixel
-    { const unsigned char a[] = {static_cast<unsigned char>(TFT_MADCTL)};       tft_command(0x36, a, 1); }   // MADCTL: orientation
-    { const unsigned char a[] = {0x0C, 0x0C, 0x00, 0x33, 0x33};                 tft_command(0xB2, a, 5); }   // PORCTRL
-    { const unsigned char a[] = {0x35};                                         tft_command(0xB7, a, 1); }   // GCTRL
-    { const unsigned char a[] = {0x19};                                         tft_command(0xBB, a, 1); }   // VCOMS
-    { const unsigned char a[] = {0x2C};                                         tft_command(0xC0, a, 1); }   // LCMCTRL
-    { const unsigned char a[] = {0x01};                                         tft_command(0xC2, a, 1); }   // VDVVRHEN
-    { const unsigned char a[] = {0x12};                                         tft_command(0xC3, a, 1); }   // VRHS
-    { const unsigned char a[] = {0x20};                                         tft_command(0xC4, a, 1); }   // VDVS
-    { const unsigned char a[] = {0x0F};                                         tft_command(0xC6, a, 1); }   // FRCTRL2
-    { const unsigned char a[] = {0xA4, 0xA1};                                   tft_command(0xD0, a, 2); }   // PWCTRL1
-    { const unsigned char a[] = {0xD0, 0x04, 0x0D, 0x11, 0x13, 0x2B, 0x3F, 0x54, 0x4C, 0x18, 0x0D, 0x0B, 0x1F, 0x23}; tft_command(0xE0, a, 14); }   // PVGAMCTRL
-    { const unsigned char a[] = {0xD0, 0x04, 0x0C, 0x11, 0x13, 0x2C, 0x3F, 0x44, 0x51, 0x2F, 0x1F, 0x1F, 0x20, 0x23}; tft_command(0xE1, a, 14); }   // NVGAMCTRL
-    tft_command(TFT_INVERT ? 0x21 : 0x20);                 // INVON / INVOFF
-    tft_command(0x13);                                     // NORON
-    tft_command(0x29); usleep(20000);                      // DISPON
-    gpio_write(pi_handle, PIN_TFT_CS, 1);                  // deselect: the ST7789 re-syncs its byte alignment on every CS rising edge
+    // a few empty CS frames: whatever half-received byte the screen may hold from the previous run is discarded
+    for (int i = 0; i < 3; ++i) {
+        gpio_write(pi_handle, PIN_TFT_CS, 0); usleep(200);
+        gpio_write(pi_handle, PIN_TFT_CS, 1); usleep(200);
+    }
+
+    // one command = one CS frame: the ST7789 re-syncs its byte alignment on every CS rising edge, so a single lost / extra bit
+    // can no longer shift all the following init bytes (that was the "white screen until I restart the daemon" failure).
+    auto cmd = [&](unsigned char c, const unsigned char* a = nullptr, int n = 0) {
+        gpio_write(pi_handle, PIN_TFT_CS, 0);
+        tft_command(c, a, n);
+        gpio_write(pi_handle, PIN_TFT_CS, 1);
+    };
+
+    for (int pass = 0; pass < INIT_PASSES; ++pass) {
+        // hardware reset
+        gpio_write(pi_handle, PIN_TFT_RES, 1); usleep(10000);
+        gpio_write(pi_handle, PIN_TFT_RES, 0); usleep(30000);
+        gpio_write(pi_handle, PIN_TFT_RES, 1); usleep(150000);
+
+        cmd(0x01); usleep(150000);                         // SWRESET
+        cmd(0x11); usleep(120000);                         // SLPOUT
+        { const unsigned char a[] = {0x55};                                         cmd(0x3A, a, 1); }   // COLMOD: 16 bit / pixel
+        { const unsigned char a[] = {static_cast<unsigned char>(TFT_MADCTL)};       cmd(0x36, a, 1); }   // MADCTL: orientation
+        { const unsigned char a[] = {0x0C, 0x0C, 0x00, 0x33, 0x33};                 cmd(0xB2, a, 5); }   // PORCTRL
+        { const unsigned char a[] = {0x35};                                         cmd(0xB7, a, 1); }   // GCTRL
+        { const unsigned char a[] = {0x19};                                         cmd(0xBB, a, 1); }   // VCOMS
+        { const unsigned char a[] = {0x2C};                                         cmd(0xC0, a, 1); }   // LCMCTRL
+        { const unsigned char a[] = {0x01};                                         cmd(0xC2, a, 1); }   // VDVVRHEN
+        { const unsigned char a[] = {0x12};                                         cmd(0xC3, a, 1); }   // VRHS
+        { const unsigned char a[] = {0x20};                                         cmd(0xC4, a, 1); }   // VDVS
+        { const unsigned char a[] = {0x0F};                                         cmd(0xC6, a, 1); }   // FRCTRL2
+        { const unsigned char a[] = {0xA4, 0xA1};                                   cmd(0xD0, a, 2); }   // PWCTRL1
+        { const unsigned char a[] = {0xD0, 0x04, 0x0D, 0x11, 0x13, 0x2B, 0x3F, 0x54, 0x4C, 0x18, 0x0D, 0x0B, 0x1F, 0x23}; cmd(0xE0, a, 14); }   // PVGAMCTRL
+        { const unsigned char a[] = {0xD0, 0x04, 0x0C, 0x11, 0x13, 0x2C, 0x3F, 0x44, 0x51, 0x2F, 0x1F, 0x1F, 0x20, 0x23}; cmd(0xE1, a, 14); }   // NVGAMCTRL
+        cmd(TFT_INVERT ? 0x21 : 0x20);                     // INVON / INVOFF
+        cmd(0x13);                                         // NORON
+        cmd(0x29); usleep(30000);                          // DISPON
+    }
 
     initialized = true;
-    tft_clear();
+    tft_clear();                                           // paints the whole screen with the background colour (black): no more white
     return true;
 }
 
