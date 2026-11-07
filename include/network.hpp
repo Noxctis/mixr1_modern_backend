@@ -23,6 +23,7 @@ private:
     int send_fail_streak = 0;     // consecutive sends the peer did not take (a stalled / sleeping dashboard)
     bool heartbeat_seen = false;  // client has sent CMD:HB at least once -> the heartbeat timeout is enforced
     bool tare_requested = false;  // client sent CMD:TARE
+    bool start_tare = true;       // client sent CMD:STARTTARE,0|1: tare the torque amplifier at the next start? (default yes)
     std::chrono::steady_clock::time_point last_rx{};   // last time ANY byte arrived from the client
 
     void disconnect_client();
@@ -56,6 +57,7 @@ public:
     
     // One-off event line for the dashboard ("EVT:<text>"), e.g. POWER_LIMIT,1 / POWER_LIMIT,0 / POWER_TRIP. Older dashboards ignore it.
     bool send_event(const std::string& text);
+    bool wants_start_tare() const { return start_tare; }   // the dashboard's answer to "tare before this start?"
     bool take_tare_request() { const bool r = tare_requested; tare_requested = false; return r; }   // CMD:TARE from the dashboard (read once)
     void drop_client() { disconnect_client(); }      // the main loop can drop the dashboard explicitly
     void stop_server();

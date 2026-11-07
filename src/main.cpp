@@ -1816,8 +1816,9 @@ int main(int argc, char** argv) {
             }
         }
         if (wants_motor && !prev_wants_motor && current_pwm == 0) {
-            // Standalone: tare only if the operator answered YES on the confirmation screen. Dashboard: no knob, so every start tares (CMD:TARE also works).
-            const bool need_tare = kAutoTare ? !zero_valid : (dashboard_active || tare_on_this_start);
+            // Standalone: tare only if the operator answered YES on the knob confirmation screen. Dashboard: only if it answered YES in its start dialog
+            // (CMD:STARTTARE; no answer = YES). CMD:TARE from the dashboard still works on its own.
+            const bool need_tare = kAutoTare ? !zero_valid : (dashboard_active ? network->wants_start_tare() : tare_on_this_start);
             if (need_tare) request_tare("Start of run");
             else if (tsensor) std::cout << "[TORQUE] Start WITHOUT tare (operator chose NO): zero from before is kept.\n";
             tare_on_this_start = false;                            // the answer is valid for this start only

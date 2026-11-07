@@ -21,6 +21,7 @@ void TelemetryServer::disconnect_client() {
     torque_requested = false;
     heartbeat_seen = false;
     tare_requested = false;
+    start_tare = true;
     send_fail_streak = 0;
     rx_buffer.clear();
 }
@@ -45,6 +46,7 @@ void TelemetryServer::adopt_client(int fd) {
     torque_requested = false;
     heartbeat_seen = false;
     tare_requested = false;
+    start_tare = true;
     send_fail_streak = 0;
     last_rx = std::chrono::steady_clock::now();
 }
@@ -215,6 +217,11 @@ bool TelemetryServer::receive_command(double& target_rpm, int& target_pwm_pct, b
         if (line.find("CMD:HB") != std::string::npos) {           // heartbeat: arms the timeout check, nothing else to do
             if (!heartbeat_seen) std::cout << "[MIXR-1] Dashboard heartbeat active (timeout " << Config::HEARTBEAT_TIMEOUT_MS << " ms)\n";
             heartbeat_seen = true;
+            continue;
+        }
+        if (line.find("CMD:STARTTARE,") != std::string::npos) {   // dashboard's tare yes/no for the next start (sent before the RPM command)
+            start_tare = (line.find("CMD:STARTTARE,0") == std::string::npos);
+            std::cout << "[MIXR-1] Dashboard: tare at start = " << (start_tare ? "YES" : "NO") << "\n";
             continue;
         }
         if (line.find("CMD:TARE") != std::string::npos) {
