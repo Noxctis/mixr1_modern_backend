@@ -44,6 +44,12 @@ void AMT102Encoder::isr_index(int pi, unsigned gpio, unsigned level, uint32_t ti
     const int dir = self->last_cross_dir * Config::ENCODER_DIRECTION;
     self->revolutions.fetch_add(dir * n, std::memory_order_relaxed);
     self->last_index_count = now_count;
+    // Keep the accepted pulse (tick + A/B count) for the offline CPR check and the index-based speed reference.
+    const uint32_t k = self->index_log_n.load(std::memory_order_relaxed);
+    if (k < INDEX_LOG_SIZE) {
+        self->index_log[k] = {tick, now_count};
+        self->index_log_n.store(k + 1, std::memory_order_release);
+    }
 }
 
 void AMT102Encoder::update_state(unsigned gpio, unsigned level, uint32_t tick) {
@@ -53,22 +59,27 @@ void AMT102Encoder::update_state(unsigned gpio, unsigned level, uint32_t tick) {
     state = (state << 2) & 0x0F;
     state |= (val_a << 1) | val_b;
     
-    count.fetch_add(QUAD_STATES[state], std::memory_order_relaxed);
+    edge_total.fetch_add(1, std::memory_order_relaxed);
+    // Every delivered callback is a real edge on one channel, so it must change the decoded (A,B) state by exactly one bit.
+    // A zero entry (no change, or both bits changed) means an earlier edge was lost: the count is now off and so is the alignment.
+    if (QUAD_STATES[state] == 0) quad_errors.fetch_add(1, std::memory_order_relaxed);
+    const long long current_count = count.load(std::memory_order_relaxed) + QUAD_STATES[state];   // single writer: the callback thread
+    count.store(current_count, std::memory_order_relaxed);
     if (QUAD_STATES[state] != 0) last_step_dir = QUAD_STATES[state];
     last_tick.store(tick, std::memory_order_relaxed); 
-    
-    long long current_count = count.load(std::memory_order_relaxed);
     
     // SYNCHRONOUS CET FILTER: 
     // Only capture timestamps on full physical slot alignments (multiples of 4)
     // This perfectly eliminates quadrature asymmetry jitter.
-    if (current_count % 4 == 0) {
-        sync_count.store(current_count, std::memory_order_relaxed);
-        sync_tick.store(tick, std::memory_order_relaxed);
+    if (QUAD_STATES[state] != 0) {                    // valid step only: a lost edge must not re-stamp a register with a later time
+        edge_pack[current_count & 3].store((static_cast<uint64_t>(static_cast<uint32_t>(current_count)) << 32) | tick, std::memory_order_release);
+    }
+    if (current_count % 4 == 0 && QUAD_STATES[state] != 0) {
+        sync_pack.store((static_cast<uint64_t>(static_cast<uint32_t>(current_count)) << 32) | tick, std::memory_order_release);
     }
 }
 
-AMT102Encoder::AMT102Encoder(int pi, unsigned int a, unsigned int b, unsigned int x) : pi_handle(pi), pin_a(a), pin_b(b), pin_x(x) {
+AMT102Encoder::AMT102Encoder(int pi, unsigned int a, unsigned int b, unsigned int x) : pi_handle(pi), pin_a(a), pin_b(b), pin_x(x), index_log(INDEX_LOG_SIZE) {
     set_mode(pi_handle, pin_a, PI_INPUT);
     set_mode(pi_handle, pin_b, PI_INPUT);
     set_mode(pi_handle, pin_x, PI_INPUT);
@@ -77,6 +88,7 @@ AMT102Encoder::AMT102Encoder(int pi, unsigned int a, unsigned int b, unsigned in
     set_pull_up_down(pi_handle, pin_b, PI_PUD_UP);
     set_pull_up_down(pi_handle, pin_x, PI_PUD_UP);    // was OFF: a floating index line counted noise as turns
     
+    for (auto& p : edge_pack) p.store(0, std::memory_order_relaxed);
     last_index_count = 0;                            // count starts at 0: the first index pulse needs real movement to be accepted
     val_a = gpio_read(pi_handle, pin_a);
     val_b = gpio_read(pi_handle, pin_b);
@@ -92,12 +104,25 @@ AMT102Encoder::~AMT102Encoder() {
     callback_cancel(cb_x);
 }
 
-// Atomically return the aligned snapshot
+// Atomically return the aligned snapshot: count and tick come from ONE 64-bit load, so they always belong to the same edge.
 EncoderSnapshot AMT102Encoder::get_sync_snapshot() const {
-    return {
-        sync_count.load(std::memory_order_relaxed),
-        sync_tick.load(std::memory_order_relaxed)
-    };
+    const uint64_t p = sync_pack.load(std::memory_order_acquire);
+    return { static_cast<long long>(static_cast<int32_t>(p >> 32)), static_cast<uint32_t>(p & 0xFFFFFFFFu) };
+}
+
+EncoderEdges AMT102Encoder::get_edge_snapshot() const {
+    EncoderEdges out;
+    for (int i = 0; i < 4; ++i) {
+        const uint64_t p = edge_pack[i].load(std::memory_order_acquire);
+        out.e[i] = { static_cast<long long>(static_cast<int32_t>(p >> 32)), static_cast<uint32_t>(p & 0xFFFFFFFFu) };
+    }
+    return out;
+}
+
+size_t AMT102Encoder::copy_index_log(IndexEvent* out, size_t max_n) const {
+    const size_t n = std::min<size_t>(index_log_n.load(std::memory_order_acquire), max_n);
+    for (size_t i = 0; i < n; ++i) out[i] = index_log[i];
+    return n;
 }
 
 long long AMT102Encoder::get_revolutions() const {

@@ -16,7 +16,8 @@ namespace Config {
     inline double ENCODER_CPR = 1024.0;               
     constexpr double RPM_ALPHA = 0.15;
     constexpr size_t SMA_WINDOW_SIZE = 8;                
-    constexpr int DEADBAND_TICK_THRESHOLD = 2;           
+    constexpr int DEADBAND_TICK_THRESHOLD = 2;
+    inline bool ESTIMATOR_NEWEST = false;             // --estimator=newest : synchronous CET of the paper (newest edge, same-type start); default: aligned snapshots           
 
 // --- GLOBAL PI GAINS (1.0 rad/s Bandwidth) ---
     // inline (not constexpr) so they can be changed live (CMD:KP / CMD:KI) or via --kp= / --ki=.

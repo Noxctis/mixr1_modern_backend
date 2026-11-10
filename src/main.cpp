@@ -176,6 +176,11 @@ struct TestOptions {
     double ref_step_at2 = -1.0;
     double power_warn_w = -1.0;
     double max_duty_pct = 100.0; // hard cap on the PI output in % duty (water safety: the speed cannot exceed what this duty gives)
+    // Step schedule (PPR study): hold each value for hold_s seconds. Values are PWM percent in open loop, rpm setpoints with --pi.
+    // Unlike --sweep it takes an arbitrary list (for example --schedule=0,10,20,30,40,50,60,70,80,90 or --schedule=10,25,50,100).
+    std::vector<double> schedule;
+    double hold_s = 10.0;
+    bool log_age = false;        // --log-age: once per loop ask the daemon for its clock (one extra socket round trip) to log the age of the snapshot used
     bool start_at_zero = false;  // keep the motor off during the 250 ms preparation and switch it on exactly when the log starts (records the ramp from rest)
     // RS485 Modbus torque sensor (an inline strain-gauge amplifier, read with function code 0x03). ON by default; --no-torque turns it off.
     // Register address, width, byte order and scale are amplifier-specific: set them from the manual, or find them with
@@ -211,7 +216,8 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
     for (int i = 1; i < argc; ++i) {
         std::string argument = argv[i];
         if (argument == "--test") continue;
-        if (argument.rfind("--cpr=", 0) == 0) continue;    
+        if (argument.rfind("--cpr=", 0) == 0) continue;
+        if (argument.rfind("--estimator=", 0) == 0) continue;
         if (argument.rfind("--window=", 0) == 0) continue; 
         
         if (argument == "--sweep") {
@@ -293,6 +299,18 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
             options.power_warn_w = std::stod(argument.substr(15));
         } else if (argument.rfind("--max-duty=", 0) == 0) {
             options.max_duty_pct = std::stod(argument.substr(11));
+        } else if (argument.rfind("--schedule=", 0) == 0) {
+            options.schedule.clear();
+            std::stringstream ss(argument.substr(11));
+            std::string item;
+            while (std::getline(ss, item, ',')) { if (!item.empty()) options.schedule.push_back(std::stod(item)); }
+            if (options.schedule.empty()) return false;
+            options.sweep = false;
+            options.sine_mode = false;
+        } else if (argument.rfind("--hold=", 0) == 0) {
+            options.hold_s = std::stod(argument.substr(7));
+        } else if (argument == "--log-age") {
+            options.log_age = true;
         } else if (argument == "--start-at-zero") {
             options.start_at_zero = true;
         } else if (argument.rfind("--wait-rest=", 0) == 0) {
@@ -336,6 +354,12 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
         } else {
             return false;
         }
+    }
+    if (!options.schedule.empty()) {            // a schedule replaces sweep / sine / step
+        options.step_mode = false;
+        if (options.hold_s <= 0.0) return false;
+        for (double v : options.schedule) if (v < 0.0 || (!options.use_pi && v > 100.0)) return false;
+        options.duration_sec = options.hold_s * static_cast<double>(options.schedule.size());
     }
     if (options.step_mode) {                    // an open-loop step is neither PI, sweep nor sine
         options.use_pi = false;
@@ -446,6 +470,15 @@ int run_test(const TestOptions& options) {
     log << "elapsed_s,step_index,pwm_percent,loop_period_us,late_us,raw_rpm,filtered_rpm,target_rpm,pwm,error_rpm,intended_mode,intended_fifo,fifo_active,condition,fb_rpm";
     log << ",bus_v,current_ma,power_w,power_event";         // power_event = hi_w when power >= --power-warn-w
     log << ",torque_nm";                                    // always present (empty when there is no torque sensor), same convention as the power columns
+    // PPR-study columns (appended, so the older columns keep their position):
+    //   revs        index-channel revolutions since the start of the run
+    //   edge_total  A/B callbacks delivered since the start of the run (per revolution this must equal the counts per revolution)
+    //   quad_err    callbacks with an invalid / unchanged decoded transition (an edge was lost)
+    //   idx_rej / idx_miss  index pulses rejected as noise / revolutions the A/B count saw without an index pulse
+    //   new_snap    1 when this loop consumed a new aligned snapshot; delta_count / delta_tick_us = the pair it used (0 when held)
+    //   snap_tick   pigpio time stamp (us) of the snapshot in use (joins the loop rows to <csv>_index.csv)
+    //   tick_now_us / age_us / tick_rtt_us   with --log-age: daemon clock, age of the snapshot (includes about half of tick_rtt_us), round trip of the clock request
+    log << ",revs,edge_total,quad_err,idx_rej,idx_miss,new_snap,delta_count,delta_tick_us,snap_tick,tick_now_us,age_us,tick_rtt_us";
     log << '\n';
     
     // ---- Live streaming (same TCP port/protocol as normal mode) ----
@@ -551,6 +584,14 @@ int run_test(const TestOptions& options) {
     }
 
     const double total_duration = options.sweep ? options.duration_sec * 11.0 : options.duration_sec;
+    // Wall-clock instant of t = 0 of the log: lets external recordings (pidstat, the handheld-tachometer log) be aligned with the CSV.
+    const long long t0_unix_us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count()
+                               - std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+    std::cout << "[TEST] t0_unix=" << (t0_unix_us / 1000000) << '.' << std::setw(6) << std::setfill('0') << (t0_unix_us % 1000000) << std::setfill(' ')
+              << " cpr=" << Config::ENCODER_CPR << " loop_us=" << Config::LOOP_DELAY_US << " duration_s=" << total_duration
+              << " mode=" << (options.use_pi ? "PI" : "OpenLoop") << " estimator=" << (Config::ESTIMATOR_NEWEST ? "newest" : "aligned") << '\n';
+    long long idx_rej_origin = encoder.get_index_rejected(), idx_miss_origin = encoder.get_index_missed();
+    const long long edge_origin = encoder.get_edge_total(), quad_err_origin = encoder.get_quad_errors();
     
     if (options.sine_mode) {
         std::cout << "[TEST] Sine Wave Mode | Target: " << options.target_rpm << " RPM +/- " 
@@ -588,6 +629,20 @@ int run_test(const TestOptions& options) {
                 motor.set_pwm(current_pwm);
                 std::cout << "[TEST] PWM step " << options.step_from_pct << "% -> " << options.step_to_pct << "% at t=" << elapsed << " s\n";
             }
+        } else if (!options.schedule.empty()) {
+            const int new_step_index = std::min(static_cast<int>(options.schedule.size()) - 1, static_cast<int>(elapsed / options.hold_s));
+            if (new_step_index != step_index) {
+                step_index = new_step_index;
+                const double value = options.schedule[static_cast<size_t>(step_index)];
+                if (options.use_pi) {
+                    current_target = value;                       // the integral is NOT reset: this is a staircase, not a new start
+                } else {
+                    current_pwm = static_cast<int>(std::lround(value / 100.0 * 4095.0));
+                    motor.set_pwm(current_pwm);
+                }
+                std::cout << "[TEST] step " << step_index << ": " << (options.use_pi ? "RPM target " : "PWM ") << value
+                          << (options.use_pi ? " RPM" : "%") << " for " << options.hold_s << " s (t=" << elapsed << " s)\n";
+            }
         } else if (options.sweep) {
             const int new_step_index = std::min(10, static_cast<int>(elapsed / options.duration_sec));
             if (new_step_index != step_index) {
@@ -619,7 +674,15 @@ int run_test(const TestOptions& options) {
             }
         }
 
-        auto state = kinematics.process(encoder.get_sync_snapshot(), current_pwm, false);
+        auto state = Config::ESTIMATOR_NEWEST ? kinematics.process_newest(encoder.get_edge_snapshot(), false)
+                                              : kinematics.process(encoder.get_sync_snapshot(), current_pwm, false);
+        uint32_t tick_now_us = 0;
+        double tick_rtt_us = std::nan("");
+        if (options.log_age) {                                // one socket round trip to the daemon per loop: leave it OFF for the CPU-load test
+            const auto ta = std::chrono::steady_clock::now();
+            tick_now_us = get_current_tick(pi);
+            tick_rtt_us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - ta).count();
+        }
         if (options.abort_rpm > 0.0 && state.exact_rpm > options.abort_rpm) {      // safety cut-off
             motor.set_pwm(0);
             aborted = true;
@@ -710,6 +773,11 @@ int run_test(const TestOptions& options) {
         log << ',' << ((options.power_warn_w > 0.0 && std::isfinite(pw_now) && pw_now >= options.power_warn_w) ? "hi_w" : "");
         if (std::isfinite(last_torque)) log << ',' << last_torque;
         else log << ',';
+        log << ',' << revs_since(encoder, rev_origin) << ',' << (encoder.get_edge_total() - edge_origin) << ',' << (encoder.get_quad_errors() - quad_err_origin)
+            << ',' << (encoder.get_index_rejected() - idx_rej_origin) << ',' << (encoder.get_index_missed() - idx_miss_origin)
+            << ',' << (state.new_snapshot ? 1 : 0) << ',' << state.delta_count << ',' << state.delta_tick_us << ',' << state.end_tick;
+        if (options.log_age) log << ',' << tick_now_us << ',' << static_cast<int32_t>(tick_now_us - state.end_tick) << ',' << tick_rtt_us;
+        else log << ",,,";
         log << '\n';
         periods_us.push_back(period);
         late_us.push_back(lateness);
@@ -723,6 +791,20 @@ int run_test(const TestOptions& options) {
     }
 
     motor.stop_motor();
+    {   // index pulses accepted during the whole session (tick on the pigpio clock + A/B count): independent speed reference and CPR check
+        std::vector<IndexEvent> ev(65536);
+        const size_t n_ev = encoder.copy_index_log(ev.data(), ev.size());
+        std::string idx_path = options.csv_path;
+        const size_t dot = idx_path.rfind(".csv");
+        idx_path = (dot == std::string::npos) ? idx_path + "_index.csv" : idx_path.substr(0, dot) + "_index.csv";
+        std::ofstream ix(idx_path);
+        ix << "tick_us,count\n";
+        for (size_t k = 0; k < n_ev; ++k) ix << ev[k].tick << ',' << ev[k].count << '\n';
+        std::cout << "[TEST] index log: " << n_ev << " pulses -> " << idx_path << '\n';
+        std::cout << "[TEST] edge_total=" << (encoder.get_edge_total() - edge_origin) << " quad_errors=" << (encoder.get_quad_errors() - quad_err_origin)
+                  << " index_rejected=" << (encoder.get_index_rejected() - idx_rej_origin) << " index_missed=" << (encoder.get_index_missed() - idx_miss_origin)
+                  << " revs=" << revs_since(encoder, rev_origin) << '\n';
+    }
     pigpio_stop(pi);
     if (aborted) {
         std::cout << std::fixed << std::setprecision(3) << "[ABORTED] kp=" << Config::GLOBAL_KP << " ki=" << Config::GLOBAL_KI
@@ -1234,6 +1316,9 @@ int main(int argc, char** argv) {
         if (arg.rfind("--cpr=", 0) == 0) {
             Config::ENCODER_CPR = std::stod(arg.substr(6));
             std::cout << "[CONFIG] Set ENCODER_CPR to " << Config::ENCODER_CPR << '\n';
+        } else if (arg.rfind("--estimator=", 0) == 0) {
+            Config::ESTIMATOR_NEWEST = (arg.substr(12) == "newest");
+            std::cout << "[CONFIG] Speed estimator: " << (Config::ESTIMATOR_NEWEST ? "newest-edge synchronous CET (paper)" : "aligned snapshots") << '\n';
         } else if (arg.rfind("--window=", 0) == 0) {
             Config::RPM_SAMPLE_WINDOW_US = std::stoi(arg.substr(9));
             std::cout << "[CONFIG] Set RPM_SAMPLE_WINDOW_US to " << Config::RPM_SAMPLE_WINDOW_US << "us\n";
@@ -1780,7 +1865,8 @@ int main(int argc, char** argv) {
         if (update_lcd) lcd_prescaler = 0;
 
         const EncoderSnapshot snap = encoder.get_sync_snapshot();
-        auto state = kinematics.process(snap, current_pwm, update_lcd);
+        auto state = Config::ESTIMATOR_NEWEST ? kinematics.process_newest(encoder.get_edge_snapshot(), update_lcd)
+                                              : kinematics.process(snap, current_pwm, update_lcd);
         last_rpm = state.ema_filtered_rpm;
 
         // Shaft at rest = motor off and the encoder has not moved (beyond jitter) for TORQUE_TARE_REST_S.
