@@ -1,0 +1,19 @@
+[CONFIG] Set ENCODER_CPR to 1024
+[CONFIG] Speed estimator: aligned snapshots
+[TEST] Wattmeter (INA219) found at 0x45 on /dev/i2c-1: logging bus_v, current_ma, power_w
+[TEST] shaft at rest (waited 1.00049 s)
+[TEST] t0_unix=1794384836.701009 cpr=1024 loop_us=10000 duration_s=100 mode=OpenLoop estimator=aligned window_us=20000
+[TEST] step 0: PWM 0% for 10 s (t=0.0100185 s)
+[TEST] step 1: PWM 10% for 10 s (t=10 s)
+[TEST] step 2: PWM 20% for 10 s (t=20 s)
+[TEST] step 3: PWM 30% for 10 s (t=30 s)
+[TEST] step 4: PWM 40% for 10 s (t=40 s)
+[TEST] step 5: PWM 50% for 10 s (t=50 s)
+[TEST] step 6: PWM 60% for 10 s (t=60 s)
+[TEST] step 7: PWM 70% for 10 s (t=70 s)
+[TEST] step 8: PWM 80% for 10 s (t=80 s)
+[TEST] step 9: PWM 90% for 10 s (t=90 s)
+[TEST] index log: 1985 pulses -> logs/ch5_new/estimators/est-aligned_A_r1_index.csv
+[TEST] edge_total=2029995 quad_errors=0 index_rejected=0 index_missed=0 revs=1983
+[TEST] fifo=active pi=off samples=9999 period_mean_us=10000 period_std_us=23.2051 max_late_us=1200.09 late_cycles=9999 mean_rpm=1189.94 mean_abs_error_rpm=865.234
+[TEST] CSV saved to logs/ch5_new/estimators/est-aligned_A_r1.csv

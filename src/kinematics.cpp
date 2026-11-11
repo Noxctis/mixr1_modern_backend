@@ -1,6 +1,7 @@
 // src/kinematics.cpp
 #include "kinematics.hpp"
 #include "config.hpp"
+#include <cmath>
 
 void KinematicsEngine::reset(EncoderSnapshot initial_snapshot) {
     prev_snapshot = initial_snapshot;
@@ -9,6 +10,10 @@ void KinematicsEngine::reset(EncoderSnapshot initial_snapshot) {
     ema_filtered_rpm = 0.0;
     last_calculated_rpm = 0.0;
     first_run = true;
+    dct_primed = false;                         // the dct estimator re-primes itself from the next call
+    dct_ticks = 0;
+    dct_time = std::chrono::duration<double>::zero();
+    dct_rpm = 0.0;
 }
 
 KinematicsState KinematicsEngine::finish(bool refreshed, long long dc, uint32_t dt, uint32_t end_tick) {
@@ -69,4 +74,47 @@ KinematicsState KinematicsEngine::process_newest(const EncoderEdges& cur, bool /
     const bool refreshed = (dc != 0 && dt != 0);
     if (refreshed) prev_edges = cur;                                // else: no new edge of this type yet, hold and let the interval grow
     return finish(refreshed, dc, dt, end.tick);
+}
+
+// Estimator 3 ("dct"): the earlier discrete-time method, kept so that it can be compared with the CET estimators on the same rig.
+KinematicsState KinematicsEngine::process_dct(long long current_count, int current_pwm) {
+    const auto now = std::chrono::steady_clock::now();
+    if (!dct_primed) {
+        dct_last_time = now;
+        dct_last_count = current_count;
+        dct_ticks = 0;
+        dct_time = std::chrono::duration<double>::zero();
+        dct_primed = true;
+    }
+    const std::chrono::duration<double> dt_sec = now - dct_last_time;
+    dct_last_time = now;
+    const long long delta_ticks = (current_count - dct_last_count) * Config::ENCODER_DIRECTION;
+    dct_last_count = current_count;
+    dct_ticks += delta_ticks;
+    dct_time += dt_sec;
+
+    bool refreshed = false;
+    long long used_ticks = 0;
+    uint32_t used_us = 0;
+    if (dct_time.count() >= static_cast<double>(Config::RPM_SAMPLE_WINDOW_US) / 1000000.0) {
+        used_ticks = dct_ticks;
+        used_us = static_cast<uint32_t>(dct_time.count() * 1000000.0);
+        if (current_pwm == 0 && std::abs(dct_ticks) <= Config::DEADBAND_TICK_THRESHOLD) {
+            dct_rpm = 0.0;
+            ema_filtered_rpm = 0.0;
+        } else {
+            dct_rpm = std::abs((static_cast<double>(dct_ticks) / Config::ENCODER_CPR) * (60.0 / dct_time.count()));
+        }
+        dct_ticks = 0;
+        dct_time = std::chrono::duration<double>::zero();
+        refreshed = true;
+    }
+    ema_filtered_rpm = (Config::RPM_ALPHA * dct_rpm) + ((1.0 - Config::RPM_ALPHA) * ema_filtered_rpm);
+
+    KinematicsState out{dct_rpm, ema_filtered_rpm};
+    out.new_snapshot = refreshed;
+    out.delta_count = refreshed ? used_ticks : 0;
+    out.delta_tick_us = refreshed ? used_us : 0;
+    out.end_tick = 0;                                    // no edge time stamp is used by this method (age_us is not meaningful)
+    return out;
 }

@@ -17,6 +17,7 @@ namespace Config {
     constexpr double RPM_ALPHA = 0.15;
     constexpr size_t SMA_WINDOW_SIZE = 8;                
     constexpr int DEADBAND_TICK_THRESHOLD = 2;
+    inline bool ESTIMATOR_DCT = false;                // --estimator=dct : the earlier discrete-time method (window = RPM_SAMPLE_WINDOW_US, set with --window=)
     inline bool ESTIMATOR_NEWEST = false;             // --estimator=newest : synchronous CET of the paper (newest edge, same-type start); default: aligned snapshots           
 
 // --- GLOBAL PI GAINS (1.0 rad/s Bandwidth) ---
@@ -46,7 +47,7 @@ namespace Config {
     constexpr unsigned int PIN_ENC_A = 24;               
     constexpr unsigned int PIN_ENC_B = 23;               
     constexpr unsigned int PIN_ENC_X = 22;               
-    constexpr int ENCODER_DIRECTION = 1;                
+    constexpr int ENCODER_DIRECTION = -1;                
     constexpr unsigned int PIN_M1_EN = 18;               
     constexpr unsigned int PIN_M1_INA = 27;              
     constexpr unsigned int PIN_M1_INB = 17;              

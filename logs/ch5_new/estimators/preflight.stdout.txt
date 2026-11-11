@@ -1,0 +1,8 @@
+[CONFIG] Set ENCODER_CPR to 1024
+[TEST] Wattmeter (INA219) found at 0x45 on /dev/i2c-1: logging bus_v, current_ma, power_w
+[TEST] shaft at rest (waited 1.00044 s)
+[TEST] t0_unix=1794384696.557926 cpr=1024 loop_us=10000 duration_s=8 mode=OpenLoop estimator=aligned window_us=20000
+[TEST] index log: 49 pulses -> logs/ch5_new/estimators/preflight_index.csv
+[TEST] edge_total=49480 quad_errors=0 index_rejected=0 index_missed=0 revs=48
+[TEST] fifo=active pi=off samples=799 period_mean_us=10000 period_std_us=5.77881 max_late_us=56.306 late_cycles=799 mean_rpm=362.418 mean_abs_error_rpm=97.5822
+[TEST] CSV saved to logs/ch5_new/estimators/preflight.csv

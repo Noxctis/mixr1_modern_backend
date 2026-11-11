@@ -1,0 +1,18 @@
+[CONFIG] Set ENCODER_CPR to 1024
+[TEST] Wattmeter (INA219) found at 0x45 on /dev/i2c-1: logging bus_v, current_ma, power_w
+[TEST] shaft at rest (waited 1.05052 s)
+[TEST] t0_unix=1794384706.086083 cpr=1024 loop_us=10000 duration_s=120 mode=OpenLoop estimator=aligned window_us=20000
+[TEST] step 0: PWM 0% for 12 s (t=0.0100153 s)
+[TEST] step 1: PWM 10% for 12 s (t=12 s)
+[TEST] step 2: PWM 20% for 12 s (t=24 s)
+[TEST] step 3: PWM 30% for 12 s (t=36 s)
+[TEST] step 4: PWM 40% for 12 s (t=48 s)
+[TEST] step 5: PWM 50% for 12 s (t=60 s)
+[TEST] step 6: PWM 60% for 12 s (t=72 s)
+[TEST] step 7: PWM 70% for 12 s (t=84 s)
+[TEST] step 8: PWM 80% for 12 s (t=96 s)
+[TEST] step 9: PWM 90% for 12 s (t=108 s)
+[TEST] index log: 2376 pulses -> logs/ch5_new/estimators/plant_sweep_index.csv
+[TEST] edge_total=2430970 quad_errors=0 index_rejected=0 index_missed=0 revs=2374
+[TEST] fifo=active pi=off samples=11999 period_mean_us=10000 period_std_us=6.08198 max_late_us=165.917 late_cycles=11999 mean_rpm=1186.8 mean_abs_error_rpm=863.919
+[TEST] CSV saved to logs/ch5_new/estimators/plant_sweep.csv

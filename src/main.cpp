@@ -589,7 +589,7 @@ int run_test(const TestOptions& options) {
                                - std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
     std::cout << "[TEST] t0_unix=" << (t0_unix_us / 1000000) << '.' << std::setw(6) << std::setfill('0') << (t0_unix_us % 1000000) << std::setfill(' ')
               << " cpr=" << Config::ENCODER_CPR << " loop_us=" << Config::LOOP_DELAY_US << " duration_s=" << total_duration
-              << " mode=" << (options.use_pi ? "PI" : "OpenLoop") << " estimator=" << (Config::ESTIMATOR_NEWEST ? "newest" : "aligned") << '\n';
+              << " mode=" << (options.use_pi ? "PI" : "OpenLoop") << " estimator=" << (Config::ESTIMATOR_DCT ? "dct" : (Config::ESTIMATOR_NEWEST ? "newest" : "aligned")) << " window_us=" << Config::RPM_SAMPLE_WINDOW_US << '\n';
     long long idx_rej_origin = encoder.get_index_rejected(), idx_miss_origin = encoder.get_index_missed();
     const long long edge_origin = encoder.get_edge_total(), quad_err_origin = encoder.get_quad_errors();
     
@@ -674,7 +674,8 @@ int run_test(const TestOptions& options) {
             }
         }
 
-        auto state = Config::ESTIMATOR_NEWEST ? kinematics.process_newest(encoder.get_edge_snapshot(), false)
+        auto state = Config::ESTIMATOR_DCT ? kinematics.process_dct(encoder.get_count(), current_pwm)
+                   : Config::ESTIMATOR_NEWEST ? kinematics.process_newest(encoder.get_edge_snapshot(), false)
                                               : kinematics.process(encoder.get_sync_snapshot(), current_pwm, false);
         uint32_t tick_now_us = 0;
         double tick_rtt_us = std::nan("");
@@ -1318,7 +1319,8 @@ int main(int argc, char** argv) {
             std::cout << "[CONFIG] Set ENCODER_CPR to " << Config::ENCODER_CPR << '\n';
         } else if (arg.rfind("--estimator=", 0) == 0) {
             Config::ESTIMATOR_NEWEST = (arg.substr(12) == "newest");
-            std::cout << "[CONFIG] Speed estimator: " << (Config::ESTIMATOR_NEWEST ? "newest-edge synchronous CET (paper)" : "aligned snapshots") << '\n';
+            Config::ESTIMATOR_DCT = (arg.substr(12) == "dct");
+            std::cout << "[CONFIG] Speed estimator: " << (Config::ESTIMATOR_DCT ? "dct (earlier discrete-time method)" : (Config::ESTIMATOR_NEWEST ? "newest-edge synchronous CET (paper)" : "aligned snapshots")) << '\n';
         } else if (arg.rfind("--window=", 0) == 0) {
             Config::RPM_SAMPLE_WINDOW_US = std::stoi(arg.substr(9));
             std::cout << "[CONFIG] Set RPM_SAMPLE_WINDOW_US to " << Config::RPM_SAMPLE_WINDOW_US << "us\n";
@@ -1865,7 +1867,8 @@ int main(int argc, char** argv) {
         if (update_lcd) lcd_prescaler = 0;
 
         const EncoderSnapshot snap = encoder.get_sync_snapshot();
-        auto state = Config::ESTIMATOR_NEWEST ? kinematics.process_newest(encoder.get_edge_snapshot(), update_lcd)
+        auto state = Config::ESTIMATOR_DCT ? kinematics.process_dct(encoder.get_count(), current_pwm)
+                   : Config::ESTIMATOR_NEWEST ? kinematics.process_newest(encoder.get_edge_snapshot(), update_lcd)
                                               : kinematics.process(snap, current_pwm, update_lcd);
         last_rpm = state.ema_filtered_rpm;
 

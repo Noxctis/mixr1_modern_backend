@@ -1,0 +1,22 @@
+[CONFIG] Set ENCODER_CPR to 1024
+[CONFIG] Speed estimator: dct (earlier discrete-time method)
+[CONFIG] Set RPM_SAMPLE_WINDOW_US to 5000us
+[TEST] Wattmeter (INA219) found at 0x45 on /dev/i2c-1: logging bus_v, current_ma, power_w
+[TEST] shaft at rest (waited 1.00034 s)
+[TEST] t0_unix=1794386638.197358 cpr=1024 loop_us=10000 duration_s=100 mode=OpenLoop estimator=dct window_us=5000
+[TEST] step 0: PWM 0% for 10 s (t=0.01002 s)
+[TEST] step 1: PWM 10% for 10 s (t=10 s)
+[TEST] step 2: PWM 20% for 10 s (t=20 s)
+[TEST] step 3: PWM 30% for 10 s (t=30 s)
+[TEST] step 4: PWM 40% for 10 s (t=40 s)
+[TEST] step 5: PWM 50% for 10 s (t=50 s)
+[TEST] step 6: PWM 60% for 10 s (t=60 s)
+[TEST] step 7: PWM 70% for 10 s (t=70 s)
+[TEST] step 8: PWM 80% for 10 s (t=80 s)
+[TEST] step 9: PWM 90% for 10 s (t=90 s)
+[TEST] ABORT: speed 10294.8 RPM exceeded the 3200 RPM limit at t=90.76 s - motor stopped
+[TEST] index log: 1604 pulses -> logs/ch5_new/estimators/est-dct5_A_r1_index.csv
+[TEST] edge_total=1640661 quad_errors=0 index_rejected=0 index_missed=0 revs=1602
+[ABORTED] kp=2.629 ki=12.000 alpha=0.150 target=460.000 peak_rpm=10294.815 at_s=90.760
+[TEST] fifo=active pi=off samples=9075 period_mean_us=10000.001 period_std_us=5.409 max_late_us=67.056 late_cycles=9075 mean_rpm=1058.063 mean_abs_error_rpm=748.589
+[TEST] CSV saved to logs/ch5_new/estimators/est-dct5_A_r1.csv

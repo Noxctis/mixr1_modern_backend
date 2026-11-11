@@ -1,0 +1,24 @@
+[CONFIG] Set ENCODER_CPR to 1024
+[CONFIG] Speed estimator: aligned snapshots
+[CONFIG] Set Kp to 0.2482
+[CONFIG] Set Ki to 6.8691
+[CONFIG] Set FEEDBACK_ALPHA to 1
+[TEST] Wattmeter (INA219) found at 0x45 on /dev/i2c-1: logging bus_v, current_ma, power_w
+[TEST] shaft at rest (waited 1.00048 s)
+[TEST] t0_unix=1794385124.439212 cpr=1024 loop_us=10000 duration_s=165 mode=PI estimator=aligned window_us=20000
+[TEST] step 0: RPM target 10 RPM for 15 s (t=0.0100205 s)
+[TEST] step 1: RPM target 25 RPM for 15 s (t=15 s)
+[TEST] step 2: RPM target 50 RPM for 15 s (t=30 s)
+[TEST] step 3: RPM target 100 RPM for 15 s (t=45 s)
+[TEST] step 4: RPM target 250 RPM for 15 s (t=60 s)
+[TEST] step 5: RPM target 350 RPM for 15 s (t=75 s)
+[TEST] step 6: RPM target 500 RPM for 15 s (t=90 s)
+[TEST] step 7: RPM target 750 RPM for 15 s (t=105 s)
+[TEST] step 8: RPM target 1000 RPM for 15 s (t=120 s)
+[TEST] step 9: RPM target 1250 RPM for 15 s (t=135 s)
+[TEST] step 10: RPM target 1500 RPM for 15 s (t=150 s)
+[TEST] index log: 1440 pulses -> logs/ch5_new/estimators/est-aligned_Bimc_r1_index.csv
+[TEST] edge_total=1474245 quad_errors=0 index_rejected=0 index_missed=0 revs=1440
+[TEST] fifo=active pi=on samples=16499 period_mean_us=10000 period_std_us=52.5948 max_late_us=4770.09 late_cycles=16499 mean_rpm=523.891 mean_abs_error_rpm=8.66876
+[TEST] CSV saved to logs/ch5_new/estimators/est-aligned_Bimc_r1.csv
+[RESULT] kp=0.248 ki=6.869 alpha=1.000 target=460.000 rpm_mean=1064.845 rpm_std=321.498 sse=-604.845 pwm_mean_pct=40.680 pwm_std_pct=11.840 pwm_jitter_pct=0.064 overshoot_pct=227.871 settle5_s=-1.000 rise10_90_s=87.570 settle2_s=-1.000 power_status=ok power_reads_ok=3300 power_reads_fail=0 v_mean_V=24.1579 i_mean_mA=103.1391 i_std_mA=27.2145 p_mean_W=2.4916 p_idle_W=0.4551 torque_status=disabled aborted=0
