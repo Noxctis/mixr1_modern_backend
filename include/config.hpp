@@ -55,7 +55,7 @@ namespace Config {
     // --- Fluid controller outputs (Simulink act_wrapper.c). The pump SHARES GPIO 13 / 17 / 27 with the mixer above. ---
     // The daemon never drives these; it only parks them OFF whenever it owns the rig (start-up and every hand-back from MATLAB),
     // so a model that was killed instead of stopped cannot leave the pump or the valve switched on.
-    constexpr unsigned int PIN_FLUID_PUMP_EN = 15;
+    constexpr unsigned int PIN_FLUID_PUMP_EN = 14;
     constexpr unsigned int PIN_FLUID_SOL_INA = 5;
     constexpr unsigned int PIN_FLUID_SOL_INB = 6;
     constexpr unsigned int PIN_FLUID_SOL_PWM = 12;       // hardware PWM0 in the model; parked as a plain output, low
