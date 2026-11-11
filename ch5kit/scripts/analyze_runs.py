@@ -139,6 +139,15 @@ def fold_ripple(d, idx, s, nmax_harm=2):
     out["phi"], out["y"] = phi, y
     return out
 
+
+def spike_stats(d):
+    """Samples of the raw speed that are far from the local (1 s rolling) median. Returns (samples, off20, off50, max_ratio). Only where the speed is above 100 rpm."""
+    x = np.abs(d.raw_rpm.to_numpy(float)); med = pd.Series(x).rolling(101, center=True, min_periods=50).median().to_numpy()
+    m = np.isfinite(med) & (med > 100)
+    if m.sum() < 100: return 0, 0, 0, np.nan
+    r = x[m] / med[m]
+    return int(m.sum()), int((np.abs(r - 1) > 0.2).sum()), int((np.abs(r - 1) > 0.5).sum()), float(r.max())
+
 FOLD = {}
 
 
@@ -185,14 +194,19 @@ def analyse_run(path, est, test, rep):
                 if fr: row.update(f1=fr["A1"], fph1=fr["ph1"], f2=fr["A2"], fph2=fr["ph2"], fnrev=fr["nrev"])
                 if fr: FOLD[(est, rep, int(i))] = (n, fr["phi"], fr["y"])
         if "age_us" in s and s.age_us.notna().any() and est in ("aligned", "newest"):
-            a = s.age_us.to_numpy(float); a = a[np.isfinite(a)]
+            a_raw = s.age_us.to_numpy(float)
+            a = a_raw - (0.5 * s.tick_rtt_us.to_numpy(float) if "tick_rtt_us" in s and s.tick_rtt_us.notna().any() else 0.0)   # remove half of the clock-request round trip
+            a = a[np.isfinite(a)]
             if len(a) > 20:
-                row.update(age_med=float(np.median(a)), age_p95=float(np.percentile(a, 95)), age_max=float(a.max()), age_mean=float(a.mean()))
+                row.update(age_med=float(np.median(a)), age_p95=float(np.percentile(a, 95)), age_max=float(a.max()), age_mean=float(a.mean()),
+                           age_raw_med=float(np.nanmedian(a_raw)), rtt_med=float(np.nanmedian(s.tick_rtt_us)) if "tick_rtt_us" in s else np.nan)
         steps.append(row)
     lp = d.loop_period_us.to_numpy(float)[1:] if "loop_period_us" in d else np.array([np.nan])
     la = d.late_us.to_numpy(float) if "late_us" in d else np.array([np.nan])
     timing = dict(est=est, test=test, rep=rep, period_p99=float(np.nanpercentile(lp, 99)), period_max=float(np.nanmax(lp)),
                   late_p99=float(np.nanpercentile(la, 99)), late_max=float(np.nanmax(la)), quad_err=float(d.quad_err.iloc[-1]) if "quad_err" in d else np.nan)
+    ns, o20, o50, mx = spike_stats(d)
+    timing.update(spike_n=ns, spike_off20=o20, spike_off50=o50, spike_maxratio=mx)
     return steps, timing, d
 
 
@@ -217,6 +231,28 @@ def main():
     S = pd.DataFrame(S); T = pd.DataFrame(T)
     ests = [e for e in ORDER if e in set(S.est)]
     lines = [f"Files analysed: {len(runs)}   estimators: {', '.join(ests)}   repeats: {sorted(set(r[3] for r in runs))}", ""]
+
+    # ---------------- runs that did not finish, and stalls
+    exp = {}
+    for (est, test, rep), d in RAW.items(): exp[test] = max(exp.get(test, 0), int(d.step_index.max()))
+    st = []
+    for f, est, test, rep in runs:
+        if (est, test, rep) not in RAW: continue
+        d = RAW[(est, test, rep)]; last = int(d.step_index.max()); why = ""
+        sp = f[:-4] + ".stdout.txt"
+        if os.path.exists(sp):
+            txt = open(sp, errors="ignore").read()
+            hit = [ln.strip() for ln in txt.splitlines() if re.search(r"ABORT|TRIP|STALL|SAFETY|CRITICAL|Cannot", ln)]
+            why = hit[0][:110] if hit else ""
+        lp = d.loop_period_us.to_numpy(float)[1:] if "loop_period_us" in d else np.array([0.0])
+        big = np.flatnonzero(lp > 100000)
+        stall = f"stall {lp[big].max() / 1000:.0f} ms at t={d.elapsed_s.to_numpy()[big[np.argmax(lp[big])] + 1]:.1f} s" if len(big) else ""
+        if last < exp[test] or why or stall:
+            st.append(dict(run=os.path.basename(f)[:-4], last_step=f"{last} of {exp[test]}", message=why, loop_stall=stall))
+    if st:
+        lines += ["RUNS THAT ENDED EARLY OR HAD A STALL (steps missing from the tables below come from these runs)", pd.DataFrame(st).to_string(index=False), ""]
+    else:
+        lines += ["All runs finished all their steps with no abort and no stall.", ""]
 
     # ---------------- open loop
     A = S[(S.test == "A") & (S.n > 100)]
@@ -369,14 +405,23 @@ def main():
     G = S[S.est.isin(["aligned", "newest"]) & S.test.isin(["Bold", "Bimc"]) & S.get("age_med", pd.Series(dtype=float)).notna()] if "age_med" in S else pd.DataFrame()
     if len(G):
         G = G[G.target.isin([100, 250, 350, 500, 1000, 1500])]
-        g = G.groupby(["est", "target"]).agg(age_med_us=("age_med", "mean"), age_p95_us=("age_p95", "mean"), age_max_us=("age_max", "max")).reset_index()
+        g = G.groupby(["est", "target"]).agg(age_med_us=("age_med", "mean"), age_p95_us=("age_p95", "mean"), age_max_us=("age_max", "max"),
+                                             age_raw_med_us=("age_raw_med", "mean"), clock_rtt_us=("rtt_med", "mean")).reset_index()
         g["Ta_us"] = 60e6 / (g.target * 256.0)
         g["predicted_max_us"] = np.where(g.est == "aligned", g.Ta_us, g.Ta_us / 4)
         g.to_csv(os.path.join(out, "age_of_estimate.csv"), index=False); tex_table(g.round(1), os.path.join(out, "table_age.tex"), "{:.1f}")
-        lines += ["AGE OF THE ESTIMATE (us): the daemon clock minus the time stamp of the snapshot in use. It includes about half of tick_rtt_us.",
+        lines += ["AGE OF THE ESTIMATE (us): the daemon clock minus the time stamp of the snapshot in use, minus half of the clock-request round trip (tick_rtt_us).",
+                  "  age_raw_med_us is before that correction. If the corrected age is still far above the prediction at high speed, the rest is the delay of the pigpio notification stream.",
                   "  predicted maximum: aligned = Ta, newest = Ta/4, with Ta = 60e6/(speed*256) us", g.round(1).to_string(index=False), ""]
     else:
         lines += ["AGE OF THE ESTIMATE: no age_us data found (the CET runs need --log-age; run_estimators.sh adds it).", ""]
+
+    # ---------------- outliers
+    if len(T) and "spike_n" in T:
+        sp = T.groupby("est").agg(samples=("spike_n", "sum"), off_20pct=("spike_off20", "sum"), off_50pct=("spike_off50", "sum"), max_ratio_to_median=("spike_maxratio", "max")).reindex(ests).reset_index()
+        sp["off_50pct_per_million"] = (1e6 * sp.off_50pct / sp.samples.replace(0, np.nan)).round(0)
+        sp.to_csv(os.path.join(out, "outliers_by_estimator.csv"), index=False)
+        lines += ["OUTLIERS: samples of the raw speed far from the local median (speeds above 100 rpm). max_ratio = the largest sample divided by the local median.", sp.round(2).to_string(index=False), ""]
 
     # ---------------- timing
     if len(T):
@@ -387,15 +432,23 @@ def main():
     try:
         sd = {e: S[(S.est == e) & (S.test == "A") & (S.pwm_pct >= 30)].sd.mean() for e in ("aligned", "newest")}
         ag = {e: S[(S.est == e) & S.test.isin(["Bold", "Bimc"]) & (S.target == 500)].age_p95.mean() for e in ("aligned", "newest")} if "age_p95" in S else {}
-        qe = T[T.est == "newest"].quad_err.max()
+        qe = {e: T[T.est == e].quad_err.sum() for e in ("aligned", "newest")}
+        reps = len(set(r[3] for r in runs))
         if all(np.isfinite(list(sd.values()))) and ag and all(np.isfinite(list(ag.values()))):
-            use_new = (ag["newest"] < 0.7 * ag["aligned"]) and (sd["newest"] <= 1.1 * sd["aligned"]) and (not np.isfinite(qe) or qe == 0)
-            lines += [f"RECOMMENDED ESTIMATOR: {'newest' if use_new else 'aligned'}   (SD aligned {sd['aligned']:.2f} / newest {sd['newest']:.2f} rpm; age p95 at 500 rpm aligned {ag['aligned']:.0f} / newest {ag['newest']:.0f} us; lost edges newest {qe:g})",
-                      "  to use it:   bash ~/ch5kit/ch5.sh use " + ("newest" if use_new else "aligned"), ""]
+            lost_ok = (not np.isfinite(qe["newest"])) or qe["newest"] <= qe["aligned"] + 2
+            use_new = (ag["newest"] < 0.7 * ag["aligned"]) and (sd["newest"] <= 1.1 * sd["aligned"]) and lost_ok
+            lines += [f"RECOMMENDED ESTIMATOR: {'newest' if use_new else 'aligned'}",
+                      f"  SD aligned {sd['aligned']:.2f} / newest {sd['newest']:.2f} rpm; age p95 at 500 rpm aligned {ag['aligned']:.0f} / newest {ag['newest']:.0f} us; "
+                      f"lost edges over all runs: aligned {qe['aligned']:g}, newest {qe['newest']:g}",
+                      "  rule: newest only if its age is clearly smaller (under 70 %), its scatter is not worse, and it lost no more edges than aligned (+2). A lost edge is a property of the",
+                      "  encoder callbacks and of system stalls, not of the estimator, so a single one is not held against either.",
+                      ("  WARNING: only one repeat: differences of 10 to 20 % are inside the run-to-run scatter, so treat both CET versions as equivalent." if reps < 2 else ""),
+                      "  to use it:   bash /home/pi/mixr1_modern_backend/ch5kit/ch5.sh use " + ("newest" if use_new else "aligned"), ""]
     except Exception as ex:
         lines += [f"(no recommendation: {ex})", ""]
-    open(os.path.join(out, "RESULTS.txt"), "w").write("\n".join(lines))
-    print("\n".join(lines)); print(f"\nAll tables (.csv, .tex) and figures (.pdf) are in {out}\nSend me {os.path.join(out, 'RESULTS.txt')} and the figures.")
+    txt = re.sub(r"\bNaN\b", "n/a", "\n".join(lines))
+    open(os.path.join(out, "RESULTS.txt"), "w").write(txt)
+    print(txt); print(f"\nAll tables (.csv, .tex) and figures (.pdf) are in {out}\nSend me {os.path.join(out, 'RESULTS.txt')} and the figures.")
 
 
 if __name__ == "__main__":

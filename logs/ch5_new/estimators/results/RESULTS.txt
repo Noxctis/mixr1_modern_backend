@@ -1,30 +1,36 @@
 Files analysed: 15   estimators: dct5, dct10, dct20, aligned, newest   repeats: [1]
 
-OPEN LOOP: SD of the raw speed (rpm), mean over repeats
- PWM %  speed_rpm  dct5  dct10  dct20  aligned  newest
-  10.0     231.05  7.66   5.90   5.42     4.84    5.30
-  20.0     502.53 11.65   8.09   7.51     3.28    3.22
-  30.0     772.87 18.20  13.61  10.85     2.68    3.04
-  40.0    1042.99 24.04  17.71  14.29     3.51    3.46
-  50.0    1316.05 28.60  20.50  53.21     3.58    3.70
-  60.0    1589.55 34.96  30.60  22.26     3.69    3.83
-  70.0    1862.28 44.89    NaN    NaN     4.27    4.50
-  80.0    2137.99 54.25    NaN    NaN     4.86    4.38
-  90.0    2418.80   NaN    NaN    NaN     6.53    3.72
+RUNS THAT ENDED EARLY OR HAD A STALL (steps missing from the tables below come from these runs)
+              run last_step                                                                                   message                loop_stall
+   est-dct10_A_r1    9 of 9 [TEST] ABORT: speed 12125.7 RPM exceeded the 12000 RPM limit at t=94.66 s - motor stopped                          
+est-dct20_Bold_r1  10 of 10                                                                                           stall 1834 ms at t=39.8 s
+    est-dct5_A_r1    9 of 9 [TEST] ABORT: speed 12114.5 RPM exceeded the 12000 RPM limit at t=91.73 s - motor stopped                          
 
-  mean SD over the steps from 30 % PWM: DCT 5 ms 34.16, DCT 10 ms 20.61, DCT 20 ms 25.16, CET aligned 4.16, CET newest 3.80
+OPEN LOOP: SD of the raw speed (rpm), mean over repeats
+ PWM %  speed_rpm  dct5   dct10  dct20  aligned  newest
+  10.0     230.23  7.17    7.55   7.87     4.84    5.30
+  20.0     502.40 11.81   13.06   7.36     3.28    3.22
+  30.0     773.92 17.37   20.22  11.45     2.68    3.04
+  40.0    1043.97 24.75   23.97  13.85     3.51    3.46
+  50.0    1316.88 30.69   30.94  18.93     3.58    3.70
+  60.0    1588.91 37.92   32.24  23.38     3.69    3.83
+  70.0    1862.18 45.30   44.77  27.02     4.27    4.50
+  80.0    2138.42 51.14   50.03  31.65     4.86    4.38
+  90.0    2390.57   n/a 1819.88 505.04     6.53    3.72
+
+  mean SD over the steps from 30 % PWM: DCT 5 ms 34.53, DCT 10 ms 288.86, DCT 20 ms 90.19, CET aligned 4.16, CET newest 3.80
 
 AMPLITUDE OF THE LINE AT THE ROTATION FREQUENCY (rpm), open loop
  pwm_pct  speed_rpm  dct5  dct10  dct20  aligned  newest
-    10.0     231.05  3.02   2.52   3.08     1.69    3.17
-    20.0     502.53  4.20   3.54   3.47     2.23    2.37
-    30.0     772.87  3.58   4.35   3.45     2.50    2.95
-    40.0    1042.99  8.91   3.53   5.12     2.73    2.86
-    50.0    1316.05  5.94   5.70   9.38     2.98    3.09
-    60.0    1589.55  8.81   6.25   4.08     2.86    3.28
-    70.0    1862.28  9.01    NaN    NaN     3.05    3.20
-    80.0    2137.99 15.55    NaN    NaN     3.06    3.10
-    90.0    2418.80   NaN    NaN    NaN     1.48    2.29
+    10.0     230.23  1.65   2.68   2.38     1.69    3.17
+    20.0     502.40  2.32   2.27   3.12     2.23    2.37
+    30.0     773.92  3.36   5.60   3.18     2.50    2.95
+    40.0    1043.97  5.63   3.93   4.02     2.73    2.86
+    50.0    1316.88 11.61   6.68   3.56     2.98    3.09
+    60.0    1588.91  6.54   7.92   3.53     2.86    3.28
+    70.0    1862.18  6.99   9.24   2.37     3.05    3.20
+    80.0    2138.42 12.43   7.64   1.59     3.06    3.10
+    90.0    2390.57   n/a    n/a  25.72     1.48    2.29
 
 SHAFT / ECCENTRICITY (FFT of the raw speed, open loop). A1, A2 = amplitude (rpm) of the lines at 1x and 2x the rotation frequency;
   rel1 = A1/n in %; eps1 = the equivalent angular error of the encoder in degrees if the 1x line were all encoder error (datasheet accuracy 0.25 deg);
@@ -48,17 +54,17 @@ RIPPLE VERSUS SHAFT ANGLE (samples folded onto one revolution with the index pul
 aligned     10.0  233.14     1.75            18.70     4.57            12.08  27.0
 aligned     20.0  504.02     2.24            52.00     2.28            71.43  57.0
 aligned     30.0  776.60     2.43            69.85     1.76           125.87  87.0
-aligned     40.0 1043.48      NaN              NaN      NaN              NaN   NaN
-aligned     50.0 1315.83      NaN              NaN      NaN              NaN   NaN
-aligned     60.0 1591.41      NaN              NaN      NaN              NaN   NaN
-aligned     70.0 1866.62      NaN              NaN      NaN              NaN   NaN
-aligned     80.0 2143.54      NaN              NaN      NaN              NaN   NaN
-aligned     90.0 2423.47      NaN              NaN      NaN              NaN   NaN
+aligned     40.0 1043.48      n/a              n/a      n/a              n/a   n/a
+aligned     50.0 1315.83      n/a              n/a      n/a              n/a   n/a
+aligned     60.0 1591.41      n/a              n/a      n/a              n/a   n/a
+aligned     70.0 1866.62      n/a              n/a      n/a              n/a   n/a
+aligned     80.0 2143.54      n/a              n/a      n/a              n/a   n/a
+aligned     90.0 2423.47      n/a              n/a      n/a              n/a   n/a
 
   CET aligned: the phase of the 1x ripple advances 5.65 deg per Hz of rotation, i.e. the speed estimate lags the shaft angle by 15.7 ms (CET is expected near T_s/2 + age = 5 to 6 ms, DCT 12 to 25 ms); phase extrapolated to zero speed -1 deg (the angle at which the shaft makes the speed highest).
-  DCT 10 ms: the phase of the 1x ripple advances 6.84 deg per Hz of rotation, i.e. the speed estimate lags the shaft angle by 19.0 ms (CET is expected near T_s/2 + age = 5 to 6 ms, DCT 12 to 25 ms); phase extrapolated to zero speed 19 deg (the angle at which the shaft makes the speed highest).
-  DCT 20 ms: the phase of the 1x ripple advances 10.05 deg per Hz of rotation, i.e. the speed estimate lags the shaft angle by 27.9 ms (CET is expected near T_s/2 + age = 5 to 6 ms, DCT 12 to 25 ms); phase extrapolated to zero speed 14 deg (the angle at which the shaft makes the speed highest).
-  DCT 5 ms: the phase of the 1x ripple advances 4.96 deg per Hz of rotation, i.e. the speed estimate lags the shaft angle by 13.8 ms (CET is expected near T_s/2 + age = 5 to 6 ms, DCT 12 to 25 ms); phase extrapolated to zero speed 11 deg (the angle at which the shaft makes the speed highest).
+  DCT 10 ms: the phase of the 1x ripple advances 10.57 deg per Hz of rotation, i.e. the speed estimate lags the shaft angle by 29.4 ms (CET is expected near T_s/2 + age = 5 to 6 ms, DCT 12 to 25 ms); phase extrapolated to zero speed -2 deg (the angle at which the shaft makes the speed highest).
+  DCT 20 ms: the phase of the 1x ripple advances 9.71 deg per Hz of rotation, i.e. the speed estimate lags the shaft angle by 27.0 ms (CET is expected near T_s/2 + age = 5 to 6 ms, DCT 12 to 25 ms); phase extrapolated to zero speed 22 deg (the angle at which the shaft makes the speed highest).
+  DCT 5 ms: the phase of the 1x ripple advances -2.54 deg per Hz of rotation, i.e. the speed estimate lags the shaft angle by -7.1 ms (CET is expected near T_s/2 + age = 5 to 6 ms, DCT 12 to 25 ms); phase extrapolated to zero speed 73 deg (the angle at which the shaft makes the speed highest).
   CET newest: the phase of the 1x ripple advances 5.31 deg per Hz of rotation, i.e. the speed estimate lags the shaft angle by 14.8 ms (CET is expected near T_s/2 + age = 5 to 6 ms, DCT 12 to 25 ms); phase extrapolated to zero speed 14 deg (the angle at which the shaft makes the speed highest).
 
 CLOSED LOOP, old gains (Kp 1.5641, Ki 41.2249): SD of the raw speed (rpm), mean over repeats
@@ -103,13 +109,13 @@ ACCURACY: the mean of each estimator over a step minus the speed from the index 
 aligned    A      9          0.006              0.008             0.050          0.129
 aligned Bimc      7          0.001              0.002             0.004          0.005
 aligned Bold      8          0.001              0.002             0.004          0.004
-  dct10    A      6          0.010              0.024             0.041          0.011
+  dct10    A      9         -0.481              0.481             3.805        -10.868
   dct10 Bimc      8         -0.065              0.095             0.233         -0.466
   dct10 Bold      7         -0.090              0.090             0.149         -0.829
-  dct20    A      6         -0.021              0.032             0.119         -0.280
+  dct20    A      9         -0.055              0.056             0.261         -0.882
   dct20 Bimc      8         -0.010              0.040             0.154          0.024
   dct20 Bold      7         -0.008              0.029             0.064         -0.150
-   dct5    A      8          0.008              0.008             0.013          0.110
+   dct5    A      8          0.007              0.007             0.019          0.074
    dct5 Bimc      7          0.007              0.007             0.011          0.050
    dct5 Bold      7          0.007              0.007             0.015          0.044
  newest    A      9         -0.001              0.002             0.006         -0.017
@@ -118,39 +124,52 @@ aligned Bold      8          0.001              0.002             0.004         
 
 BIAS (%) vs the index reference, open loop, by PWM step
  pwm_pct  speed_rpm   dct5  dct10  dct20  aligned  newest
-    10.0    231.046  0.007  0.035 -0.020    0.004  -0.000
-    20.0    502.533 -0.002  0.023  0.009   -0.001   0.006
-    30.0    772.870  0.003  0.007  0.024   -0.003  -0.002
-    40.0   1042.992  0.009  0.004 -0.010   -0.000  -0.001
-    50.0   1316.054  0.012  0.032 -0.119    0.002  -0.006
-    60.0   1589.553  0.006 -0.041 -0.013    0.006   0.000
-    70.0   1862.277  0.013    NaN    NaN   -0.003  -0.001
-    80.0   2137.988  0.012    NaN    NaN   -0.005   0.002
-    90.0   2418.796    NaN    NaN    NaN    0.050  -0.004
+    10.0    230.233  0.007 -0.009 -0.153    0.004  -0.000
+    20.0    502.403  0.015 -0.096  0.003   -0.001   0.006
+    30.0    773.917 -0.001 -0.081 -0.022   -0.003  -0.002
+    40.0   1043.965  0.007 -0.107 -0.006   -0.000  -0.001
+    50.0   1316.878  0.003 -0.087 -0.001    0.002  -0.006
+    60.0   1588.906 -0.000 -0.048 -0.016    0.006   0.000
+    70.0   1862.177  0.019 -0.079 -0.025   -0.003  -0.001
+    80.0   2138.416  0.002 -0.019 -0.017   -0.005   0.002
+    90.0   2390.568    n/a -3.805 -0.261    0.050  -0.004
 
-AGE OF THE ESTIMATE (us): the daemon clock minus the time stamp of the snapshot in use. It includes about half of tick_rtt_us.
+AGE OF THE ESTIMATE (us): the daemon clock minus the time stamp of the snapshot in use, minus half of the clock-request round trip (tick_rtt_us).
+  age_raw_med_us is before that correction. If the corrected age is still far above the prediction at high speed, the rest is the delay of the pigpio notification stream.
   predicted maximum: aligned = Ta, newest = Ta/4, with Ta = 60e6/(speed*256) us
-    est  target  age_med_us  age_p95_us  age_max_us  Ta_us  predicted_max_us
-aligned   100.0      1874.5      3190.0      4035.0 2343.8            2343.8
-aligned   250.0      1166.0      1864.9      2627.0  937.5             937.5
-aligned   350.0      1025.5      1671.2     13173.0  669.6             669.6
-aligned   500.0       931.5      1455.7      1659.0  468.8             468.8
-aligned  1000.0       808.5      1287.8      1513.0  234.4             234.4
-aligned  1500.0       779.0      1233.9      2482.0  156.2             156.2
- newest   100.0      1023.0      1504.6      1872.0 2343.8             585.9
- newest   250.0       846.5      1231.1      1459.0  937.5             234.4
- newest   350.0       823.5      1195.0      1390.0  669.6             167.4
- newest   500.0       790.5      1157.3      1529.0  468.8             117.2
- newest  1000.0       774.5      1125.8      1407.0  234.4              58.6
- newest  1500.0       764.0      1113.0      1259.0  156.2              39.1
+    est  target  age_med_us  age_p95_us  age_max_us  age_raw_med_us  clock_rtt_us  Ta_us  predicted_max_us
+aligned   100.0      1849.2      3164.5      4012.6          1874.5          52.1 2343.8            2343.8
+aligned   250.0      1138.4      1832.1      2556.0          1166.0          51.5  937.5             937.5
+aligned   350.0       995.6      1639.1     10916.7          1025.5          51.3  669.6             669.6
+aligned   500.0       905.1      1428.6      1634.1           931.5          50.3  468.8             468.8
+aligned  1000.0       782.1      1258.5      1437.2           808.5          51.9  234.4             234.4
+aligned  1500.0       750.4      1206.4      1781.9           779.0          51.8  156.2             156.2
+ newest   100.0       996.9      1479.7      1850.2          1023.0          46.9 2343.8             585.9
+ newest   250.0       822.2      1204.6      1425.6           846.5          46.9  937.5             234.4
+ newest   350.0       798.8      1168.4      1360.6           823.5          45.7  669.6             167.4
+ newest   500.0       766.5      1131.3      1476.8           790.5          46.5  468.8             117.2
+ newest  1000.0       748.0      1098.2      1337.3           774.5          46.7  234.4              58.6
+ newest  1500.0       740.0      1088.9      1221.3           764.0          47.6  156.2              39.1
+
+OUTLIERS: samples of the raw speed far from the local median (speeds above 100 rpm). max_ratio = the largest sample divided by the local median.
+    est  samples  off_20pct  off_50pct  max_ratio_to_median  off_50pct_per_million
+   dct5    29361         59         25                 4.60                  851.0
+  dct10    30283        232        137                 8.83                 4524.0
+  dct20    31194        112         56                 4.45                 1795.0
+aligned    32414        123         17                 3.57                  524.0
+ newest    32803        130         17                 3.56                  518.0
 
 LOOP TIMING per estimator (us) and lost edges (quad_err, must be 0)
     est  period_p99  period_max  late_p99  late_max  quad_err
-   dct5     10016.1     10073.0      28.2      79.9       1.0
-  dct10     10020.2     16133.8      46.9    6171.9       1.0
-  dct20     10015.2   1833928.2  144780.0 1823935.8       0.0
+   dct5     10017.1     10076.3      32.7     133.6       1.0
+  dct10     10023.6     16133.8      52.1    6171.9       1.0
+  dct20     10016.2   1833928.2  144779.5 1823935.8       0.0
 aligned     10027.2     14756.1      53.1    4770.1       0.0
  newest     10012.0     10071.9      21.5      82.3       1.0
 
-RECOMMENDED ESTIMATOR: aligned   (SD aligned 4.16 / newest 3.80 rpm; age p95 at 500 rpm aligned 1456 / newest 1157 us; lost edges newest 1)
-  to use it:   bash ~/ch5kit/ch5.sh use aligned
+RECOMMENDED ESTIMATOR: aligned
+  SD aligned 4.16 / newest 3.80 rpm; age p95 at 500 rpm aligned 1429 / newest 1131 us; lost edges over all runs: aligned 0, newest 2
+  rule: newest only if its age is clearly smaller (under 70 %), its scatter is not worse, and it lost no more edges than aligned (+2). A lost edge is a property of the
+  encoder callbacks and of system stalls, not of the estimator, so a single one is not held against either.
+  WARNING: only one repeat: differences of 10 to 20 % are inside the run-to-run scatter, so treat both CET versions as equivalent.
+  to use it:   bash /home/pi/mixr1_modern_backend/ch5kit/ch5.sh use aligned

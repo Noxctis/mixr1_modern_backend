@@ -2,9 +2,9 @@
 [CONFIG] Speed estimator: dct (earlier discrete-time method)
 [CONFIG] Set RPM_SAMPLE_WINDOW_US to 10000us
 [TEST] Wattmeter (INA219) found at 0x45 on /dev/i2c-1: logging bus_v, current_ma, power_w
-[TEST] shaft at rest (waited 1.00024 s)
-[TEST] t0_unix=1794386202.379944 cpr=1024 loop_us=10000 duration_s=100 mode=OpenLoop estimator=dct window_us=10000
-[TEST] step 0: PWM 0% for 10 s (t=0.0100079 s)
+[TEST] shaft at rest (waited 1.00026 s)
+[TEST] t0_unix=1794388567.778782 cpr=1024 loop_us=10000 duration_s=100 mode=OpenLoop estimator=dct window_us=10000
+[TEST] step 0: PWM 0% for 10 s (t=0.0100091 s)
 [TEST] step 1: PWM 10% for 10 s (t=10 s)
 [TEST] step 2: PWM 20% for 10 s (t=20 s)
 [TEST] step 3: PWM 30% for 10 s (t=30 s)
@@ -12,9 +12,11 @@
 [TEST] step 5: PWM 50% for 10 s (t=50 s)
 [TEST] step 6: PWM 60% for 10 s (t=60 s)
 [TEST] step 7: PWM 70% for 10 s (t=70 s)
-[TEST] ABORT: speed 8277.95 RPM exceeded the 3200 RPM limit at t=71.4201 s - motor stopped
-[TEST] index log: 956 pulses -> logs/ch5_new/estimators/est-dct10_A_r1_index.csv
-[TEST] edge_total=977025 quad_errors=0 index_rejected=0 index_missed=0 revs=954
-[ABORTED] kp=2.629 ki=12.000 alpha=0.150 target=460.000 peak_rpm=8277.949 at_s=71.420
-[TEST] fifo=active pi=off samples=7141 period_mean_us=10000.012 period_std_us=4.215 max_late_us=97.616 late_cycles=7141 mean_rpm=800.308 mean_abs_error_rpm=531.192
+[TEST] step 8: PWM 80% for 10 s (t=80 s)
+[TEST] step 9: PWM 90% for 10 s (t=90 s)
+[TEST] ABORT: speed 12125.7 RPM exceeded the 12000 RPM limit at t=94.66 s - motor stopped
+[TEST] index log: 1764 pulses -> logs/ch5_new/estimators/est-dct10_A_r1_index.csv
+[TEST] edge_total=1804322 quad_errors=0 index_rejected=0 index_missed=0 revs=1762
+[ABORTED] kp=2.629 ki=12.000 alpha=0.150 target=460.000 peak_rpm=12125.709 at_s=94.660
+[TEST] fifo=active pi=off samples=9465 period_mean_us=10000.002 period_std_us=12.232 max_late_us=720.543 late_cycles=9465 mean_rpm=1111.957 mean_abs_error_rpm=802.575
 [TEST] CSV saved to logs/ch5_new/estimators/est-dct10_A_r1.csv

@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # THE ONLY COMMAND YOU NEED:    bash ~/ch5kit/ch5.sh
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Survive a lost SSH connection: run inside tmux. Reconnect and type:   tmux attach -t ch5      (set NO_TMUX=1 to skip this)
+if [ -z "${TMUX:-}" ] && [ -z "${NO_TMUX:-}" ] && [ -t 0 ]; then
+  if ! command -v tmux >/dev/null 2>&1; then echo "Installing tmux (once), so your run keeps going if SSH drops..."; sudo apt install -y tmux > /dev/null 2>&1; fi
+  if command -v tmux >/dev/null 2>&1; then
+    echo "Running inside tmux. If your connection drops, log in again and type:  tmux attach -t ch5"
+    exec tmux new-session -A -s ch5 "bash '$KIT/ch5.sh' $*"
+  fi
+fi
 # ---- find the firmware folder by itself
 find_repo() {
   for d in "$KIT/.." "$PWD" "$PWD/.." ; do

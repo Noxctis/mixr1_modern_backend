@@ -25,6 +25,17 @@ You type a number and press Enter. The menu:
  9 GUIDED       10 BACKUP                   11 STATUS
 ```
 
+
+## IF YOUR SSH CONNECTION DROPS
+- The menu now runs inside **tmux** automatically (it installs it the first time). Your run keeps going on the Pi even if your laptop sleeps or the Wi-Fi drops.
+- To get back to it, log in again and type:
+```
+tmux attach -t ch5
+```
+- Do not press Ctrl-C to "leave"; to leave the screen without stopping anything press **Ctrl-B, then D**.
+- If you start a script by hand (not through the menu), type `tmux new -s ch5` first, then run it inside.
+- Safety: if a run is killed anyway, the daemon stops the motor by itself (it handles the hang-up signal). That run's file is incomplete; menus 2, 5 and 7 skip finished runs and redo the rest when you start them again.
+
 ## HOW LONG? You choose. More runs = stronger proof that a difference is real and not luck.
 | Menu | Short | Full |
 |---|---|---|

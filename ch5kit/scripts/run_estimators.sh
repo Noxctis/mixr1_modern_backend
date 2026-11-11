@@ -52,7 +52,8 @@ NT=3; [ "$SKIP_IMC" = "1" ] && NT=2
 TOTAL=$(( $(echo $VARIANTS | wc -w) * REPS * NT )); N=0; FAILED=""
 run_one() {   # name  flags...
   local name="$1"; shift; N=$((N+1))
-  if [ -s "$OUT/$name.csv" ] && [ "$(stat -c %s "$OUT/$name.csv")" -gt 150000 ]; then echo "[$N/$TOTAL] $name  (already done, skipping)"; return; fi
+  # skip only a run that FINISHED: its output says "CSV saved" and has no ABORT (an aborted run is redone)
+  if [ -s "$OUT/$name.csv" ] && grep -q "CSV saved" "$OUT/$name.stdout.txt" 2>/dev/null && ! grep -q "ABORT" "$OUT/$name.stdout.txt" 2>/dev/null; then echo "[$N/$TOTAL] $name  (already done, skipping)"; return; fi
   echo "[$N/$TOTAL] $name"; plat "start $name"
   $DAEMON $COMMON "$@" --csv="$OUT/$name.csv" > "$OUT/$name.stdout.txt" 2>&1
   local rc=$?; plat "end $name rc=$rc"
@@ -63,10 +64,11 @@ run_one() {   # name  flags...
 echo; echo "STEP 3 of 4: the main runs. Leave it alone. It prints one line per run."
 for rep in $(seq 1 "$REPS"); do
   for v in $(shuf -e $VARIANTS); do
+    ABA=3200; ABB=2200; case "$v" in dct*) ABA=12000; ABB=4000;; esac   # DCT gives spikes to 8000 rpm: a 3200 limit would stop its runs. In open loop the speed cannot exceed what the PWM gives, so a high limit is safe.
     F=$(flags_for "$v"); AGE="--log-age"     # logged for every estimator: it also gives the clock needed for the index-pulse reference
-    run_one "est-${v}_A_r${rep}"    $F $AGE --no-pi --schedule=$SCHED_A --hold=$HOLD_A --abort-rpm=3200
-    run_one "est-${v}_Bold_r${rep}" $F $AGE --pi --schedule=$SCHED_B --hold=$HOLD_B --kp=1.5641 --ki=41.2249 --alpha=1.0 --abort-rpm=2200
-    [ "$SKIP_IMC" = "1" ] || run_one "est-${v}_Bimc_r${rep}" $F $AGE --pi --schedule=$SCHED_B --hold=$HOLD_B --kp=$KP --ki=$KI --alpha=1.0 --abort-rpm=2200
+    run_one "est-${v}_A_r${rep}"    $F $AGE --no-pi --schedule=$SCHED_A --hold=$HOLD_A --abort-rpm=$ABA
+    run_one "est-${v}_Bold_r${rep}" $F $AGE --pi --schedule=$SCHED_B --hold=$HOLD_B --kp=1.5641 --ki=41.2249 --alpha=1.0 --abort-rpm=$ABB
+    [ "$SKIP_IMC" = "1" ] || run_one "est-${v}_Bimc_r${rep}" $F $AGE --pi --schedule=$SCHED_B --hold=$HOLD_B --kp=$KP --ki=$KI --alpha=1.0 --abort-rpm=$ABB
   done
 done
 
