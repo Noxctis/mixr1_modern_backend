@@ -15,13 +15,13 @@ echo " N_Re - N_Po SWEEP WITH TORQUE"
 echo " Fit the impeller, fill the vessel to the standard volume, torque amplifier ON and warmed up (30 min), shaft free."
 echo "=============================================================="
 read -r -p "Impeller diameter in mm (96 or 174): " IMP; IMP="${IMP:-96}"
-OUT="${OUT:-logs/ch5_new/npo_$IMP}"; mkdir -p "$OUT"
 case "$IMP" in 96) D=0.096; ABORT=1500; SP="100,200,300,400,500,600,700,800,900,1000,1100,1200,1300";;
                174) D=0.174; ABORT=400; SP="50,100,150,200,250,300,340";; *) echo "type 96 or 174"; exit 1;; esac
 read -r -p "Fluid (for example tap water): " FLUID; FLUID="${FLUID:-tap water}"
 read -r -p "Fluid temperature NOW in deg C: " T0
-read -r -p "Baffles fitted? (yes/no): " BAF; BAF="${BAF:-no}"
-TQ=""; SJ="logs/ch5_new/guided_$IMP/session.json"
+read -r -p "Baffles fitted? (yes/no): " BAF; BAF="${BAF:-no}"; case "$BAF" in y*|Y*) TAG=baf;; *) TAG=nobaf;; esac
+OUT="${OUT:-logs/ch5_new/npo_${IMP}_${TAG}}"; mkdir -p "$OUT"
+TQ=""; SJ="logs/ch5_new/guided_${IMP}_${TAG}/session.json"
 [ -f "$SJ" ] && TQ=$(python3 -c "import json;print(json.load(open('$SJ')).get('torque_flags',''))" 2>/dev/null)
 if [ -z "$TQ" ]; then echo "Torque flags: the ones you normally add to the daemon for the torque sensor (like --torque-port=/dev/ttyUSB0 --torque-baud=9600 ...)"; read -r -p "flags: " TQ; fi
 [ -z "$TQ" ] && { echo "Without torque flags there is no torque, so no N_Po. Send me the command you normally use to read the torque."; exit 1; }

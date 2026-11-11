@@ -70,31 +70,32 @@ When it says **SET THE DIP SWITCH TO xxxx**: set switches 1 2 3 4 in that order 
 
 ---
 
-# DAY 3 AND 4: both impellers. Fill the vessel to the standard volume. Torque amplifier ON 30 minutes before.
+# DAY 3 AND 4: every condition the rig is used in. Fill the vessel to the standard volume. Torque amplifier ON 30 minutes before.
 
-The firmware has ONE Kp and ONE Ki, so the kit measures each impeller and then finds **one pair that works for both**. Do it in exactly this order (it minimises impeller swaps):
+The firmware has ONE Kp and ONE Ki, so the kit measures each condition (impeller and baffles in or out) and then finds **one pair that works for all of them**.
 
-**A. Fit the 96 mm impeller.**
-1. `4` then `1`, type `96`, Enter. (measures the motor, 3 minutes)
+**Which conditions?** The lightest (96 mm, baffles OUT) and the heaviest (174 mm, baffles IN) are the two that matter most, because the pair has to be stable on the light one and acceptably fast on the heavy one. Measuring all four is better (about 4 minutes each). If you measure only two, check the other two with choice 3.
 
-**B. Swap to the 174 mm impeller.**
-2. `4` then `1`, type `174`, Enter.
-3. `4` then `2` (computes the ONE pair for both, writes it into the firmware, rebuilds). Send me what it prints: it shows each impeller's crossover and phase margin and what the compromise costs.
-4. `4` then `3`, type `174` (45 second check). You want overshoot under about 10 %.
-5. `7` (N_Re-N_Po with torque, 40 minutes): type `174`, then fluid `tap water`, temperature, baffles `yes`/`no`, torque flags. At the end type the temperature again.
-6. `8`, type `174`, then the torque accuracy from the datasheet (or Enter). Send me `logs/ch5_new/npo_174/results/RESULTS.txt` and `fig_npo.pdf`.
-7. `9` (guided, see below), type `174`.
+**A. In each condition (set it up first):**
+1. `4`, then `1`. Type the impeller (`96` or `174`), then `y` if the baffles are IN, `n` if OUT, then Enter.
+   The duty goes from 0 to 100 % in steps of 10 %, 10 s each, and the test **stops by itself** when the speed passes 1400 rpm (96 mm) or 400 rpm (174 mm). From your dashboard sweeps that happens at about 90 % duty for the 96 mm impeller and about 80 % for the 174 mm impeller, so the range covers 1350 rpm and 350 rpm.
+   It prints the plant at low, mid and high speed. (The gain K falls as the speed rises, because the drag of the water grows; your 96 mm data: 0.48 rpm per count at 290 rpm, 0.34 at 800 rpm.)
 
-**C. Swap back to the 96 mm impeller.**
-8. `4` then `3`, type `96` (check).
-9. `7` with `96`, then `8` with `96`.
-10. `9` (guided) with `96`.
+**B. When all conditions are measured:**
+2. `4`, then `2`. It computes ONE pair for all of them, prints for each condition the crossover, the phase margin and the gain margin, and what the compromise costs the slowest condition, writes the pair into the firmware and rebuilds. **Send me what it prints.**
+3. In each condition: `4`, then `3` (45 second check). You want overshoot under about 10 % and a speed that settles.
+4. `4`, then `4` lists what has been measured.
+
+**C. Then the N_Re-N_Po sweep with torque, once per condition you want in the thesis:**
+5. `7` (40 minutes): type the impeller, fluid `tap water`, temperature, baffles `yes`/`no`, torque flags. At the end type the temperature again.
+6. `8`: type the impeller and `y`/`n` for baffles, then the torque accuracy from the datasheet (or Enter). Send me `logs/ch5_new/npo_96_nobaf/results/`, `npo_96_baf/`, `npo_174_nobaf/`, `npo_174_baf/` (whichever you ran).
+7. `9` (guided, see below): it also asks the impeller and the baffles.
 
 *Why 7 and 8:* your Power number is `N_Po = 2 pi tau / (rho n^2 D^5)`, so a speed error of x % gives about **2x %** in N_Po. The sweep runs once per estimator and also uses the index speed, so you see in your own numbers what DCT and CET do to the curve, and whether speed or torque dominates the uncertainty.
 
 ---
 
-# THE GUIDED MENU (`9`), once per impeller
+# THE GUIDED MENU (`9`), once per condition you want in the thesis (the main one first)
 It asks the session questions. Type:
 | It asks | Type |
 |---|---|

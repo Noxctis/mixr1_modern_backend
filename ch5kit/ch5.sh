@@ -71,36 +71,47 @@ do_use() {   # bash ch5.sh use newest|aligned
   cp "$cfg" "$cfg.bak2"; sed -i "s/inline bool ESTIMATOR_NEWEST = [a-z]*;/inline bool ESTIMATOR_NEWEST = $v;/" "$cfg"
   grep -n "ESTIMATOR_NEWEST =" "$cfg" | head -1; build_it && echo "The default estimator is now: $want"
 }
+ask_cond() {   # sets IMP and TAG (baf / nobaf)
+  read -r -p "Which impeller is fitted now? type 96 or 174: " IMP
+  case "$IMP" in 96|174) ;; *) echo "type 96 or 174"; return 1;; esac
+  read -r -p "Are the baffles IN? type y or n: " BAFANS
+  case "$BAFANS" in y|Y) TAG=baf;; *) TAG=nobaf;; esac
+}
 do_gains() {
-  echo "GAINS FOR BOTH IMPELLERS. The firmware has ONE Kp and ONE Ki, so each impeller is measured and then ONE pair that suits both is computed."
-  echo "   1 = measure the motor with the impeller that is fitted NOW (96 or 174)       about 3 minutes"
-  echo "   2 = compute the ONE pair for both impellers and write it into the firmware   1 minute + rebuild"
-  echo "   3 = check the pair with the impeller that is fitted NOW                      45 seconds"
-  read -r -p "type 1, 2 or 3: " g
+  echo "GAINS: ONE Kp and ONE Ki for every condition the rig is used in (impeller 96 or 174, baffles in or out)."
+  echo "   1 = measure the motor in the condition that is set up NOW        about 4 minutes"
+  echo "   2 = compute ONE pair for ALL the conditions measured so far, write it into the firmware"
+  echo "   3 = check the pair in the condition that is set up NOW           45 seconds"
+  echo "   4 = list what has been measured"
+  read -r -p "type 1, 2, 3 or 4: " g
   mkdir -p "$DATA/gains"
   case "$g" in
-    1) read -r -p "Which impeller is fitted now? type 96 or 174: " IMP
-       case "$IMP" in 96) SCH="0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60"; AB=1500;; 174) SCH="0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"; AB=400;; *) echo "type 96 or 174"; return 1;; esac
-       echo "Vessel filled to the standard volume, the $IMP mm impeller fitted, shaft free to turn."; pause "Ready?"
-       sudo $DBIN --test --cpr=1024 --fifo --no-stream --no-torque --wait-rest=30 --no-pi --abort-rpm=$AB --schedule=$SCH --hold=10 --csv="$DATA/gains/plant_$IMP.csv" > "$DATA/gains/plant_$IMP.stdout.txt" 2>&1
-       python3 "$KIT/scripts/analyze_sweep_fixed.py" "$DATA/gains/plant_$IMP.csv" --bw 5 --out "$DATA/gains/plant_$IMP" --emit-env "$DATA/gains/plant_$IMP.env" | tail -9
-       echo "Saved for the $IMP mm impeller. Swap to the other impeller and choose 1 again, then choose 2.";;
-    2) args=""; [ -f "$DATA/gains/plant_96.env" ] && args="$args --plant96 $DATA/gains/plant_96.env"; [ -f "$DATA/gains/plant_174.env" ] && args="$args --plant174 $DATA/gains/plant_174.env"
-       [ -z "$args" ] && { echo "Do choice 1 first (for each impeller)."; return 1; }
-       [ -f "$DATA/gains/plant_96.env" ] && [ -f "$DATA/gains/plant_174.env" ] || echo "NOTE: only one impeller measured so far; the pair will fit that one only."
-       python3 "$KIT/scripts/combine_gains.py" $args --out "$DATA/gains/common.env" || return 1
+    1) ask_cond || return 1
+       if [ "$IMP" = 96 ]; then AB=1400; else AB=400; fi
+       echo "The test raises the duty from 0 to 100 % in steps of 10 %, 10 s each. It STOPS BY ITSELF when the speed passes $AB rpm"
+       echo "(96 mm: about 90 % duty for 1350 rpm; 174 mm: about 80 % for 350 rpm, from your dashboard sweeps)."
+       echo "Vessel filled to the standard volume, impeller $IMP, baffles $TAG, shaft free to turn."; pause "Ready?"
+       sudo $DBIN --test --cpr=1024 --fifo --no-stream --no-torque --wait-rest=30 --no-pi --abort-rpm=$AB --schedule=0,10,20,30,40,50,60,70,80,90,100 --hold=10 --csv="$DATA/gains/plant_${IMP}_${TAG}.csv" > "$DATA/gains/plant_${IMP}_${TAG}.stdout.txt" 2>&1
+       grep -E "ABORT|power limit" "$DATA/gains/plant_${IMP}_${TAG}.stdout.txt" | head -2
+       python3 "$KIT/scripts/analyze_sweep_fixed.py" "$DATA/gains/plant_${IMP}_${TAG}.csv" --bw 5 --skip-first 1 --out "$DATA/gains/plant_${IMP}_${TAG}" --emit-env "$DATA/gains/plant_${IMP}_${TAG}.env" | tail -14
+       echo "Saved: plant_${IMP}_${TAG}. Set up another condition and choose 1 again; when you have all of them choose 2.";;
+    2) files=$(ls "$DATA"/gains/plant_*.env 2>/dev/null | tr '\n' ' ')
+       [ -z "$files" ] && { echo "Do choice 1 first (once per condition)."; return 1; }
+       echo "Conditions measured: $files"
+       python3 "$KIT/scripts/combine_gains.py" --plants $files --out "$DATA/gains/common.env" || return 1
        . "$DATA/gains/common.env"
   local cfg; cfg=$(ls include/config.hpp config.hpp 2>/dev/null | head -1); cp "$cfg" "$cfg.bak3"
   sed -i "s/\\(inline double GLOBAL_KP = \\)[0-9.]*;/\\1$KP;/; s/\\(inline double GLOBAL_KI = \\)[0-9.]*;/\\1$KI;/; s/\\(inline double FEEDBACK_ALPHA = \\)[0-9.]*;/\\11.0;/" "$cfg"
   grep -n "GLOBAL_KP =\\|GLOBAL_KI =\\|FEEDBACK_ALPHA =" "$cfg"
-       build_it && echo "The firmware now uses Kp=$KP Ki=$KI for both impellers. Next choose 3 for each impeller.";;
-    3) read -r -p "Which impeller is fitted now? type 96 or 174: " IMP
-       case "$IMP" in 96) LO=300; HI=400; AB=1500;; 174) LO=150; HI=250; AB=400;; *) echo "type 96 or 174"; return 1;; esac
-       pause "Impeller $IMP fitted, water in. The test goes $LO -> $HI -> $LO rpm (45 s)."
-       sudo $DBIN --test --cpr=1024 --fifo --no-stream --no-torque --wait-rest=30 --abort-rpm=$AB --pi --target=$LO --ref-step-to=$HI --ref-step-at=15 --ref-step-to2=$LO --ref-step-at2=30 --duration=45 --csv="$DATA/gains/check_$IMP.csv" > "$DATA/gains/check_$IMP.stdout.txt" 2>&1
-       python3 "$KIT/tools/ch5/analyze_ch5.py" steps --csv "$DATA/gains/check_$IMP.csv" --out "$DATA/gains/check_$IMP" | tail -12
-       echo "GOOD if the overshoot is under about 10 % and the speed settles. Do this for BOTH impellers. If either is bad, send me $DATA/gains/ .";;
-    *) echo "type 1, 2 or 3";;
+       build_it && echo "The firmware now uses Kp=$KP Ki=$KI. Next choose 3 in each condition.";;
+    3) ask_cond || return 1
+       case "$IMP" in 96) LO=300; HI=400; AB=1400;; 174) LO=150; HI=250; AB=400;; esac
+       pause "Impeller $IMP, baffles $TAG, water in. The test goes $LO -> $HI -> $LO rpm (45 s)."
+       sudo $DBIN --test --cpr=1024 --fifo --no-stream --no-torque --wait-rest=30 --abort-rpm=$AB --pi --target=$LO --ref-step-to=$HI --ref-step-at=15 --ref-step-to2=$LO --ref-step-at2=30 --duration=45 --csv="$DATA/gains/check_${IMP}_${TAG}.csv" > "$DATA/gains/check_${IMP}_${TAG}.stdout.txt" 2>&1
+       python3 "$KIT/tools/ch5/analyze_ch5.py" steps --csv "$DATA/gains/check_${IMP}_${TAG}.csv" --out "$DATA/gains/check_${IMP}_${TAG}" | tail -12
+       echo "GOOD if the overshoot is under about 10 % and the speed settles. Do it in EVERY condition. If one is bad, send me $DATA/gains/ .";;
+    4) ls "$DATA"/gains/plant_*.env "$DATA"/gains/check_*.csv 2>/dev/null; cat "$DATA/gains/common.env" 2>/dev/null;;
+    *) echo "type 1, 2, 3 or 4";;
   esac
 }
 
@@ -152,23 +163,25 @@ do_ppr_analyze() {
 }
 do_npo()         { bash "$KIT/scripts/run_npo.sh"; }
 do_npo_analyze() {
-  read -r -p "Which impeller? type 96 or 174: " IMP
+  ask_cond || return 1
   read -r -p "Torque accuracy from the datasheet in N.m (or press Enter if you do not know): " ta
-  if [ -n "$ta" ]; then python3 "$KIT/scripts/analyze_npo.py" --dir "$DATA/npo_$IMP" --tq-acc-nm "$ta"; else python3 "$KIT/scripts/analyze_npo.py" --dir "$DATA/npo_$IMP"; fi
+  if [ -n "$ta" ]; then python3 "$KIT/scripts/analyze_npo.py" --dir "$DATA/npo_${IMP}_${TAG}" --tq-acc-nm "$ta"; else python3 "$KIT/scripts/analyze_npo.py" --dir "$DATA/npo_${IMP}_${TAG}"; fi
 }
 do_guided() {
-  read -r -p "Which impeller is fitted now? type 96 or 174 (the guided tests use different speed limits for each): " IMP
-  echo "When it asks 'Impeller diameter in mm' type $IMP."
-  python3 "$KIT/tools/ch5/ch5_guided.py" --daemon "$DBIN" --dir "$DATA/guided_$IMP"
+  ask_cond || return 1
+  echo "When it asks 'Impeller diameter in mm' type $IMP, and for 'Baffles fitted?' type $( [ "$TAG" = baf ] && echo yes || echo no )."
+  python3 "$KIT/tools/ch5/ch5_guided.py" --daemon "$DBIN" --dir "$DATA/guided_${IMP}_${TAG}"
 }
 do_backup() { f="$HOME/ch5_data_$(date +%Y%m%d_%H%M).tar.gz"; tar czf "$f" "$DATA" && echo "Saved $f. Copy it to your laptop:  scp pi@<PI-IP>:$f ."; }
 do_status() {
   echo "daemon:          $DBIN"
   echo "estimator runs:  $(ls $DATA/estimators/est-*.csv 2>/dev/null | wc -l) files (full study = 45)"
-  echo "N_Re-N_Po runs: 96 mm $(ls $DATA/npo_96/npo-*.csv 2>/dev/null | grep -v _index | wc -l) files, 174 mm $(ls $DATA/npo_174/npo-*.csv 2>/dev/null | grep -v _index | wc -l) files"
+  echo "N_Re-N_Po runs: $(ls -d $DATA/npo_*/ 2>/dev/null | tr '
+' ' ')"
   echo "gains measured: $(ls $DATA/gains/plant_*.env 2>/dev/null | tr '\n' ' ')  common pair: $(cat $DATA/gains/common.env 2>/dev/null | tr '\n' ' ')"
   echo "PPR runs:        $(ls $DATA/ppr/mixr1_log_*test[AB].csv 2>/dev/null | wc -l) files"
-  echo "guided runs:     96 mm $(cat $DATA/guided_96/index.csv 2>/dev/null | tail -n +2 | wc -l), 174 mm $(cat $DATA/guided_174/index.csv 2>/dev/null | tail -n +2 | wc -l) entries"
+  echo "guided sessions: $(ls -d $DATA/guided_*/ 2>/dev/null | tr '
+' ' ')"
   ls "$DATA/estimators/results/RESULTS.txt" "$DATA/ppr/results_simple/RESULTS.txt" 2>/dev/null
 }
 menu() {

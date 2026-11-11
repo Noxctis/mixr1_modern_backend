@@ -17,7 +17,7 @@
 | Endurance, Mode 1, dashboard, logging integrity, plausibility vs Rushton | Guided 11, 15, dashboard, `integrity`, `plausibility` | 9 | tables in `analysis/` |
 
 | The shaft rides on the encoder: is the jitter **inherent**? | FFT of the raw speed (equivalent encoder angle against 0.25 deg, amplitude against speed), the ripple **folded against shaft angle** with the index pulses (same phase at every speed), dial-indicator runout | 2, 3 (+ paper) | `SHAFT / ECCENTRICITY`, `RIPPLE VERSUS SHAFT ANGLE`, `fig_shaft_*.pdf` |
-| One **Kp/Ki** works for **both impellers (96 and 174 mm)** | Plant of each impeller (K, tau, dead time), a search for the pair that keeps PM >= 60 deg and GM >= 8 dB on both, closed-loop check of each | 4 (choices 1, 2, 3) | `COMMON PAIR` table, check tables |
+| One **Kp/Ki** works for **both impellers (96 and 174 mm), baffles in and out** | Plant of each condition at low, mid and high speed (K falls with speed as the drag grows), a search for the pair that keeps PM >= 60 deg and GM >= 8 dB on all of them, closed-loop check in each | 4 (choices 1, 2, 3) | `COMMON PAIR` table, `WHAT THE COMPROMISE COSTS`, check tables |
 | Resolution (PPR) under CET: effect on accuracy | bias against the index speed, by PPR | 5, 6 | `ACCURACY BY PPR` |
 
 ## The argument for the thesis, in five sentences
