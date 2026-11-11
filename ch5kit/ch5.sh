@@ -87,7 +87,7 @@ do_gains() {
   mkdir -p "$DATA/gains"
   case "$g" in
     1) ask_cond || return 1
-       if [ "$IMP" = 96 ]; then AB=1400; else AB=400; fi
+       if [ "$IMP" = 96 ]; then AB=1450; else AB=500; fi
        echo "The test raises the duty from 0 to 100 % in steps of 10 %, 10 s each. It STOPS BY ITSELF when the speed passes $AB rpm"
        echo "(96 mm: about 90 % duty for 1350 rpm; 174 mm: about 80 % for 350 rpm, from your dashboard sweeps)."
        echo "Vessel filled to the standard volume, impeller $IMP, baffles $TAG, shaft free to turn."; pause "Ready?"
@@ -105,7 +105,7 @@ do_gains() {
   grep -n "GLOBAL_KP =\\|GLOBAL_KI =\\|FEEDBACK_ALPHA =" "$cfg"
        build_it && echo "The firmware now uses Kp=$KP Ki=$KI. Next choose 3 in each condition.";;
     3) ask_cond || return 1
-       case "$IMP" in 96) LO=300; HI=400; AB=1400;; 174) LO=150; HI=250; AB=400;; esac
+       case "$IMP" in 96) LO=300; HI=500; AB=1450;; 174) LO=150; HI=250; AB=500;; esac
        pause "Impeller $IMP, baffles $TAG, water in. The test goes $LO -> $HI -> $LO rpm (45 s)."
        sudo $DBIN --test --cpr=1024 --fifo --no-stream --no-torque --wait-rest=30 --abort-rpm=$AB --pi --target=$LO --ref-step-to=$HI --ref-step-at=15 --ref-step-to2=$LO --ref-step-at2=30 --duration=45 --csv="$DATA/gains/check_${IMP}_${TAG}.csv" > "$DATA/gains/check_${IMP}_${TAG}.stdout.txt" 2>&1
        python3 "$KIT/tools/ch5/analyze_ch5.py" steps --csv "$DATA/gains/check_${IMP}_${TAG}.csv" --out "$DATA/gains/check_${IMP}_${TAG}" | tail -12

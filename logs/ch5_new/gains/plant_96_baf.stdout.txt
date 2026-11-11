@@ -1,20 +1,21 @@
 [CONFIG] Set ENCODER_CPR to 1024
 [TEST] Wattmeter (INA219) found at 0x45 on /dev/i2c-1: logging bus_v, current_ma, power_w
-[TEST] shaft at rest (waited 1.00043 s)
-[TEST] t0_unix=1794391534.870937 cpr=1024 loop_us=10000 duration_s=110 mode=OpenLoop estimator=aligned window_us=20000
-[TEST] step 0: PWM 0% for 10 s (t=0.0100166 s)
+[TEST] shaft at rest (waited 1.00037 s)
+[TEST] t0_unix=1794392256.251611 cpr=1024 loop_us=10000 duration_s=110 mode=OpenLoop estimator=aligned window_us=20000
+[TEST] step 0: PWM 0% for 10 s (t=0.0100095 s)
 [TEST] step 1: PWM 10% for 10 s (t=10 s)
 [TEST] step 2: PWM 20% for 10 s (t=20 s)
-[TEST] step 3: PWM 30% for 10 s (t=30.0001 s)
+[TEST] step 3: PWM 30% for 10 s (t=30 s)
 [TEST] step 4: PWM 40% for 10 s (t=40 s)
 [TEST] step 5: PWM 50% for 10 s (t=50 s)
 [TEST] step 6: PWM 60% for 10 s (t=60 s)
 [TEST] step 7: PWM 70% for 10 s (t=70 s)
 [TEST] step 8: PWM 80% for 10 s (t=80 s)
 [TEST] step 9: PWM 90% for 10 s (t=90 s)
-[TEST] ABORT: speed 1402.74 RPM exceeded the 1400 RPM limit at t=92.35 s - motor stopped
-[TEST] index log: 1094 pulses -> logs/ch5_new/gains/plant_96_baf_index.csv
-[TEST] edge_total=1118375 quad_errors=0 index_rejected=1 index_missed=0 revs=1092
-[ABORTED] kp=2.629 ki=12.000 alpha=0.150 target=460.000 peak_rpm=1402.743 at_s=92.350
-[TEST] fifo=active pi=off samples=9234 period_mean_us=10000.001 period_std_us=78.794 max_late_us=4312.967 late_cycles=9234 mean_rpm=709.433 mean_abs_error_rpm=414.785
+[TEST] step 10: PWM 100% for 10 s (t=100 s)
+[TEST] ABORT: speed 1457.5 RPM exceeded the 1450 RPM limit at t=100.16 s - motor stopped
+[TEST] index log: 1273 pulses -> logs/ch5_new/gains/plant_96_baf_index.csv
+[TEST] edge_total=1300904 quad_errors=0 index_rejected=0 index_missed=0 revs=1271
+[ABORTED] kp=2.629 ki=12.000 alpha=0.150 target=460.000 peak_rpm=1457.497 at_s=100.160
+[TEST] fifo=active pi=off samples=10015 period_mean_us=10000.001 period_std_us=6.112 max_late_us=91.572 late_cycles=10015 mean_rpm=760.938 mean_abs_error_rpm=453.069
 [TEST] CSV saved to logs/ch5_new/gains/plant_96_baf.csv
