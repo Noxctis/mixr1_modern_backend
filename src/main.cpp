@@ -455,10 +455,42 @@ int run_test(const TestOptions& options) {
     int torque_fail_streak = 0;
     bool torque_dropout = false;
 
+    // The torque sensor is RS485 Modbus RTU at 9600 baud: a request + reply takes about 20 ms, which stalls the 10 ms control loop if
+    // read on it directly (this was happening here: a diagnostic log on 2026-11-11 showed one loop late by ~17 ms, followed by 2-3
+    // near-instant "catch-up" loops, every exactly torque_div loops -- the signature of this call blocking on the control-loop thread).
+    // Normal (dashboard) mode already avoids this by polling the sensor on its own thread; --test mode now does the same.
+    std::atomic<double> torque_value{std::numeric_limits<double>::quiet_NaN()};
+    std::atomic<bool> torque_stop{false};
+    std::thread torque_thread;
+    const int torque_period_ms = std::max(1, static_cast<int>(Config::LOOP_DELAY_US / 1000) * options.torque_div);
+    if (tsensor) {
+        torque_thread = std::thread([&]() {
+            cpu_set_t others;                                   // moved OFF the control core and back to normal scheduling
+            CPU_ZERO(&others);                                  // (std::thread would otherwise inherit core 3 + SCHED_FIFO from the caller)
+            for (int c = 0; c < 3; ++c) CPU_SET(c, &others);
+            pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &others);
+            sched_param normal{};
+            normal.sched_priority = 0;
+            pthread_setschedparam(pthread_self(), SCHED_OTHER, &normal);
+            auto next = std::chrono::steady_clock::now();
+            while (!torque_stop.load()) {
+                next += std::chrono::milliseconds(torque_period_ms);
+                std::this_thread::sleep_until(next);
+                double tq = 0.0;
+                if (tsensor->read(tq)) torque_value.store(tq);   // a failed read just leaves the previous value in place for this loop
+            }
+        });
+    }
+    auto stop_torque_thread = [&]() {
+        torque_stop.store(true);
+        if (torque_thread.joinable()) torque_thread.join();
+    };
+
     std::ofstream log(options.csv_path);
     if (!log) {
         std::cerr << "[TEST] Cannot open CSV: " << options.csv_path << '\n';
         motor.stop_motor();
+        stop_torque_thread();
         pigpio_stop(pi);
         return 1;
     }
@@ -496,6 +528,7 @@ int run_test(const TestOptions& options) {
             if (options.wait_client) {
                 if (!net.wait_for_client()) {            // Ctrl+C while waiting
                     motor.stop_motor();
+                    stop_torque_thread();
                     pigpio_stop(pi);
                     return 0;
                 }
@@ -577,11 +610,7 @@ int run_test(const TestOptions& options) {
         double v = 0.0, ma = 0.0;
         if (meter->read(v, ma)) { last_v = v; last_ma = ma; }
     }
-    double last_torque = std::nan("");
-    if (tsensor) {
-        double t0v = 0.0;
-        if (tsensor->read(t0v)) last_torque = t0v;            // first row gets a real value where possible, same idea as the wattmeter's idle read
-    }
+    double last_torque = std::nan("");   // filled in by the background torque thread (started above) on the first loop iteration below
 
     const double total_duration = options.sweep ? options.duration_sec * 11.0 : options.duration_sec;
     // Wall-clock instant of t = 0 of the log: lets external recordings (pidstat, the handheld-tachometer log) be aligned with the CSV.
@@ -589,7 +618,7 @@ int run_test(const TestOptions& options) {
                                - std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
     std::cout << "[TEST] t0_unix=" << (t0_unix_us / 1000000) << '.' << std::setw(6) << std::setfill('0') << (t0_unix_us % 1000000) << std::setfill(' ')
               << " cpr=" << Config::ENCODER_CPR << " loop_us=" << Config::LOOP_DELAY_US << " duration_s=" << total_duration
-              << " mode=" << (options.use_pi ? "PI" : "OpenLoop") << " estimator=" << (Config::ESTIMATOR_DCT ? "dct" : (Config::ESTIMATOR_NEWEST ? "newest" : "aligned")) << " window_us=" << Config::RPM_SAMPLE_WINDOW_US << '\n';
+              << " mode=" << (options.use_pi ? "PI" : "OpenLoop") << " estimator=" << (Config::ESTIMATOR_NEWEST ? "newest" : "aligned") << '\n';
     long long idx_rej_origin = encoder.get_index_rejected(), idx_miss_origin = encoder.get_index_missed();
     const long long edge_origin = encoder.get_edge_total(), quad_err_origin = encoder.get_quad_errors();
     
@@ -674,8 +703,7 @@ int run_test(const TestOptions& options) {
             }
         }
 
-        auto state = Config::ESTIMATOR_DCT ? kinematics.process_dct(encoder.get_count(), current_pwm)
-                   : Config::ESTIMATOR_NEWEST ? kinematics.process_newest(encoder.get_edge_snapshot(), false)
+        auto state = Config::ESTIMATOR_NEWEST ? kinematics.process_newest(encoder.get_edge_snapshot(), false)
                                               : kinematics.process(encoder.get_sync_snapshot(), current_pwm, false);
         uint32_t tick_now_us = 0;
         double tick_rtt_us = std::nan("");
@@ -750,8 +778,8 @@ int run_test(const TestOptions& options) {
         }
 
         if (tsensor && (time_samples.size() % static_cast<size_t>(options.torque_div)) == 0) {
-            double tq = 0.0;
-            if (tsensor->read(tq)) {
+            const double tq = torque_value.load();                 // from the background thread above: never blocks the control loop
+            if (std::isfinite(tq)) {
                 last_torque = tq; ++torque_ok_reads; torque_fail_streak = 0;
                 if (!meter) limiter.update(tq * state.ema_filtered_rpm * 2.0 * M_PI / 60.0, current_pwm);   // no wattmeter: cap on shaft power
             } else {
@@ -1018,6 +1046,7 @@ int run_test(const TestOptions& options) {
                       << " aborted=" << (aborted ? 1 : 0) << '\n';
         }
     }
+    stop_torque_thread();
     return 0;
 }
 
@@ -1319,8 +1348,7 @@ int main(int argc, char** argv) {
             std::cout << "[CONFIG] Set ENCODER_CPR to " << Config::ENCODER_CPR << '\n';
         } else if (arg.rfind("--estimator=", 0) == 0) {
             Config::ESTIMATOR_NEWEST = (arg.substr(12) == "newest");
-            Config::ESTIMATOR_DCT = (arg.substr(12) == "dct");
-            std::cout << "[CONFIG] Speed estimator: " << (Config::ESTIMATOR_DCT ? "dct (earlier discrete-time method)" : (Config::ESTIMATOR_NEWEST ? "newest-edge synchronous CET (paper)" : "aligned snapshots")) << '\n';
+            std::cout << "[CONFIG] Speed estimator: " << (Config::ESTIMATOR_NEWEST ? "newest-edge synchronous CET (paper)" : "aligned snapshots") << '\n';
         } else if (arg.rfind("--window=", 0) == 0) {
             Config::RPM_SAMPLE_WINDOW_US = std::stoi(arg.substr(9));
             std::cout << "[CONFIG] Set RPM_SAMPLE_WINDOW_US to " << Config::RPM_SAMPLE_WINDOW_US << "us\n";
@@ -1867,8 +1895,7 @@ int main(int argc, char** argv) {
         if (update_lcd) lcd_prescaler = 0;
 
         const EncoderSnapshot snap = encoder.get_sync_snapshot();
-        auto state = Config::ESTIMATOR_DCT ? kinematics.process_dct(encoder.get_count(), current_pwm)
-                   : Config::ESTIMATOR_NEWEST ? kinematics.process_newest(encoder.get_edge_snapshot(), update_lcd)
+        auto state = Config::ESTIMATOR_NEWEST ? kinematics.process_newest(encoder.get_edge_snapshot(), update_lcd)
                                               : kinematics.process(snap, current_pwm, update_lcd);
         last_rpm = state.ema_filtered_rpm;
 
