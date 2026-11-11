@@ -1,0 +1,24 @@
+[CONFIG] Set ENCODER_CPR to 1024
+[TEST] Wattmeter (INA219) found at 0x45 on /dev/i2c-1: logging bus_v, current_ma, power_w
+[TEST] shaft at rest (waited 1.00049 s)
+[TEST] t0_unix=1794390192.274046 cpr=1024 loop_us=10000 duration_s=160 mode=OpenLoop estimator=aligned window_us=20000
+[TEST] step 0: PWM 0% for 10 s (t=0.0100151 s)
+[TEST] step 1: PWM 4% for 10 s (t=10 s)
+[TEST] step 2: PWM 8% for 10 s (t=20 s)
+[TEST] step 3: PWM 12% for 10 s (t=30 s)
+[TEST] step 4: PWM 16% for 10 s (t=40 s)
+[TEST] step 5: PWM 20% for 10 s (t=50 s)
+[TEST] step 6: PWM 24% for 10 s (t=60 s)
+[TEST] step 7: PWM 28% for 10 s (t=70 s)
+[TEST] step 8: PWM 32% for 10 s (t=80 s)
+[TEST] step 9: PWM 36% for 10 s (t=90 s)
+[TEST] step 10: PWM 40% for 10 s (t=100 s)
+[TEST] step 11: PWM 44% for 10 s (t=110 s)
+[TEST] step 12: PWM 48% for 10 s (t=120 s)
+[TEST] step 13: PWM 52% for 10 s (t=130 s)
+[TEST] step 14: PWM 56% for 10 s (t=140 s)
+[TEST] step 15: PWM 60% for 10 s (t=150 s)
+[TEST] index log: 1462 pulses -> logs/ch5_new/gains/plant_96_index.csv
+[TEST] edge_total=1496334 quad_errors=0 index_rejected=0 index_missed=0 revs=1461
+[TEST] fifo=active pi=off samples=15999 period_mean_us=10000 period_std_us=4.91289 max_late_us=50.572 late_cycles=15999 mean_rpm=547.994 mean_abs_error_rpm=289.842
+[TEST] CSV saved to logs/ch5_new/gains/plant_96.csv
