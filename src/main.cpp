@@ -1718,6 +1718,18 @@ int main(int argc, char** argv) {
                                    "the motor's electrical power is somewhat higher than this).\n";
     else              std::cout << "[SAFETY] WARNING: no wattmeter and no torque sensor: the " << Config::POWER_LIMIT_W
                                 << " W power cap CANNOT work. Connect the wattmeter.\n";
+    // ---- Sensors checked BEFORE any start (appendix: "verify sensor availability before enabling control") ----
+    // A sensor that is expected (not switched off with --no-power / --no-torque) but did not answer at start-up BLOCKS every start: Mode 1 (KO key),
+    // Mode 2 (PI and open loop). Without the wattmeter AND the torque sensor the power cap cannot work at all, which also blocks. Fix the wiring and
+    // restart the daemon, or start it with --no-power / --no-torque on purpose to run without that sensor.
+    std::string sensors_missing;
+    if (use_power && !meter)   sensors_missing += "wattmeter (INA219) ";
+    if (use_torque && !tsensor) sensors_missing += "torque sensor (RS485) ";
+    if (!meter && !tsensor)    sensors_missing += "power cap impossible (no wattmeter and no torque sensor) ";
+    const bool sensors_ok = sensors_missing.empty();
+    if (!sensors_ok) std::cout << "[SAFETY] START BLOCKED: " << sensors_missing << "did not answer. The motor will not start until the daemon is restarted with it working "
+                                  "(or with --no-power / --no-torque on purpose).\n";
+    bool block_reported = false;
     long long rev_origin = encoder.get_revolutions();              // revolutions are counted from the start of the current run
     long long rej_origin = encoder.get_index_rejected(), miss_origin = encoder.get_index_missed();
     int tare_phase = 0;                                            // 0 none | 1 waiting for the shaft to stop | 2 zeroing (motor held only if it was asked to run)
@@ -1872,7 +1884,17 @@ int main(int argc, char** argv) {
             else                                     std::cout << " | power=n/a\n";
         };
 
-        if (start_key.pressed() && !dashboard_active && impeller_selected) {    // KO key = start / stop the motor (standalone mode only)
+        const bool ko_pressed = start_key.pressed();                // read ONCE: reading it consumes the press
+        if (ko_pressed && dashboard_active) {                       // Mode 2 (PI or open loop): the KO key is a physical STOP, never a start
+            if (current_pwm > 0 || dashboard_target_rpm > 0.0 || dashboard_target_pwm_pct > 0) {
+                dashboard_target_rpm = 0.0;
+                dashboard_target_pwm_pct = 0;
+                pi_control.reset();
+                std::cout << "[SAFETY] KO key pressed: motor stopped from the Pi (Mode 2). Send a new target from the dashboard to run again.\n";
+                network->send_event("KO_STOP");                      // the dashboard stops its sequence / step test and zeroes its slider
+            }
+        }
+        if (ko_pressed && !dashboard_active && impeller_selected) {    // KO key = start / stop the motor (standalone mode only)
             if (standalone_running) {                                // STOP: always immediate
                 standalone_running = false;
                 pi_control.reset();
@@ -2004,6 +2026,25 @@ int main(int argc, char** argv) {
             prev_open_loop = open_loop;
         }
 
+        if (!sensors_ok) {                                         // a required sensor is missing: no start from any mode (see sensors_missing)
+            const bool asked = open_loop ? (dashboard_target_pwm_pct > 0)
+                             : (dashboard_active ? (dashboard_target_rpm > 0.0) : (standalone_running && impeller_selected));
+            if (asked) {
+                if (!block_reported) {
+                    block_reported = true;
+                    std::cout << "[SAFETY] START BLOCKED: " << sensors_missing << "did not answer at start-up. Motor stays OFF.\n";
+                    network->send_event("START_BLOCKED," + sensors_missing);
+                }
+                standalone_running = false;
+                start_confirm_pending = false;
+                dashboard_target_rpm = 0.0;
+                dashboard_target_pwm_pct = 0;
+                pi_control.reset();
+                trip_msg = "NO SENSOR: BLOCKED";
+            } else {
+                block_reported = false;
+            }
+        }
         const double target = dashboard_active
             ? std::clamp(dashboard_target_rpm, Config::STANDALONE_MIN_RPM, Config::STANDALONE_MAX_RPM)
             : ((standalone_running && impeller_selected) ? standalone_target_rpm : 0.0);
