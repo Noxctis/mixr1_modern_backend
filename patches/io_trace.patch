@@ -1,0 +1,118 @@
+diff --git a/include/modbus_torque.hpp b/include/modbus_torque.hpp
+index 74878ae..c3d909f 100644
+--- a/include/modbus_torque.hpp
++++ b/include/modbus_torque.hpp
+@@ -18,7 +18,9 @@
+ #include <fcntl.h>
+ #include <termios.h>
+ #include <unistd.h>
++#include <chrono>
+ #include "modbus_tare.hpp"
++#include "io_trace.hpp"
+ 
+ class ModbusTorque {
+ public:
+@@ -61,7 +63,10 @@ public:
+     // while the daemon's torque thread is polling). True = the amplifier acknowledged; read the value back after its filter has settled.
+     bool tare() {
+         if (fd_ < 0) { err_ = "port not open"; return false; }
+-        return modbus_tare::send_zero(fd_, cfg_.slave_id, std::max(cfg_.timeout_ms, 300), err_);
++        const auto t0 = std::chrono::steady_clock::now();
++        const bool ok = modbus_tare::send_zero(fd_, cfg_.slave_id, std::max(cfg_.timeout_ms, 300), err_);
++        if (io_trace.on()) io_trace.push(IoTrace::TORQUE_ZERO, t0, ok, 0, ok ? 0 : 1);        // --trace-io
++        return ok;
+     }
+ 
+     // One raw read: the registers exactly as the amplifier sent them. Returns false on timeout / bad reply.
+@@ -127,13 +132,24 @@ public:
+ 
+     // One reading in N.m (decoded * scale + offset). Returns false on timeout / bad reply (the caller keeps its previous value).
+     bool read(double& out) {
++        const auto t0 = std::chrono::steady_clock::now();                       // --trace-io: when, how long, success or the kind of failure
+         std::vector<uint16_t> regs;
+-        if (!read_regs(regs)) return false;
+-        const double d = decode(regs, cfg_.value_format, cfg_.word_order);
+-        if (!std::isfinite(d)) { err_ = "cannot decode " + std::to_string(regs.size()) + " register(s) as " + cfg_.value_format + " (use --torque-regcount=2 for 32-bit formats)"; return false; }
+-        last_raw_ = static_cast<int32_t>(d);
+-        out = d * cfg_.scale + cfg_.offset;
+-        return true;
++        bool ok = read_regs(regs);
++        uint8_t kind = 0;
++        if (!ok) {
++            kind = err_.rfind("no/short", 0) == 0 ? 1 : err_.rfind("unexpected reply header", 0) == 0 ? 2 : err_.rfind("CRC", 0) == 0 ? 3 : 4;
++        } else {
++            const double d = decode(regs, cfg_.value_format, cfg_.word_order);
++            if (!std::isfinite(d)) {
++                err_ = "cannot decode " + std::to_string(regs.size()) + " register(s) as " + cfg_.value_format + " (use --torque-regcount=2 for 32-bit formats)";
++                ok = false; kind = 5;
++            } else {
++                last_raw_ = static_cast<int32_t>(d);
++                out = d * cfg_.scale + cfg_.offset;
++            }
++        }
++        if (io_trace.on()) io_trace.push(IoTrace::TORQUE_READ, t0, ok, ok ? last_raw_ : 0, kind);
++        return ok;
+     }
+ 
+ private:
+diff --git a/src/main.cpp b/src/main.cpp
+index 7bc49ec..5a89e35 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -1304,6 +1304,7 @@ int main(int argc, char** argv) {
+     bool no_lcd = false;                            // --no-lcd: do not touch the I2C display at all (isolates a hung I2C bus / display)
+     bool trace_gpio = false, trace_all = false;     // --trace-gpio[=all]: log every edge of the rig's GPIO pins (include/gpio_trace.hpp) for integrity and latency
+     double trace_seconds = 0.0;                     // --trace-seconds=S: stop tracing after S seconds (0 = until the daemon ends)
++    bool trace_io = false;                          // --trace-io: log every motor-driver write and torque-amplifier read (include/io_trace.hpp)
+     size_t trace_max = 4000000;                     // --trace-max=N: events kept (16 bytes each); A and B give about 17000 per second at 500 rpm
+     int lcd_bus_forced = -1;                        // --lcd-bus=N: use /dev/i2c-N for the display (default: auto-detect)
+     bool use_power = true;                          // --no-power: do not touch the wattmeter in normal mode
+@@ -1352,6 +1353,7 @@ int main(int argc, char** argv) {
+         if (a == "--trace-gpio=all") { trace_gpio = true; trace_all = true; }
+         if (a.rfind("--trace-max=", 0) == 0) trace_max = std::stoul(a.substr(12));
+         if (a.rfind("--trace-seconds=", 0) == 0) trace_seconds = std::stod(a.substr(16));
++        if (a == "--trace-io") trace_io = true;
+     }
+     for (int i = 1; i < argc; ++i) {
+         if (std::string(argv[i]) == "--test-wattmeter") return run_wattmeter_test(argc, argv);
+@@ -1477,6 +1479,7 @@ int main(int argc, char** argv) {
+         std::cout << "[GPIO] Tracing " << trace_pins.size() << " pins (up to " << trace_max << " events"
+                   << (trace_seconds > 0.0 ? ", " + std::to_string(static_cast<int>(trace_seconds)) + " s" : std::string(", until the daemon ends")) << ").\n";
+     }
++    if (trace_io) { io_trace.enable(500000); std::cout << "[IO] Tracing the motor-driver writes and the torque reads.\n"; }
+     PIController pi_control;
+ 
+     // Wattmeter (INA219 on its own I2C bus): read at 20 Hz and forwarded to the dashboard. A missing meter is not an error: the dashboard just gets NaN.
+@@ -2309,6 +2312,7 @@ int main(int argc, char** argv) {
+     network->stop_server();
+ 
+     if (gpio_trace.active()) gpio_trace.save("gpio_traces", gpio_trace_stamp());
++    if (io_trace.on()) io_trace.save("gpio_traces", gpio_trace_stamp());
+     pigpio_stop(pi);
+     std::cout << "\n[MIXR-1] Daemon safely offline.\n";
+     return 0;
+diff --git a/src/motor.cpp b/src/motor.cpp
+index 00c9eb0..7969b97 100644
+--- a/src/motor.cpp
++++ b/src/motor.cpp
+@@ -4,6 +4,8 @@
+ #include <pigpiod_if2.h>
+ #include <iostream>
+ #include <algorithm>
++#include <chrono>
++#include "io_trace.hpp"
+ 
+ void MotorController::park_fluid_outputs() {
+     // Pump and solenoid valve OFF, exactly what act_wrapper.c park() does. Needed because a model that is killed (pkill, MATLAB crash,
+@@ -66,7 +68,10 @@ void MotorController::set_pwm(int duty_cycle) {
+     duty_cycle = std::clamp(duty_cycle, 0, 4095);
+     if (duty_cycle == last_duty) return;                         // unchanged: an idle daemon does not touch the PWM at all
+     long long hw_duty = (static_cast<long long>(duty_cycle) * 1000000LL) / 4095LL;
+-    if (hardware_PWM(pi_handle, Config::PIN_M1_PWM, Config::PWM_FREQUENCY, static_cast<int>(hw_duty)) == 0) last_duty = duty_cycle;
++    const auto t_call = std::chrono::steady_clock::now();                   // --trace-io: when, how long, and whether the driver command succeeded
++    const int pwm_result = hardware_PWM(pi_handle, Config::PIN_M1_PWM, Config::PWM_FREQUENCY, static_cast<int>(hw_duty));
++    if (io_trace.on()) io_trace.push(IoTrace::MOTOR_PWM, t_call, pwm_result == 0, duty_cycle);
++    if (pwm_result == 0) last_duty = duty_cycle;
+     else last_duty = -1;                                         // try again next call
+ }
+ 

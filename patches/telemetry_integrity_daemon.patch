@@ -1,0 +1,67 @@
+diff --git a/src/network.cpp b/src/network.cpp
+index c1f44a3..3436e19 100644
+--- a/src/network.cpp
++++ b/src/network.cpp
+@@ -14,6 +14,11 @@
+ extern std::atomic<bool> run_loop;
+ 
+ void TelemetryServer::disconnect_client() {
++    if (client_socket >= 0 && tx_dropped_lines > 0)
++        std::cout << "[MIXR-1] Telemetry: " << tx_dropped_lines << " lines were discarded in this session (the dashboard fell more than "
++                  << MAX_TX_BYTES << " bytes behind).\n";
++    tx_buffer.clear();
++    tx_dropped_lines = 0;
+     if (client_socket >= 0) close(client_socket);
+     client_socket = -1;
+     ext_requested = false;
+@@ -48,19 +53,30 @@ void TelemetryServer::adopt_client(int fd) {
+     tare_requested = false;
+     start_tare = true;
+     send_fail_streak = 0;
++    tx_buffer.clear();
++    tx_dropped_lines = 0;
+     last_rx = std::chrono::steady_clock::now();
+ }
+ 
+ // Never blocks the control loop. A peer that is gone or not reading is dropped (the main loop then falls back to standalone, motor target 0).
+ bool TelemetryServer::send_to_client(const std::string& packet) {
+     if (client_socket < 0) return false;
+-    const ssize_t n = send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL | MSG_DONTWAIT);
+-    if (n == static_cast<ssize_t>(packet.length())) { send_fail_streak = 0; return true; }
+-    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+-        std::cout << "[MIXR-1] Dashboard connection lost (" << std::strerror(errno) << "): dropped. Motor falls back to standalone (0).\n";
+-        disconnect_client();
+-        return false;
++    // The socket is non-blocking and small, so send() can take only part of a line or none of it. The old code then threw the line away, or
++    // sent half of it, and the next line ran on from the half (a malformed line that the dashboard silently dropped). The lines are queued
++    // instead and written in order; only if the peer is more than MAX_TX_BYTES behind is a WHOLE line discarded and counted.
++    if (tx_buffer.size() + packet.size() > MAX_TX_BYTES) ++tx_dropped_lines;
++    else tx_buffer += packet;
++    while (!tx_buffer.empty()) {
++        const ssize_t n = send(client_socket, tx_buffer.data(), tx_buffer.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
++        if (n > 0) { tx_buffer.erase(0, static_cast<size_t>(n)); send_fail_streak = 0; continue; }
++        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
++            std::cout << "[MIXR-1] Dashboard connection lost (" << std::strerror(errno) << "): dropped. Motor falls back to standalone (0).\n";
++            disconnect_client();
++            return false;
++        }
++        break;                                                  // the socket is full: the rest waits for the next call
+     }
++    if (tx_buffer.empty()) return true;
+     if (++send_fail_streak > 300) {                             // about 3 s of a peer that does not read
+         std::cout << "[MIXR-1] Dashboard stopped reading for 3 s: dropped. Motor falls back to standalone (0).\n";
+         disconnect_client();
+diff --git a/include/network.hpp b/include/network.hpp
+index 23a40bf..13c2582 100644
+--- a/include/network.hpp
++++ b/include/network.hpp
+@@ -21,6 +21,9 @@ private:
+     bool torque_requested = false; // client sent CMD:TORQUE,1 -> wants 1 extra field (torque, Nm) after the power fields (if any)
+     bool power_requested = false; // client sent CMD:POWER,1 -> wants 3 extra fields (bus V, current mA, power W) after the 6 extended ones
+     int send_fail_streak = 0;     // consecutive sends the peer did not take (a stalled / sleeping dashboard)
++    std::string tx_buffer;        // lines the socket has not taken yet, sent in order: a full socket delays a line, it never cuts or loses one
++    unsigned long long tx_dropped_lines = 0;   // whole lines discarded because the peer was more than MAX_TX_BYTES behind (reported on disconnect)
++    static constexpr size_t MAX_TX_BYTES = 65536;   // about 6 s of telemetry at 100 Hz
+     bool heartbeat_seen = false;  // client has sent CMD:HB at least once -> the heartbeat timeout is enforced
+     bool tare_requested = false;  // client sent CMD:TARE
+     bool start_tare = true;       // client sent CMD:STARTTARE,0|1: tare the torque amplifier at the next start? (default yes)

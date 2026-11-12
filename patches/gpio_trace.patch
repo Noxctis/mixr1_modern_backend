@@ -1,0 +1,83 @@
+diff --git a/src/main.cpp b/src/main.cpp
+index 4119756..51fc569 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -24,6 +24,7 @@
+ #include <sys/file.h>
+ 
+ #include "config.hpp"
++#include "gpio_trace.hpp"
+ #include "process_monitor.hpp"
+ #include "kinematics.hpp"
+ #include "pi_controller.hpp"
+@@ -40,6 +41,13 @@
+ 
+ std::atomic<bool> run_loop{true};
+ 
++static std::string gpio_trace_stamp() {
++    std::time_t t = std::time(nullptr); std::tm tmv{};
++    localtime_r(&t, &tmv);
++    char b[32]; std::strftime(b, sizeof b, "%Y%m%d_%H%M%S", &tmv);
++    return b;
++}
++
+ void signal_handler(int signum) {
+     run_loop = false;
+ }
+@@ -1293,6 +1301,9 @@ int main(int argc, char** argv) {
+     bool debug_motor = false;                       // --debug-motor: print the PWM the daemon commands (about once per second)
+     double dbg_loop_max_ms = 0.0, dbg_lcd_max_ms = 0.0;   // --debug-motor timing probes (loop period, OLED redraw time)
+     bool no_lcd = false;                            // --no-lcd: do not touch the I2C display at all (isolates a hung I2C bus / display)
++    bool trace_gpio = false, trace_all = false;     // --trace-gpio[=all]: log every edge of the rig's GPIO pins (include/gpio_trace.hpp) for integrity and latency
++    double trace_seconds = 0.0;                     // --trace-seconds=S: stop tracing after S seconds (0 = until the daemon ends)
++    size_t trace_max = 4000000;                     // --trace-max=N: events kept (16 bytes each); A and B give about 17000 per second at 500 rpm
+     int lcd_bus_forced = -1;                        // --lcd-bus=N: use /dev/i2c-N for the display (default: auto-detect)
+     bool use_power = true;                          // --no-power: do not touch the wattmeter in normal mode
+     int power_addr = Config::I2C_POWER_ADDR;        // --power-addr=0x45
+@@ -1336,6 +1347,10 @@ int main(int argc, char** argv) {
+         if (a == "--debug-motor") debug_motor = true;
+         if (a == "--no-lcd") no_lcd = true;
+         if (a.rfind("--lcd-bus=", 0) == 0) lcd_bus_forced = std::stoi(a.substr(10));
++        if (a == "--trace-gpio") trace_gpio = true;
++        if (a == "--trace-gpio=all") { trace_gpio = true; trace_all = true; }
++        if (a.rfind("--trace-max=", 0) == 0) trace_max = std::stoul(a.substr(12));
++        if (a.rfind("--trace-seconds=", 0) == 0) trace_seconds = std::stod(a.substr(16));
+     }
+     for (int i = 1; i < argc; ++i) {
+         if (std::string(argv[i]) == "--test-wattmeter") return run_wattmeter_test(argc, argv);
+@@ -1449,6 +1464,18 @@ int main(int argc, char** argv) {
+     LCD1602 lcd(pi, Config::DISPLAY_TYPE, no_lcd ? 0xFFFF : display_addr, display_bus);       // an invalid address makes i2c_open fail at once: every display call becomes a no-op
+     EC11Input ec11(pi, Config::PIN_EC11_A, Config::PIN_EC11_B, Config::PIN_EC11_SW);
+     PushButton start_key(pi, Config::PIN_START_KEY);               // module KO key: toggles RUN / STOP in standalone mode
++    // ---- GPIO trace (--trace-gpio): every edge of the encoder, knob, start key and driver enable / direction pins, for integrity and latency ----
++    GpioTrace gpio_trace;
++    const auto trace_start = std::chrono::steady_clock::now();
++    if (trace_gpio) {
++        std::vector<unsigned> trace_pins = {Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X, Config::PIN_EC11_A, Config::PIN_EC11_B,
++                                            Config::PIN_EC11_SW, Config::PIN_START_KEY, Config::PIN_M1_EN, Config::PIN_M1_INA, Config::PIN_M1_INB};
++        if (trace_all) for (unsigned pin : {Config::PIN_M1_PWM, Config::PIN_FLUID_PUMP_EN, Config::PIN_FLUID_SOL_INA, Config::PIN_FLUID_SOL_INB, Config::PIN_FLUID_SOL_PWM})
++            trace_pins.push_back(pin);       // the 20 kHz PWM pin gives 40000 events per second: use for short traces only
++        gpio_trace.start(pi, trace_pins, trace_max);
++        std::cout << "[GPIO] Tracing " << trace_pins.size() << " pins (up to " << trace_max << " events"
++                  << (trace_seconds > 0.0 ? ", " + std::to_string(static_cast<int>(trace_seconds)) + " s" : std::string(", until the daemon ends")) << ").\n";
++    }
+     PIController pi_control;
+ 
+     // Wattmeter (INA219 on its own I2C bus): read at 20 Hz and forwarded to the dashboard. A missing meter is not an error: the dashboard just gets NaN.
+@@ -1891,6 +1918,8 @@ int main(int argc, char** argv) {
+             }
+         }
+ 
++        if (gpio_trace.active() && trace_seconds > 0.0 && std::chrono::duration<double>(std::chrono::steady_clock::now() - trace_start).count() >= trace_seconds)
++            gpio_trace.save("gpio_traces", gpio_trace_stamp());      // time is up: write the trace and stop tracing
+         const bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
+         if (update_lcd) lcd_prescaler = 0;
+ 
+@@ -2222,6 +2251,7 @@ int main(int argc, char** argv) {
+     if (torque_thread.joinable()) torque_thread.join();
+     network->stop_server();
+ 
++    if (gpio_trace.active()) gpio_trace.save("gpio_traces", gpio_trace_stamp());
+     pigpio_stop(pi);
+     std::cout << "\n[MIXR-1] Daemon safely offline.\n";
+     return 0;
