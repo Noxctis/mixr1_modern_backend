@@ -159,11 +159,20 @@ namespace Config {
     constexpr double STANDALONE_MAX_RPM = 1500.0;
 
     // --- Impeller selection (menu at start-up; double-click the knob button to come back to it) ---
-    struct ImpellerOption { const char* label; double max_rpm; };
+    struct ImpellerOption { const char* label; double max_rpm; double diameter_m; const char* tag; };
     constexpr std::array<ImpellerOption, 2> IMPELLERS = {{
-        {"96 MM",  1400.0},     // knob limit for the 96 mm impeller (covers the 1326 and 1362 RPM test speeds)
-        {"174 MM",  350.0}      // knob limit for the 174 mm impeller
+        {"96 MM",  1400.0, 0.0665, "96mm"},     // knob limit for the 96 mm impeller (covers the 1326 and 1362 RPM test speeds); D and tag for the Mode 1 log
+        {"174 MM",  350.0, 0.1207, "174mm"}      // knob limit for the 174 mm impeller
     }};
     constexpr int DOUBLE_CLICK_MS = 500;                // two presses of the knob button within this time = back to the impeller menu
     constexpr double TORQUE_ESTIMATE_MAX_NM = 1.0;
+
+    // --- Mode 1 session log (session_log.hpp) ---
+    // Every run started from the knob / KO key is recorded at the loop rate (100 Hz) and, when it ends (KO stop, safety trip, dashboard
+    // connects, MATLAB takes over, daemon exits), written as mixr1_<impeller>_<date>_<time>_mode1.csv and .mat into MODE1_LOG_DIR
+    // (relative to the folder the daemon is started from). Same 13 columns and variable names as the dashboard's export.
+    constexpr bool MODE1_LOG_ENABLED = true;
+    constexpr const char* MODE1_LOG_DIR = "mode1_logs";
+    constexpr double FLUID_DENSITY = 996.3;              // kg/m3, test water (same as the dashboard)
+    constexpr double FLUID_VISCOSITY = 8.54e-4;          // Pa.s
 }

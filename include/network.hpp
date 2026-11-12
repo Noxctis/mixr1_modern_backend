@@ -21,6 +21,9 @@ private:
     bool torque_requested = false; // client sent CMD:TORQUE,1 -> wants 1 extra field (torque, Nm) after the power fields (if any)
     bool power_requested = false; // client sent CMD:POWER,1 -> wants 3 extra fields (bus V, current mA, power W) after the 6 extended ones
     int send_fail_streak = 0;     // consecutive sends the peer did not take (a stalled / sleeping dashboard)
+    std::string tx_buffer;        // lines the socket has not taken yet, sent in order: a full socket delays a line, it never cuts or loses one
+    unsigned long long tx_dropped_lines = 0;   // whole lines discarded because the peer was more than MAX_TX_BYTES behind (reported on disconnect)
+    static constexpr size_t MAX_TX_BYTES = 65536;   // about 6 s of telemetry at 100 Hz
     bool heartbeat_seen = false;  // client has sent CMD:HB at least once -> the heartbeat timeout is enforced
     bool tare_requested = false;  // client sent CMD:TARE
     bool start_tare = true;       // client sent CMD:STARTTARE,0|1: tare the torque amplifier at the next start? (default yes)

@@ -14,6 +14,11 @@
 extern std::atomic<bool> run_loop;
 
 void TelemetryServer::disconnect_client() {
+    if (client_socket >= 0 && tx_dropped_lines > 0)
+        std::cout << "[MIXR-1] Telemetry: " << tx_dropped_lines << " lines were discarded in this session (the dashboard fell more than "
+                  << MAX_TX_BYTES << " bytes behind).\n";
+    tx_buffer.clear();
+    tx_dropped_lines = 0;
     if (client_socket >= 0) close(client_socket);
     client_socket = -1;
     ext_requested = false;
@@ -48,19 +53,30 @@ void TelemetryServer::adopt_client(int fd) {
     tare_requested = false;
     start_tare = true;
     send_fail_streak = 0;
+    tx_buffer.clear();
+    tx_dropped_lines = 0;
     last_rx = std::chrono::steady_clock::now();
 }
 
 // Never blocks the control loop. A peer that is gone or not reading is dropped (the main loop then falls back to standalone, motor target 0).
 bool TelemetryServer::send_to_client(const std::string& packet) {
     if (client_socket < 0) return false;
-    const ssize_t n = send(client_socket, packet.c_str(), packet.length(), MSG_NOSIGNAL | MSG_DONTWAIT);
-    if (n == static_cast<ssize_t>(packet.length())) { send_fail_streak = 0; return true; }
-    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-        std::cout << "[MIXR-1] Dashboard connection lost (" << std::strerror(errno) << "): dropped. Motor falls back to standalone (0).\n";
-        disconnect_client();
-        return false;
+    // The socket is non-blocking and small, so send() can take only part of a line or none of it. The old code then threw the line away, or
+    // sent half of it, and the next line ran on from the half (a malformed line that the dashboard silently dropped). The lines are queued
+    // instead and written in order; only if the peer is more than MAX_TX_BYTES behind is a WHOLE line discarded and counted.
+    if (tx_buffer.size() + packet.size() > MAX_TX_BYTES) ++tx_dropped_lines;
+    else tx_buffer += packet;
+    while (!tx_buffer.empty()) {
+        const ssize_t n = send(client_socket, tx_buffer.data(), tx_buffer.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (n > 0) { tx_buffer.erase(0, static_cast<size_t>(n)); send_fail_streak = 0; continue; }
+        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            std::cout << "[MIXR-1] Dashboard connection lost (" << std::strerror(errno) << "): dropped. Motor falls back to standalone (0).\n";
+            disconnect_client();
+            return false;
+        }
+        break;                                                  // the socket is full: the rest waits for the next call
     }
+    if (tx_buffer.empty()) return true;
     if (++send_fail_streak > 300) {                             // about 3 s of a peer that does not read
         std::cout << "[MIXR-1] Dashboard stopped reading for 3 s: dropped. Motor falls back to standalone (0).\n";
         disconnect_client();

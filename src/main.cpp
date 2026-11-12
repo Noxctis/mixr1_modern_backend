@@ -24,6 +24,7 @@
 #include <sys/file.h>
 
 #include "config.hpp"
+#include "gpio_trace.hpp"
 #include "process_monitor.hpp"
 #include "kinematics.hpp"
 #include "pi_controller.hpp"
@@ -37,8 +38,16 @@
 #include "torquesensor.hpp"
 #include "modbus_torque.hpp"
 #include "i2c_util.hpp"
+#include "session_log.hpp"
 
 std::atomic<bool> run_loop{true};
+
+static std::string gpio_trace_stamp() {
+    std::time_t t = std::time(nullptr); std::tm tmv{};
+    localtime_r(&t, &tmv);
+    char b[32]; std::strftime(b, sizeof b, "%Y%m%d_%H%M%S", &tmv);
+    return b;
+}
 
 void signal_handler(int signum) {
     run_loop = false;
@@ -1293,6 +1302,10 @@ int main(int argc, char** argv) {
     bool debug_motor = false;                       // --debug-motor: print the PWM the daemon commands (about once per second)
     double dbg_loop_max_ms = 0.0, dbg_lcd_max_ms = 0.0;   // --debug-motor timing probes (loop period, OLED redraw time)
     bool no_lcd = false;                            // --no-lcd: do not touch the I2C display at all (isolates a hung I2C bus / display)
+    bool trace_gpio = false, trace_all = false;     // --trace-gpio[=all]: log every edge of the rig's GPIO pins (include/gpio_trace.hpp) for integrity and latency
+    double trace_seconds = 0.0;                     // --trace-seconds=S: stop tracing after S seconds (0 = until the daemon ends)
+    bool trace_io = false;                          // --trace-io: log every motor-driver write and torque-amplifier read (include/io_trace.hpp)
+    size_t trace_max = 4000000;                     // --trace-max=N: events kept (16 bytes each); A and B give about 17000 per second at 500 rpm
     int lcd_bus_forced = -1;                        // --lcd-bus=N: use /dev/i2c-N for the display (default: auto-detect)
     bool use_power = true;                          // --no-power: do not touch the wattmeter in normal mode
     int power_addr = Config::I2C_POWER_ADDR;        // --power-addr=0x45
@@ -1336,6 +1349,11 @@ int main(int argc, char** argv) {
         if (a == "--debug-motor") debug_motor = true;
         if (a == "--no-lcd") no_lcd = true;
         if (a.rfind("--lcd-bus=", 0) == 0) lcd_bus_forced = std::stoi(a.substr(10));
+        if (a == "--trace-gpio") trace_gpio = true;
+        if (a == "--trace-gpio=all") { trace_gpio = true; trace_all = true; }
+        if (a.rfind("--trace-max=", 0) == 0) trace_max = std::stoul(a.substr(12));
+        if (a.rfind("--trace-seconds=", 0) == 0) trace_seconds = std::stod(a.substr(16));
+        if (a == "--trace-io") trace_io = true;
     }
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--test-wattmeter") return run_wattmeter_test(argc, argv);
@@ -1449,6 +1467,19 @@ int main(int argc, char** argv) {
     LCD1602 lcd(pi, Config::DISPLAY_TYPE, no_lcd ? 0xFFFF : display_addr, display_bus);       // an invalid address makes i2c_open fail at once: every display call becomes a no-op
     EC11Input ec11(pi, Config::PIN_EC11_A, Config::PIN_EC11_B, Config::PIN_EC11_SW);
     PushButton start_key(pi, Config::PIN_START_KEY);               // module KO key: toggles RUN / STOP in standalone mode
+    // ---- GPIO trace (--trace-gpio): every edge of the encoder, knob, start key and driver enable / direction pins, for integrity and latency ----
+    GpioTrace gpio_trace;
+    const auto trace_start = std::chrono::steady_clock::now();
+    if (trace_gpio) {
+        std::vector<unsigned> trace_pins = {Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X, Config::PIN_EC11_A, Config::PIN_EC11_B,
+                                            Config::PIN_EC11_SW, Config::PIN_START_KEY, Config::PIN_M1_EN, Config::PIN_M1_INA, Config::PIN_M1_INB};
+        if (trace_all) for (unsigned pin : {Config::PIN_M1_PWM, Config::PIN_FLUID_PUMP_EN, Config::PIN_FLUID_SOL_INA, Config::PIN_FLUID_SOL_INB, Config::PIN_FLUID_SOL_PWM})
+            trace_pins.push_back(pin);       // the 20 kHz PWM pin gives 40000 events per second: use for short traces only
+        gpio_trace.start(pi, trace_pins, trace_max);
+        std::cout << "[GPIO] Tracing " << trace_pins.size() << " pins (up to " << trace_max << " events"
+                  << (trace_seconds > 0.0 ? ", " + std::to_string(static_cast<int>(trace_seconds)) + " s" : std::string(", until the daemon ends")) << ").\n";
+    }
+    if (trace_io) { io_trace.enable(500000); std::cout << "[IO] Tracing the motor-driver writes and the torque reads.\n"; }
     PIController pi_control;
 
     // Wattmeter (INA219 on its own I2C bus): read at 20 Hz and forwarded to the dashboard. A missing meter is not an error: the dashboard just gets NaN.
@@ -1661,6 +1692,28 @@ int main(int argc, char** argv) {
     kinematics.reset(encoder.get_sync_snapshot());
     auto next_wake = std::chrono::steady_clock::now();
     auto last_time = next_wake;
+
+    // ---- Mode 1 session log: one row per loop while the motor is started from the knob / KO key; .csv + .mat written when the run ends ----
+    std::vector<SessionLog::Row> rec_rows;
+    bool rec_active = false, rec_full_reported = false;
+    std::chrono::steady_clock::time_point rec_t0;
+    std::string rec_tag, rec_stamp;
+    std::thread rec_writer;                                        // the files are written off the control loop, so a long run cannot stall it
+    auto rec_finish = [&](const std::string& why) {
+        if (!rec_active) return;
+        rec_active = false;
+        if (rec_rows.size() < 2) { rec_rows.clear(); return; }     // a start cancelled at once is not a run
+        if (rec_writer.joinable()) rec_writer.join();
+        std::vector<SessionLog::Row> rows;
+        rows.swap(rec_rows);
+        const std::string dir = Config::MODE1_LOG_DIR, tag = rec_tag, stamp = rec_stamp;
+        std::cout << "[LOG] Mode 1 run ended (" << why << "): saving " << rows.size() << " rows to " << dir << "/\n";
+        rec_writer = std::thread([rows = std::move(rows), dir, tag, stamp]() {
+            const std::string path = SessionLog::save(dir, tag, stamp, rows);
+            if (path.empty()) std::cout << "[LOG] WARNING: could not write the Mode 1 log into " << dir << "/ (folder not writable?)\n";
+            else              std::cout << "[LOG] Saved " << path << " and the matching .mat file\n";
+        });
+    };
     const auto loop_start = next_wake;
 
     while (run_loop) {
@@ -1680,6 +1733,7 @@ int main(int argc, char** argv) {
         if (matlab_monitor.active()) {
             if (!mode3_notified) {
                 mode3_notified = true;
+                rec_finish("MATLAB Mode 3 took over");
                 const bool was_running = current_pwm > 0;
                 motor.release();                                   // EN low: mixer off at once. GPIO 13 untouched (pump PWM)
                 current_pwm = 0;
@@ -1891,6 +1945,8 @@ int main(int argc, char** argv) {
             }
         }
 
+        if (gpio_trace.active() && trace_seconds > 0.0 && std::chrono::duration<double>(std::chrono::steady_clock::now() - trace_start).count() >= trace_seconds)
+            gpio_trace.save("gpio_traces", gpio_trace_stamp());      // time is up: write the trace and stop tracing
         const bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
         if (update_lcd) lcd_prescaler = 0;
 
@@ -2136,6 +2192,37 @@ int main(int argc, char** argv) {
             if (std::isfinite(tq)) limiter.update(tq * state.ema_filtered_rpm * 2.0 * M_PI / 60.0, current_pwm);
         }
 
+        // ---- Mode 1 session log: start with the run, one row per loop, save when the run ends ----
+        {
+            const bool want_rec = Config::MODE1_LOG_ENABLED && !dashboard_active && impeller_selected && standalone_running;
+            if (want_rec && !rec_active) {
+                rec_active = true;
+                rec_full_reported = false;
+                rec_rows.clear();
+                rec_rows.reserve(60000);
+                rec_t0 = current_time;
+                rec_stamp = SessionLog::timestamp_now();
+                rec_tag = Config::IMPELLERS[static_cast<size_t>(impeller_idx)].tag;
+                std::cout << "[LOG] Mode 1 run started: recording to " << Config::MODE1_LOG_DIR << "/ (saved when the run stops)\n";
+            } else if (!want_rec && rec_active) {
+                rec_finish(trip_msg.empty() ? std::string("stopped") : trip_msg);
+            }
+            if (rec_active) {
+                if (rec_rows.size() < SessionLog::MAX_ROWS) {
+                    const double tq = torque_value.load();
+                    double shaft_w, n_re, n_po;
+                    SessionLog::metrics(state.ema_filtered_rpm, tq, Config::FLUID_DENSITY, Config::FLUID_VISCOSITY,
+                                        Config::IMPELLERS[static_cast<size_t>(impeller_idx)].diameter_m, shaft_w, n_re, n_po);
+                    rec_rows.push_back({std::chrono::duration<double>(current_time - rec_t0).count(), state.exact_rpm, state.ema_filtered_rpm,
+                                        static_cast<double>(revs_since(encoder, rev_origin)), tq, shaft_w, n_re, n_po,
+                                        current_pwm * 100.0 / 4095.0, active_target, power_sample.bus_v, power_sample.current_ma, power_sample.power_w});
+                } else if (!rec_full_reported) {
+                    rec_full_reported = true;
+                    std::cout << "[LOG] WARNING: the Mode 1 log is full (" << SessionLog::MAX_ROWS << " rows); the run goes on but is no longer recorded.\n";
+                }
+            }
+        }
+
         if (dashboard_active) {
             bool sent;
             if (network->wants_ext()) {
@@ -2217,11 +2304,15 @@ int main(int argc, char** argv) {
         }
     }
 
+    rec_finish("daemon stopped");
+    if (rec_writer.joinable()) rec_writer.join();
     motor.stop_motor();
     torque_stop = true;
     if (torque_thread.joinable()) torque_thread.join();
     network->stop_server();
 
+    if (gpio_trace.active()) gpio_trace.save("gpio_traces", gpio_trace_stamp());
+    if (io_trace.on()) io_trace.save("gpio_traces", gpio_trace_stamp());
     pigpio_stop(pi);
     std::cout << "\n[MIXR-1] Daemon safely offline.\n";
     return 0;

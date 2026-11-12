@@ -18,7 +18,9 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
+#include <chrono>
 #include "modbus_tare.hpp"
+#include "io_trace.hpp"
 
 class ModbusTorque {
 public:
@@ -61,7 +63,10 @@ public:
     // while the daemon's torque thread is polling). True = the amplifier acknowledged; read the value back after its filter has settled.
     bool tare() {
         if (fd_ < 0) { err_ = "port not open"; return false; }
-        return modbus_tare::send_zero(fd_, cfg_.slave_id, std::max(cfg_.timeout_ms, 300), err_);
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok = modbus_tare::send_zero(fd_, cfg_.slave_id, std::max(cfg_.timeout_ms, 300), err_);
+        if (io_trace.on()) io_trace.push(IoTrace::TORQUE_ZERO, t0, ok, 0, ok ? 0 : 1);        // --trace-io
+        return ok;
     }
 
     // One raw read: the registers exactly as the amplifier sent them. Returns false on timeout / bad reply.
@@ -127,13 +132,24 @@ public:
 
     // One reading in N.m (decoded * scale + offset). Returns false on timeout / bad reply (the caller keeps its previous value).
     bool read(double& out) {
+        const auto t0 = std::chrono::steady_clock::now();                       // --trace-io: when, how long, success or the kind of failure
         std::vector<uint16_t> regs;
-        if (!read_regs(regs)) return false;
-        const double d = decode(regs, cfg_.value_format, cfg_.word_order);
-        if (!std::isfinite(d)) { err_ = "cannot decode " + std::to_string(regs.size()) + " register(s) as " + cfg_.value_format + " (use --torque-regcount=2 for 32-bit formats)"; return false; }
-        last_raw_ = static_cast<int32_t>(d);
-        out = d * cfg_.scale + cfg_.offset;
-        return true;
+        bool ok = read_regs(regs);
+        uint8_t kind = 0;
+        if (!ok) {
+            kind = err_.rfind("no/short", 0) == 0 ? 1 : err_.rfind("unexpected reply header", 0) == 0 ? 2 : err_.rfind("CRC", 0) == 0 ? 3 : 4;
+        } else {
+            const double d = decode(regs, cfg_.value_format, cfg_.word_order);
+            if (!std::isfinite(d)) {
+                err_ = "cannot decode " + std::to_string(regs.size()) + " register(s) as " + cfg_.value_format + " (use --torque-regcount=2 for 32-bit formats)";
+                ok = false; kind = 5;
+            } else {
+                last_raw_ = static_cast<int32_t>(d);
+                out = d * cfg_.scale + cfg_.offset;
+            }
+        }
+        if (io_trace.on()) io_trace.push(IoTrace::TORQUE_READ, t0, ok, ok ? last_raw_ : 0, kind);
+        return ok;
     }
 
 private:

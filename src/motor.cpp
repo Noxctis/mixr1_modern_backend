@@ -4,6 +4,8 @@
 #include <pigpiod_if2.h>
 #include <iostream>
 #include <algorithm>
+#include <chrono>
+#include "io_trace.hpp"
 
 void MotorController::park_fluid_outputs() {
     // Pump and solenoid valve OFF, exactly what act_wrapper.c park() does. Needed because a model that is killed (pkill, MATLAB crash,
@@ -66,7 +68,10 @@ void MotorController::set_pwm(int duty_cycle) {
     duty_cycle = std::clamp(duty_cycle, 0, 4095);
     if (duty_cycle == last_duty) return;                         // unchanged: an idle daemon does not touch the PWM at all
     long long hw_duty = (static_cast<long long>(duty_cycle) * 1000000LL) / 4095LL;
-    if (hardware_PWM(pi_handle, Config::PIN_M1_PWM, Config::PWM_FREQUENCY, static_cast<int>(hw_duty)) == 0) last_duty = duty_cycle;
+    const auto t_call = std::chrono::steady_clock::now();                   // --trace-io: when, how long, and whether the driver command succeeded
+    const int pwm_result = hardware_PWM(pi_handle, Config::PIN_M1_PWM, Config::PWM_FREQUENCY, static_cast<int>(hw_duty));
+    if (io_trace.on()) io_trace.push(IoTrace::MOTOR_PWM, t_call, pwm_result == 0, duty_cycle);
+    if (pwm_result == 0) last_duty = duty_cycle;
     else last_duty = -1;                                         // try again next call
 }
 
