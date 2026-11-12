@@ -1,0 +1,115 @@
+%%%PLANTFIG
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{fig_plant_id}
+    \caption[Identification of the plant from the open-loop sweep]{Identification of the plant from the open-loop PWM sweep logged with the aligned CET estimator, with the time origin at the first row of each step. (a) One step (819 to 1229 counts) with the fit of Equation~\ref{eq:plant}; the dead time $\theta$ and the time $\theta + \tau$ are marked. (b) Steady-state gain $K$ and (c) time constant $\tau = 1/A$ and dead time $\theta$ of every step against the speed before the step.}
+    \label{fig:plant-id}
+\end{figure}
+
+The refit of the steps from 410 to 2867 counts of this sweep, by Equation~\ref{eq:plant}, gives a gain of 0.66 to 0.67~rpm per count, a time constant of 32 to 37~ms, and a dead time of 7.5 to 8.7~ms for every step (Figure~\ref{fig:plant-id}), so the plant is linear in the sense of the design: the gain does not depend on the speed over this range and the dynamics do not change from step to step.
+%%%PISTEP
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{fig_pi_step}
+    \caption[Measured and simulated closed-loop staircases]{Closed-loop staircase of the free motor with the aligned CET estimate and the two sets of gains: measured speed (grey), setpoint (black), and a simulation of the identified plant ($K = 0.667$~rpm/count, $A = 30$~s$^{-1}$, dead time 8~ms) with the controller of Equation~\ref{eq:pi-law} at 10~ms (colour). Top: the whole staircase from 500 to 1500~rpm. Bottom: one step of 250~rpm. The earlier gains reach the setpoint in about 30~ms, the identified-plant gains in about 0.5~s.}
+    \label{fig:pi-step}
+\end{figure}
+%%%GAINMATRIX
+\paragraph{Effect of $K_p$, $K_i$, and the feedback filter on the loaded rig.}
+The rule of Equation~\ref{eq:rule} is a design for the free motor. On the loaded rig, the 174~mm impeller with baffles in the filled vessel, the gains were examined by a matrix of 18 settings: $K_p = 2.629$ and $3.155$, $K_i = 1.454$, 6, and 12, and a feedback filter coefficient $a = 1$, 0.2, and 0.15, each started from rest to 300~rpm with a duty limit of 35~\%, then stepped to 340~rpm at 10~s and back at 14~s. Figure~\ref{fig:gain-matrix} gives the response of three of them and the metrics of every setting at $K_p = 2.629$ (one run per setting, so differences of a few tenths of a percent are not significant).
+\begin{itemize}
+    \item \emph{$K_i$ sets the speed of the response.} Raising it from 1.454 to 12 shortens the rise from 10 to 90~\% from 5.2--5.3~s to 1.2--1.3~s, the settling time to $\pm 5$~\% from 6.3--6.5~s to 3.9--4.1~s, and the standard deviation of the speed at 300~rpm from 2.9--3.6 to 0.5--0.7~rpm. The price is overshoot, from about 1~\% to 10--12~\% at start-up; the duty limit holds the output at its ceiling during the rise, and the integral keeps accumulating, so part of that overshoot is the windup that the clamp of Equation~\ref{eq:pi-int} limits but does not remove.
+    \item \emph{The feedback filter removes the jitter of the duty and not the speed response.} With $a = 1$ the duty changes by 0.12 to 0.44~\% from one loop to the next at steady state, because it follows the quantization of the speed estimate. With $a = 0.2$ or 0.15 and $K_i \geq 6$ it does not change at the one-count resolution of the log, and at $K_i = 1.454$ it changes by 0.16 to 0.24~\%, with the same rise time, settling time, and overshoot as without the filter. The filter costs phase (Table~\ref{tab:margins}) but is worth it where the actuator has to stay quiet.
+    \item \emph{$K_p$ has little effect in the range tested.} Changing $K_p$ from 2.629 to 3.155 changes the rise and settling times by less than 0.2~s and the overshoot by about one percentage point.
+\end{itemize}
+The gains that the firmware carries by default, $K_p = 2.629$, $K_i = 12$, and $a = 0.15$, are among the fastest settings of this matrix, with a speed scatter of 0.6 to 0.7~rpm and a quiet duty, and the overshoot of 11.6~\% is the cost. Their ratio $K_i/K_p = 4.6$~s$^{-1}$ is not the plant pole of Equation~\ref{eq:cancel}, so this is a tuning of the loaded rig by measurement and not by the rule. % TODO: state the impeller of the disturbance runs (the duty of 15 % for 350 rpm is that of the 96 mm impeller) and confirm with the run notes that these are the gains of config.hpp, and say whether the overshoot of 11.6 % is acceptable for the N_Re-N_Po sequence.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{fig_gain_matrix}
+    \caption[Effect of the gains on the loaded rig]{Effect of $K_i$ and the feedback filter coefficient $\alpha$ on the response of the loaded rig (174~mm impeller, baffled, duty limit 35~\%) to a start from rest to 300~rpm, at $K_p = 2.629$. (a) Speed of three settings. (b) Their duty. (c) to (f): overshoot, settling time to $\pm 5$~\%, jitter of the duty (standard deviation of the change of duty per loop) and standard deviation of the speed at 300~rpm, against $K_i$ (rows) and $\alpha$ (columns); lighter is better. One run per setting.}
+    \label{fig:gain-matrix}
+\end{figure}
+%%%TRACKING
+Two tests compare the closed loop with the open loop on the loaded rig. The speed was held at 350~rpm (the closed-loop runs) or at a constant duty that gives about 350~rpm (the open-loop run) in the filled vessel, and the load was disturbed by five drops of water onto the impeller and by inserting and removing the baffles. The closed-loop runs used two crossovers, 0.5 and 1.0~rad/s. Figure~\ref{fig:disturbance} gives the three runs, and Table~\ref{tab:disturbance} the size and the duration of the disturbances.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{fig_disturbance}
+    \caption[Open loop and PI control against load disturbances]{Speed in the filled vessel for a constant duty (open loop, top) and for the PI controller with crossovers of 0.5 and 1.0~rad/s (middle, bottom). Dotted lines: water drops. Dashed lines: baffles inserted (orange) and removed (green). Right: the five water drops of each run overlaid, as a percentage of the speed before the drop.}
+    \label{fig:disturbance}
+\end{figure}
+
+\begin{table}[htbp]
+    \centering
+    \caption[Disturbance rejection, open loop against PI]{Response to the load disturbances of Figure~\ref{fig:disturbance}. Dip: the largest fall of the speed within 12~s of a drop (2nd percentile of the filtered speed) or 15~s of the insertion of the baffles, in percent of the speed before. Noise: the same measure over the 3~s before the drop, which is the dip that scatter alone produces. Recovery: the time after which the 0.5~s mean of the speed stays within 5~\% of its value before. Final: the speed 12 to 20~s after the disturbance relative to before. Mean over the five drops.}
+    \label{tab:disturbance}
+    \small
+    \begin{tabular}{@{}llrrrrr@{}}
+        \toprule
+        Disturbance & Control & Before (rpm) & Dip (\%) & Noise (\%) & Recovery (s) & Final (\%) \\
+        \midrule
+        Water drop & Open loop & 316 & 21.8 & 0.9 & not recovered & $-18.2$ \\
+        & PI, 0.5 rad/s & 350 & 3.6 & 2.0 & $<0.1$ & $+0.1$ \\
+        & PI, 1.0 rad/s & 350 & 2.9 & 2.1 & 0.3 & $+0.0$ \\
+        Baffles in & Open loop & 225 & 34.9 & -- & not recovered & $-32.2$ \\
+        & PI, 0.5 rad/s & 350 & 7.7 & -- & 13 & $+0.4$ \\
+        & PI, 1.0 rad/s & 350 & 5.8 & -- & 2.6 & $-0.6$ \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+In open loop a drop of water lowers the speed by 22~\% on average, and the speed does not come back: it settles 18~\% lower, since the duty is constant and the drag of the liquid is not. Inserting the baffles takes 35~\% of the speed and the speed stays 32~\% lower. Under the PI controller the dip of a drop is 3~\%, which is no larger than the 2~\% that the scatter alone produces before the drop, and the speed returns to 350~rpm in less than a third of a second; the baffles take 6 to 8~\% and the speed is back within 2.6~s at 1.0~rad/s. At 0.5~rad/s the recovery from the baffles takes 13~s, because the speed oscillates for several seconds after the disturbance (the burst in the middle panel of Figure~\ref{fig:disturbance}), which the faster loop damps sooner. The steady-state error is zero within the noise of the measurement in every closed-loop case and 18 to 32~\% in the open-loop case, which is the reason for a speed controller on this apparatus: the Power number depends on the square of the speed, so an error of 18~\% in speed would be an error of 36~\% in $N_{Po}$ (Equation~\ref{eq:npo-unc}).
+
+The staircase of the free motor (Figure~\ref{fig:pi-step}) and the matrix of the loaded rig (Figure~\ref{fig:gain-matrix}) complete the tracking tests.
+%%%LOADCELL
+The reaction-torque sensor was checked against known torques. A mass $m$ hung at a lever arm $r$ from the axis of the sensor produces the torque
+\begin{equation}
+    \tau_{\mathrm{ref}} = m\, g\, r
+    \label{eq:tau-ref}
+\end{equation}
+with $g = 9.80665$~m\,s$^{-2}$, $m$ taken from the nominal mass (100 to 1000.5~g, in steps of 100~g) and $r = 24.77$~mm, so the reference runs from 0.024 to 0.243~N\,m. The reference rests on two assumptions, that the masses are as labelled and that the lever arm is as measured; its uncertainty is therefore that of the mass and of the arm, which is not stated for the masses used, and a relative error of 0.5~\% in the arm is an error of 0.5~\% in every reference value. % TODO: state the uncertainty of the masses and of the lever arm (the calliper and the balance used), and the rated accuracy of the sensor from the datasheet.
+Each load was applied five times, and the reading is the mean of 10 samples after the zero (baseline) of the trial is subtracted. Figure~\ref{fig:loadcell} and Table~\ref{tab:loadcell} give the result for the 50 trials. A straight-line fit of the measured on the applied torque has a slope of 0.9978 and an intercept of $-0.15$~mN\,m, with $R^{2} = 0.99995$. The root-mean-square error is 0.68~mN\,m and the largest error 1.3~mN\,m. The mean error is negative at every load, between $-0.05$ and $-1.2$~\%, with the largest relative errors at the two lowest loads (0.024 and 0.049~N\,m), where an absolute error of 0.3~mN\,m is 1.2~\% of the load.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{fig_loadcell}
+    \caption[Torque sensor against known torques]{Torque sensor against the reference torque of Equation~\ref{eq:tau-ref} (50 trials, 10 loads). (a) Measured against applied torque, with the 1:1 line and the fit. (b) Residual of every trial. (c) Relative error of the mean of each load, with the standard deviation of the five trials as the bar.}
+    \label{fig:loadcell}
+\end{figure}
+
+\begin{table}[htbp]
+    \centering
+    \caption[Torque sensor against known torques]{Mean reading of the torque sensor for each load against the reference of Equation~\ref{eq:tau-ref}, five trials per load. SD is the standard deviation of the five trial means.}
+    \label{tab:loadcell}
+    \small
+    \begin{tabular}{@{}rrrrr@{}}
+        \toprule
+        Mass (g) & Reference (N\,m) & Mean (N\,m) & SD (mN\,m) & Error (\%) \\
+        \midrule
+        100.0 & 0.0243 & 0.0240 & 0.0 & $-1.20$ \\
+        200.0 & 0.0486 & 0.0480 & 0.0 & $-1.20$ \\
+        300.0 & 0.0729 & 0.0728 & 0.3 & $-0.10$ \\
+        400.0 & 0.0972 & 0.0970 & 0.0 & $-0.17$ \\
+        500.0 & 0.1215 & 0.1214 & 0.5 & $-0.05$ \\
+        600.0 & 0.1457 & 0.1450 & 0.0 & $-0.51$ \\
+        700.0 & 0.1700 & 0.1698 & 0.4 & $-0.14$ \\
+        800.0 & 0.1943 & 0.1932 & 0.4 & $-0.58$ \\
+        900.0 & 0.2186 & 0.2180 & 0.0 & $-0.28$ \\
+        1000.5 & 0.2430 & 0.2425 & 1.0 & $-0.24$ \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The test covers 0.024 to 0.243~N\,m, 1 to 12~\% of the 2~N\,m range of the sensor, which is the range of the torque of the $N_{Re}$--$N_{Po}$ experiment (up to 0.22~N\,m for the 96~mm and 0.32~N\,m for the 174~mm impeller) but not the whole range of the sensor. The linearity and the span (slope 0.998) are good to 0.3~\% over the range tested, and above 0.07~N\,m the sensor reads 0.05 to 0.6~\% low.
+%%%DRIVER
+Duty was swept from 0 to 100~\% in steps of 10~\% on the free motor, and through the dashboard sequences on the 96~mm and 174~mm impellers in the filled vessel (best run of each, Section~\ref{subsec:agit-plausibility}). Figure~\ref{fig:duty-rpm} gives the duty needed for each speed, the electrical and shaft power, and their ratio.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{fig_duty_rpm}
+    \caption[Duty, power, and efficiency against speed]{(a) Duty against the steady speed for the free motor (open-loop sweep) and for the two impellers in the filled vessel. (b) Electrical power at the supply and shaft power (torque times speed). (c) Ratio of shaft to electrical power; the points at which the torque is below 0.01~N\,m are omitted.}
+    \label{fig:duty-rpm}
+\end{figure}
+
+On the free motor the speed is proportional to the duty, 25.7~rpm per percent (2500~rpm at 100~\%), with an intercept of $-13$~rpm, so there is no dead band that the sweep resolves. In the filled vessel the same speed needs more duty because of the drag of the liquid. The 96~mm impeller needs 4.2~\% for 67~rpm, 35~\% for 680~rpm, and 91~\% for 1360~rpm. The 174~mm impeller needs 4.6~\% for 48~rpm, 49~\% for 280~rpm, and 75~\% for 331~rpm. The lowest duty held is therefore 4.2 to 4.6~\%, below which the sweep has no step, so the breakaway duty is below that value and is not isolated here. The steep rise of the duty with the speed for the 174~mm impeller is why its sequence ends at 350~rpm and the 96~mm sequence at 1400~rpm. The electrical power at the supply reaches 59~W for the 96~mm impeller at 1362~rpm and 70~W for the 174~mm impeller at 331~rpm, which is the quantity that the power limiter of Section~\ref{subsec:plat-powerlimit} bounds. The ratio of shaft to electrical power is 53 to 54~\% for the 96~mm impeller above 900~rpm and 16 to 21~\% for the 174~mm impeller above 150~rpm, in which the motor delivers a large torque at a low speed, so that losses in the windings probably dominate; this is not tested here. % TODO: the breakaway duty and the current ripple at 20 kHz (scope) are not measured.

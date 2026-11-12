@@ -1,0 +1,121 @@
+\paragraph{Derivation of the gain rule.}
+Take the identified plant of Equation~\ref{eq:plant}, whose transfer function from the duty in counts to the speed in rpm is
+\begin{equation}
+    G(s) = \frac{K A}{s + A}\, e^{-\theta s}
+    \label{eq:plant-tf}
+\end{equation}
+and the controller of Equation~\ref{eq:pi-tf}. The controller has one zero, at $s = -K_i/K_p$, and the plant has one pole, at $s = -A$. The design places the zero on the pole,
+\begin{equation}
+    \frac{K_i}{K_p} = A
+    \label{eq:cancel}
+\end{equation}
+so that the slow part of the plant, its time constant $1/A \approx 31$~ms, is cancelled by the controller and what remains of the open loop $L(s) = C(s)\,G(s)$ is an integrator with a delay,
+\begin{equation}
+    L(s) = K_p\,\frac{s + A}{s}\cdot\frac{K A}{s + A}\, e^{-\theta s} = \frac{K_p K A}{s}\, e^{-\theta s}
+    \label{eq:loop}
+\end{equation}
+The gain crossover $\omega_c$ is the frequency at which $|L(j\omega_c)| = 1$. For Equation~\ref{eq:loop} it is
+\begin{equation}
+    \omega_c = K_p K A
+    \label{eq:wc}
+\end{equation}
+and it is the one number that sets how fast the loop is. Without the delay the closed loop is
+\begin{equation}
+    \frac{L(s)}{1 + L(s)} = \frac{\omega_c}{s + \omega_c}
+    \label{eq:cl-first}
+\end{equation}
+a first-order response with time constant $1/\omega_c$, whose 10 to 90~\% rise time is $\ln 9/\omega_c \approx 2.2/\omega_c$ and whose 5~\% settling time is $3/\omega_c$. A crossover of 5~rad/s therefore means a rise time of 0.44~s and a settling time of 0.6~s, which the measured step response of Table~\ref{tab:cl-model} confirms (0.46~s and 0.68~s). Solving Equations~\ref{eq:cancel} and~\ref{eq:wc} for the gains gives the rule
+\begin{equation}
+    K_p = \frac{\omega_c}{K A}, \qquad K_i = K_p A = \frac{\omega_c}{K}
+    \label{eq:rule}
+\end{equation}
+in counts per rpm for $K_p$ and counts per rpm per second for $K_i$. The crossover is chosen from the delay of the loop, as explained below; for a plant with dead time the internal-model-control choice $\omega_c = 1/(T_c + \theta)$, with $T_c$ the desired closed-loop time constant, gives
+\begin{equation}
+    K_p = \frac{1}{K A\,(T_c + \theta)}, \qquad K_i = \frac{1}{K\,(T_c + \theta)}
+    \label{eq:imc}
+\end{equation}
+which is Equation~\ref{eq:rule} with $\omega_c = 1/(T_c + \theta)$. The designed bandwidth is $\omega_c \approx 1/T_c$ only when $T_c \gg \theta$. For $\omega_c = 5$~rad/s the rule gives $K_p = 0.233$ and $K_i = 7.51$ for the plant of Table~\ref{tab:plant}, and a check of $K_p K A$ against the target is printed with the gains.
+
+\paragraph{What the phase margin is and why it matters.}
+Equation~\ref{eq:loop} has a phase of $-90^{\circ}$ from the integrator and a further lag from the delay, which grows with frequency: a delay $\theta_{\mathrm{tot}}$ turns a component of frequency $\omega$ by $\omega\,\theta_{\mathrm{tot}}$ radians. The phase margin is the distance of the phase of the open loop from $-180^{\circ}$ at the crossover,
+\begin{equation}
+    \mathrm{PM} = 180^{\circ} + \angle L(j\omega_c) = 90^{\circ} - \frac{180^{\circ}}{\pi}\,\omega_c\,\theta_{\mathrm{tot}}
+    \label{eq:pm}
+\end{equation}
+where $\theta_{\mathrm{tot}}$ is the total delay of the loop: the dead time of the plant, 8.2~ms, plus half the loop period for the sample-and-hold of the controller, 5~ms, plus any further delay of the speed estimate. The gain margin is the factor by which the loop gain can rise before the loop becomes unstable,
+\begin{equation}
+    \mathrm{GM} = \frac{1}{|L(j\omega_{180})|}, \qquad \angle L(j\omega_{180}) = -180^{\circ}
+    \label{eq:gm}
+\end{equation}
+Both are measures of the same thing, how far the loop is from oscillating on its own, and the phase margin has four consequences for this apparatus.
+\begin{enumerate}
+    \item \emph{Stability.} At $\mathrm{PM} = 0$ the loop sustains an oscillation. The phase margin is also the extra delay that the loop can take at the crossover before that happens, the delay margin $\mathrm{PM}\,(\pi/180^{\circ})/\omega_c$.
+    \item \emph{Damping.} The margin sets the overshoot and the ringing of the step response. A second-order loop with a phase margin of $60^{\circ}$ has a damping ratio near 0.6 and an overshoot of about 10~\%, and above about $70^{\circ}$ the response has almost no overshoot. As a rule of thumb the damping ratio is $\zeta \approx \mathrm{PM}/100^{\circ}$ for margins below $65^{\circ}$. The torque and the Power number are measured in steady state, so an oscillating or ringing speed would add the scatter that the averaging of Section~\ref{subsec:agit-sweep} has to remove.
+    \item \emph{Robustness to the load.} The plant is not the free motor once the impeller is in the water: its gain $K$ changes by 30~\% over the speed range, and between impellers by more (Section~\ref{subsec:agit-pi-tuning}). A change of $K$ changes the loop gain in proportion, so the gain margin is the factor of change that is tolerated.
+    \item \emph{Robustness to the estimator.} The estimate of the speed is itself a delay. Adding the 19~ms of a DCT estimate costs $\omega_c \times 19$~ms of phase, which is a small loss at a low crossover and a large one at a high crossover.
+\end{enumerate}
+The loops of this work are designed for a phase margin of at least $60^{\circ}$ and a gain margin of at least 8~dB, which are the usual limits for a loop that must stay well damped under a change of load.
+
+Table~\ref{tab:margins2} and Figure~\ref{fig:bode-pm} give the margins of the two sets of gains with the identified free-motor plant, $K = 0.640$~rpm/count, $1/A = 31.0$~ms, and a total delay of 13.2~ms for a CET estimate and 32.2~ms for a DCT estimate. With the earlier gains the crossover is at 29.2~rad/s and the phase margin falls from $74^{\circ}$ with a CET estimate to $42^{\circ}$ with a DCT estimate, and the gain margin from 11.7~dB (a factor 3.8) to 4.5~dB (a factor 1.7). The present gains cross at 4.8~rad/s and keep $86^{\circ}$ and $81^{\circ}$, with gain margins of 27.9 and 20.1~dB. The magnitude curves of the CET and DCT cases coincide because a delay changes only the phase.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.62\textwidth]{fig_bode_pm}
+    \caption[Open-loop Bode plot and phase margin]{Open-loop frequency response $L(j\omega)$ of the speed loop (Equation~\ref{eq:loop} with the identified plant of the free motor) for the earlier and the present gains, with a CET and a DCT estimate. The crossover (magnitude 0~dB, dots) and the phase margin, the distance of the phase from $-180^{\circ}$ at the crossover, are marked. The magnitude is the same for a CET and a DCT estimate, since a delay does not change it.}
+    \label{fig:bode-pm}
+\end{figure}
+
+\begin{table}[htbp]
+    \centering
+    \caption[Gain, phase and delay margins of the two sets of gains]{Crossover, phase margin, gain margin and delay margin of the speed loop for the earlier and the present gains, computed from the identified free-motor plant ($K = 0.640$~rpm/count, $1/A = 31.0$~ms, dead time 8.2~ms, 5~ms of sample-and-hold). The DCT estimate adds 19~ms. Model values, not measurements.}
+    \label{tab:margins2}
+    \small
+    \begin{tabular}{@{}llrrrrr@{}}
+        \toprule
+        Gains & Estimate & $\omega_c$ (rad/s) & PM ($^{\circ}$) & GM (dB) & GM (factor) & Delay margin (ms) \\
+        \midrule
+        Earlier, $K_p = 1.564$, $K_i = 41.2$ & CET & 29.2 & 74 & 11.7 & 3.8 & 44 \\
+        & DCT & 29.2 & 42 & 4.5 & 1.7 & 25 \\
+        Present, $K_p = 0.233$, $K_i = 7.51$ & CET & 4.8 & 86 & 27.9 & 24.8 & 314 \\
+        & DCT & 4.8 & 81 & 20.1 & 10.1 & 294 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\paragraph{Choice of the crossover.}
+Equation~\ref{eq:pm} sets a limit on the crossover for a given delay, and the speed it buys is the other side of the trade. Figure~\ref{fig:design-tradeoff} shows both. With a CET estimate the margin falls below $60^{\circ}$ only above a crossover of about 40~rad/s, and with a DCT estimate above about 16~rad/s, so the estimator sets how fast the loop can be made. Within the limit, a faster loop is quicker (a response reaches 90~\% in $\ln 10/\omega_c = 2.3/\omega_c$ seconds) and rejects a disturbance sooner. A slower loop is calmer: the shaft-synchronous ripple of Section~\ref{subsec:agit-fft} is at 25~Hz (157~rad/s) at 1500~rpm and at 4~Hz (25~rad/s) at 250~rpm, and a controller with a high crossover passes it to the duty. The crossover of 5~rad/s is a compromise for a rig that holds a speed for tens of seconds and not a servo: a rise time of 0.46~s against holds of 15 to 30~s, a margin of $86^{\circ}$ that leaves room for the change of the plant with load and speed, and a crossover well below the ripple at the lowest controlled speed.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{fig_design_tradeoff}
+    \caption[Phase margin, step response and overshoot against the designed crossover]{Effect of the designed crossover $\omega_c$ with the gains of Equation~\ref{eq:rule}. (a) Phase margin against $\omega_c$ for a CET estimate (total delay 13.2~ms) and a DCT estimate (32.2~ms), with the $60^{\circ}$ limit. (b) Simulated response to a step of 100~rpm for five values of $\omega_c$, with a CET estimate. (c) Time to reach 90~\% of the step and the overshoot against $\omega_c$. Simulations of the identified free-motor plant.}
+    \label{fig:design-tradeoff}
+\end{figure}
+
+\paragraph{Why the gains of the earlier runs differ from these.}
+The gains of the earlier closed-loop runs, $K_p = 1.5641$ and $K_i = 41.2249$, were computed for a nominal bandwidth of 1~rad/s with
+\begin{equation}
+    K_p = \frac{\omega_c}{K}, \qquad K_i = \frac{A\,\omega_c}{K}
+    \label{eq:earlier-rule}
+\end{equation}
+Compared with Equation~\ref{eq:rule}, the proportional gain lacks the division by $A$, so both gains are larger by the factor $A$, which is 26 to 32~s$^{-1}$ for this plant. By Equation~\ref{eq:wc} the crossover that results is not $\omega_c$ but $K_p K A = A\,\omega_c \approx 29$~rad/s, 4.6~Hz, and not 1~rad/s. For 1~rad/s the rule gives $K_p = 0.048$ and $K_i = 1.55$. The two pairs are therefore not comparable parameter by parameter: the 41 of the earlier runs is an integral gain, to be compared with 7.5 now, and its proportional gain of 1.56 with 0.23 now. The earlier pair is a high-bandwidth tuning, and the present pair is a deliberate 5~rad/s tuning. The ratio $K_i/K_p$ is the plant pole in both, 26 in the earlier pair and 32 in the present one, which is the cancellation of Equation~\ref{eq:cancel}.
+
+With the earlier gains the loop has a phase margin of $74^{\circ}$ with a CET estimate, which is well damped, as the measured step response confirms (Table~\ref{tab:cl-model}), but only $42^{\circ}$ when the estimate is the DCT estimate refreshed every 20 to 30~ms, and $34^{\circ}$ at the longer interval, which is poorly damped. With the present gains the margin is $80^{\circ}$ to $86^{\circ}$ for every estimator, so the loop no longer depends on which estimator supplies the speed. The feedback filter of the controller with its default coefficient 0.15 would reduce the margin of the earlier gains to $33^{\circ}$ even with a CET estimate, which is evidence that the earlier runs used no filter (coefficient 1.0). Table~\ref{tab:margins} gives these cases.
+
+\begin{table}[htbp]
+    \centering
+    \caption[Gain crossover and phase margin of the two sets of gains]{Gain crossover and phase margin of the loop for the earlier gains and the present gains, computed from the identified plant ($K = 0.640$~rpm/count, $\tau = 31.0$~ms, dead time 8.2~ms) with 5~ms added for the sample-and-hold of the controller. The extra delay of the DCT estimate over the CET estimate is taken as 19~ms at the mean refresh interval of 25~ms and 24~ms at the longer interval of 30~ms (an estimate delay of about 25 and 30~ms against about 6~ms for CET, from half the window plus half the refresh interval). The last column adds the feedback filter of the controller with coefficient 0.15 (time constant 61.5~ms) to a CET estimate. These are model values, not measurements.}
+    \label{tab:margins}
+    \small
+    \begin{tabular}{@{}lrrrrr@{}}
+        \toprule
+        & Crossover & \multicolumn{4}{c}{Phase margin (degrees)} \\
+        \cmidrule(lr){3-6}
+        Gains & (rad/s) & CET & DCT mean & DCT worst & CET + filter \\
+        \midrule
+        Earlier: $K_p = 1.5641$, $K_i = 41.2249$ & 29.2 & 74 & 42 & 34 & 33 \\
+        Present: $K_p = 0.2329$, $K_i = 7.509$ & 4.8 & 86 & 81 & 80 & 71 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+

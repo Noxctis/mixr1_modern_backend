@@ -1,0 +1,138 @@
+%*******************************************************************************
+%****************************** Second Chapter *********************************
+%*******************************************************************************
+
+\chapter{Review of Related Literature}
+\label{ch:rrl}
+
+\ifpdf
+    \graphicspath{{Chapter2/Figs/Raster/}{Chapter2/Figs/PDF/}{Chapter2/Figs/}}
+\else
+    \graphicspath{{Chapter2/Figs/Vector/}{Chapter2/Figs/}}
+\fi
+
+This chapter reviews the literature that informs the design of MIXR-1. Each of the four thematic sections covers both the educational context of its theme and the specific measurement or control methods drawn from it, so that every design decision reported in Chapters~\ref{ch:platform} through~\ref{ch:process} rests on an identifiable method in the literature rather than on an arbitrary choice. Section~\ref{sec:rrl-synthesis} synthesizes the four themes and states the research gap.
+
+
+%********************************** 2.1 **************************************
+\section{Process Control Education}
+\label{sec:rrl-education}
+
+\subsection{Experiential Learning and the Role of Physical Laboratories}
+\label{subsec:rrl-experiential}
+
+\citet{astrom1985} described a process-control teaching laboratory built around cascaded water tanks and a graded sequence of experiments connecting theory to the behaviour of a real process. Their work established the enduring value of hands-on experimentation and intuitive process understanding in control education, and the cascaded-tank arrangement is directly relevant here, since the CHE 4117L deliverable of MIXR-1 is a level-regulation experiment on a physical tank.
+
+\citet{saco2002} used a three-tank laboratory plant with controllers designed in MATLAB/Simulink and executed on real-time hardware, allowing students to progress from modelling and controller design to physical implementation with minimal low-level programming. MIXR-1 adopts a comparable workflow through the MathWorks Raspberry Pi support package~\citep{mathworks2026}, so that student effort remains on controller design rather than on device drivers.
+
+\citet{zhang2013} showed that open-ended simulation activities strengthen student understanding of process capacity, dead time, and control loops, while \citet{ma2006} compared hands-on, simulated, and remote laboratories and documented the trade-offs among them. \citet{abdulwahed2009} applied Kolb's experiential learning cycle~\citep{kolb1984} explicitly to laboratory instruction and found that the conceptualization and reflection stages are weakest when students interact only with prepared results. Together these studies support the position taken in this work: simulation is necessary but not sufficient, and a physical plant restores the stages of the learning cycle that pure simulation omits. This is consistent with accreditation expectations for laboratory experience and the use of modern engineering tools~\citep{abet2024,ched2017che}.
+
+\subsection{On-Off Control with Hysteresis as an Introductory Control Law}
+\label{subsec:rrl-onoff}
+
+The control law students implement in the CHE 4117L activity is on-off, or bang-bang, control with a hysteresis band. Its behaviour is covered in the standard texts~\citep{ogata2010,nise2020}: the actuator is driven fully on or fully off according to whether the measured variable has crossed the lower or upper edge of the band, and the closed loop consequently exhibits a sustained limit cycle rather than settling at the setpoint. The amplitude and period of that limit cycle are set jointly by the width of the hysteresis band and the dynamics of the process, a relationship developed analytically by \citet{Boiko2013}.
+
+This is pedagogically useful rather than a deficiency. The hysteresis band is the single parameter students vary, and its effect is directly observable: widening it reduces actuator switching frequency at the cost of a larger level excursion, while narrowing it tightens regulation at the cost of more frequent valve and pump cycling. The limit cycle therefore makes the central trade-off of discontinuous control visible in a way a simulated first-order response does not, and it provides the quantitative basis for the hysteresis-band test described in Chapter~\ref{ch:process}.
+
+
+%********************************** 2.2 **************************************
+\section{Low-Cost Agitation and Mixing Apparatus}
+\label{sec:rrl-agitation}
+
+\subsection{Low-Cost Vessel-Based Experiments}
+\label{subsec:rrl-vessels}
+
+\citet{nassar2011} described an in-house agitated-vessel experiment for undergraduate heat-transfer instruction, and \citet{ganley2015} presented a low-cost vessel-based module for reaction engineering, configurable as either a batch reactor or a continuous-stirred tank. Neither focuses on digital instrumentation, but both demonstrate that a locally fabricated vessel can carry a standard unit-operations experiment and that departmental maintainability is itself a design benefit.
+
+\subsection{The Reynolds--Power Number Framework}
+\label{subsec:rrl-correlations}
+
+The interpretation framework for the agitation experiment follows the classical power-characteristic correlations of \citet{rushton1950}, as tabulated by \citet{brown1950}. These define the $N_{Re}$--$N_{Po}$ curves against which MIXR-1 data are compared in Chapter~\ref{ch:validation}. Both the Reynolds number of Equation~\ref{eq:reynolds} and the Power number of Equation~\ref{eq:power} require the impeller rotational speed, and the Power number additionally requires the power delivered to the fluid, which places the accuracy of the speed and torque measurements directly on the critical path of the experiment.
+
+\subsection{Power and Torque Measurement in Stirred Vessels}
+\label{subsec:rrl-torque-methods}
+
+\citet{ascanio2004} reviewed four approaches to measuring power draw in stirred vessels: electrical, calorimetric, reaction-torque, and strain-based. Their review notes that electrical measurement at the motor terminals includes motor and transmission losses and therefore overstates the power actually delivered to the fluid, whereas reaction-torque measurement isolates the shaft torque and is well suited to laboratory-scale vessels.
+
+This distinction justifies the architecture adopted in this study, in which an inline reaction-torque transducer supplies the torque used for $N_{Po}$, while a separate electrical wattmeter is used only for the independent power-limiting safety function described in Chapter~\ref{ch:platform}. It also explains why the legacy spring-dynamometer arrangement of the Armfield CEK-A, described in Section~\ref{subsec:che3214l}, is a coarse substitute for direct torque measurement: it estimates force at a torque arm rather than measuring shaft torque, and it is read by eye from an oscillating analog scale.
+
+
+%********************************** 2.3 **************************************
+\section{Low-Cost Process Control Kits}
+\label{sec:rrl-trainers}
+
+\subsection{Modular Process Control Trainers}
+\label{subsec:rrl-modular}
+
+\citet{plett2023} presented small-scale, modular process-control trainers as an alternative to expensive commercial teaching plants, identifying affordability, modularity, and computer interfacing as the governing design requirements. \citet{rehg1998fie} reached similar conclusions in an earlier low-cost flow-control trainer, showing that the affordability argument in laboratory instrumentation is long-standing rather than recent.
+
+\subsection{Simulink-Based Hardware-in-the-Loop Teaching Platforms}
+\label{subsec:rrl-hil}
+
+\citet{uyanik2018} is the closest precedent for the hardware-in-the-loop mode of MIXR-1. They used an Arduino--Simulink interface for undergraduate feedback-control experiments, allowing students to download Simulink diagrams directly to the target board, and reported improved examination performance across several semesters.
+
+MIXR-1 extends this concept to a process-control and laboratory-instrumentation context using a Raspberry Pi target, which provides native Ethernet networking, greater processing headroom for concurrent data acquisition, and official Simulink deployment support~\citep{mathworks2026,rpifoundation2024}. The pedagogical property preserved from that work is that the student authors the control law and the platform executes it, rather than the platform providing a controller the student only parameterizes.
+
+\subsection{Non-Contact Level Sensing for Tank-Based Trainers}
+\label{subsec:rrl-tof}
+
+Non-contact optical ranging is attractive for the level-control experiment because it adds no wetted parts to the vessel. Direct time-of-flight modules of the VL53 family measure the round-trip time of an infrared pulse and report distance over an I\textsuperscript{2}C interface, from which the liquid level follows by subtraction from a known reference height.
+
+Ranging onto a liquid surface is, however, a recognized difficult case. \citet{st2022tn1450} note that water absorbs part of the emitted signal and that a usable return depends on a component of the beam striking the surface near perpendicular, so sensor orientation and tank geometry materially affect performance; they further identify the VL53L4CD as better suited to this application than the earlier VL53L0X. \citet{st2022an5851} give the corresponding design procedure for liquid-level monitoring with that device, including a minimum standoff between the sensor and the maximum liquid level, a characterization step that establishes the offset between measured range and true level, and the use of a bounded timing budget per measurement. MIXR-1 follows this guidance, and the resulting mapping is validated against direct ruler measurement in Chapter~\ref{ch:process}.
+
+
+%********************************** 2.4 **************************************
+\section{Embedded Systems and Open-Source Hardware in Education}
+\label{sec:rrl-embedded}
+
+\subsection{Open-Source Instrumentation and Single-Board Measurement Platforms}
+\label{subsec:rrl-opensource}
+
+\citet{grinias2016} described a low-cost open-source data acquisition device for chemical instrumentation, pairing a microcontroller with a dedicated converter when on-board acquisition resolution proved insufficient. \citet{wejner2022} presented LabPi, a modular Raspberry Pi--based measurement platform for STEM education, validating the Raspberry Pi as a measurement host while emphasizing sensing over actuation and feedback control. \citet{benatiro2023} developed a portable Raspberry Pi Zero--based electronics trainer for Computer Engineering students at the University of San Carlos, establishing institutional feasibility for this class of hardware and reporting practical experience with real-time data handling and graphical interface performance on a single-board computer.
+
+\subsection{Real-Time Behaviour of Linux Single-Board Computers}
+\label{subsec:rrl-realtime}
+
+A general-purpose Linux single-board computer offers no hardware guarantee of timing determinism, which is the central constraint on the software architecture of this work. \citet{adam2021computers} measured response latency of standard and \texttt{PREEMPT\_RT} Linux kernels on the Raspberry~Pi~3 and BeagleBone Black in both user and kernel space, and \citet{adam2021electronics} extended the assessment with the \texttt{cyclictest} benchmark on ARM-based devices. Both report that worst-case latencies on an unpatched kernel are substantially larger and far less bounded than average latencies, and that real-time patching narrows the distribution without eliminating outliers.
+
+This finding has two consequences for MIXR-1. First, any speed estimate derived by differencing timestamps captured in a userspace callback is exposed to scheduling jitter that a microcontroller with a dedicated quadrature peripheral would not experience, which motivates the alignment strategy discussed in Section~\ref{subsec:rrl-encoder}. Second, a control loop on this platform must be written to tolerate a late or missed iteration rather than assume a fixed period, which motivates the elapsed-time-based integration and the watchdog behaviour described in Chapters~\ref{ch:platform} and~\ref{ch:agitation}.
+
+\subsection{Speed Estimation from Incremental Encoders}
+\label{subsec:rrl-encoder}
+
+Converting incremental encoder pulses into a speed estimate is a long-studied problem with three established approaches. The frequency-based or M-method counts pulses within a fixed sampling window; its absolute error is independent of speed and therefore dominates at low speed. The period-based or T-method measures the time required to traverse a fixed angular increment; its error grows with the square of speed and therefore dominates at high speed. The combined constant elapsed time (CET) and M/T methods, proposed independently by \citet{ohmae1982} and \citet{bonert1983}, measure both the angular increment and the elapsed time and adapt the increment so that the elapsed time remains approximately constant, preserving accuracy across a wide speed range. \citet{briz1994} and \citet{petrella2007} examined the accuracy limits of these methods for drives equipped with low-resolution encoders and compared the switching strategies between them.
+
+\citet{anuchin2019} contributed two refinements that bear directly on this work. The first is that the angular increment used for a speed estimate should be an integer multiple of four quadrature counts, because four counts correspond to one full period of either encoder channel; non-idealities such as a channel duty cycle departing from \SI{50}{\percent} or a quadrature phase shift departing from \SI{90}{\degree} then cancel within the increment instead of appearing as a periodic speed ripple. The second is that conventional CET is event-driven, so the controller consumes an estimate of unpredictable age, and that restructuring the estimator to be ready-on-demand bounds this delay and removes the resulting feedback jitter.
+
+MIXR-1 applies both principles, adapted to a platform that has neither a quadrature encoder peripheral nor hardware capture units. The adaptation is not equivalent to the original algorithm: without capture units there is no state-dependent correction of a partial increment, and the time resolution available from the software tick is coarser by orders of magnitude than the processor-clock resolution assumed in that work. The resulting design trade-off, and its interaction with the scheduling jitter reported by \citet{adam2021computers}, is examined in Chapter~\ref{ch:agitation}. Both CET and M/T additionally require an explicit timeout to distinguish a stopped shaft from a very slow one, since no further pulses arrive to trigger an estimate~\citep{anuchin2019}.
+
+\subsection{Zero-Point Stability in Strain-Gauge Transducers}
+\label{subsec:rrl-drift}
+
+The practical limitation of the reaction-torque method identified in Section~\ref{subsec:rrl-torque-methods} is not sensitivity but zero-point stability: strain-gauge transducers exhibit a slow zero drift with temperature and warm-up that is indistinguishable from a small real load within any single reading.
+
+The strain-gauge literature treats this at two levels. Bridge-level compensation places compensating elements within the Wheatstone bridge so that the thermal output of the active gauges is cancelled, and \citet{straingauge2023thermal} report calibration procedures for characterizing and deducting the resulting zero drift over extended unloaded intervals. \citet{loadcell2024thermal} further show that self-heating of the gauge and associated electronics produces internal temperature gradients that bridge compensation alone does not fully remove, so a residual zero offset should be expected even from a compensated transducer. These findings motivate the two-stage approach used in MIXR-1, in which span and coarse zero are established on the transmitter against known loads and residual drift is removed by an automatic software tare performed only when the rig is demonstrably idle.
+
+\subsection{PI Speed Control and Integrator Anti-Windup}
+\label{subsec:rrl-pi}
+
+Proportional-integral control of motor speed is standard practice, and tuning methods from \citet{Ziegler1942} onward are treated comprehensively by \citet{astromhagglund2006}. The design issue relevant to MIXR-1 is not tuning but saturation. The PWM command to the motor driver is bounded, and in this system it is bounded twice: once by the resolution of the hardware PWM channel, and again, dynamically, by the power-limiting function that lowers the permissible ceiling whenever measured motor power approaches its safety limit. Whenever the commanded output exceeds the achievable output, the integral term continues to accumulate error that the actuator cannot act upon, producing the overshoot and delayed recovery characteristic of integrator windup.
+
+\citet{bohn1995} compared the principal anti-windup strategies and distinguished conditional integration, also called integrator clamping, from back-calculation, in which the integral state is recomputed from the realized output. Both remain the standard industrial options. MIXR-1 uses conditional integration, with the integral state clamped to the value that alone would produce the current maximum permissible output. This choice is deliberate for this platform: the clamp is computed from the same dynamic ceiling the power limiter imposes, so the integrator cannot wind up while the output is being restricted for safety, and the scheme requires no additional tuning parameter beyond the gains themselves, which matters for an apparatus intended to be retuned by students and future cohorts.
+
+
+%********************************** 2.5 **************************************
+\section{Synthesis and Research Gap}
+\label{sec:rrl-synthesis}
+
+The reviewed literature supports four conclusions.
+
+First, physical, instrumented laboratories remain central to control education. Teaching plants built around real tanks and actuators produce learning that simulation alone does not~\citep{astrom1985,saco2002}, and comparative studies clarify the complementary rather than substitutive role of simulation~\citep{ma2006,zhang2013,abdulwahed2009}.
+
+Second, low-cost stirred-vessel apparatus and compact control trainers can both support meaningful hands-on learning. In-house agitated vessels serve standard unit-operations experiments~\citep{nassar2011,ganley2015}, and modular trainers substitute effectively for expensive commercial plants~\citep{plett2023,rehg1998fie,uyanik2018}.
+
+Third, the individual measurement and control methods required by this work are established and well documented. Combined-method speed estimation from incremental encoders~\citep{ohmae1982,bonert1983,anuchin2019}, reaction-torque power measurement in stirred vessels~\citep{ascanio2004}, conditional-integration anti-windup~\citep{bohn1995}, time-of-flight liquid-level ranging~\citep{st2022an5851}, and on-off control with hysteresis~\citep{Boiko2013} are all mature techniques. What the literature does not address is their joint implementation on a non-deterministic Linux single-board computer, where the timing guarantees these methods assume are not available~\citep{adam2021computers,adam2021electronics}.
+
+Fourth, no reviewed platform combines all of the required elements. The agitation studies~\citep{nassar2011,ganley2015,ascanio2004} provide vessel-based experimentation but no feedback control or digital interface. The control trainers~\citep{plett2023,rehg1998fie,uyanik2018} provide feedback control but no instrumented agitation vessel capable of producing $N_{Re}$--$N_{Po}$ data. The open-source instrumentation platforms~\citep{grinias2016,wejner2022,benatiro2023} provide networked digital measurement but emphasize sensing over actuation and deployable control.
+
+MIXR-1 addresses this gap by integrating an agitated mixing vessel, embedded motor control with direct reaction-torque measurement, non-contact level sensing, networked data acquisition, and student-deployable feedback control into a single low-cost apparatus serving both chemical and computer engineering instruction. The adaptation of the above methods to the timing constraints of a general-purpose single-board computer is itself a contribution of this work, and is documented subsystem by subsystem in Chapters~\ref{ch:platform} to~\ref{ch:process}.

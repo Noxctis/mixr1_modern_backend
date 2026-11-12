@@ -1,0 +1,101 @@
+%*******************************************************************************
+%****************************** Chapter 7 *************************************
+%*******************************************************************************
+
+\chapter{System Integration, Validation, and Comparative Analysis}
+\label{ch:validation}
+
+\ifpdf
+    \graphicspath{{Chapter7/Figs/Raster/}{Chapter7/Figs/PDF/}{Chapter7/Figs/}}
+\else
+    \graphicspath{{Chapter7/Figs/Vector/}{Chapter7/Figs/}}
+\fi
+
+This chapter reports the integrated behaviour of MIXR-1, compares it against the legacy Armfield CEK-A on the parameters defined in Section~\ref{subsec:scope}, quantifies measurement error against the independent references of Section~\ref{sec:arch-validation}, and examines the sources of residual error.
+
+
+%********************************** 7.1 **************************************
+\section{Integrated Test Overview}
+\label{sec:val-overview}
+
+% TODO: Table 7.1 -- master results table: every test case (TC-U, TC-S, TC-H), its pass criterion,
+% the measured result, and the section reporting it. This is the single table a panel will look
+% for, so it must be complete and must agree with the subsystem chapters.
+
+
+%********************************** 7.2 **************************************
+\section{Comparative Analysis: MIXR-1 versus the Armfield CEK-A}
+\label{sec:val-comparison}
+
+\subsection{Basis of Comparison}
+\label{subsec:val-basis}
+
+% TODO: state plainly how the CEK-A figures were obtained: direct measurement on the unit, its
+% documented specifications, the laboratory manual, or historical student data. If the unit could
+% not be operated for any parameter, say so and name the substitute source. The credibility of
+% this whole section rests on that disclosure.
+
+\subsection{Benchmarking Against Literature}
+\label{subsec:val-literature}
+
+% TODO: compare the MIXR-1 N_Re-N_Po curve against the Rushton correlation as tabulated by Brown
+% et al., and against the CEK-A data for the same experiment. Figure 7.1 -- all three on one axis.
+% Carry forward the geometric-mismatch caveat from Section~\ref{subsec:agit-plausibility}.
+
+\subsection{Parameter-by-Parameter Comparison}
+\label{subsec:val-parameters}
+
+% TODO: Table 7.2 -- one row per parameter from the scope: speed-setpoint tracking, steady-state
+% speed error, torque measurement method and error, power computation, level sensing, data-logging
+% completeness, and MATLAB/Simulink integration. Columns: CEK-A, MIXR-1, and the basis of each
+% figure. Keep the claims to what the tests in Chapters 5 and 6 actually measured.
+
+The most substantive differences are structural rather than numerical. The CEK-A sets speed open loop, so a target speed is reached by manual search and verified against an analog tachometer that the laboratory manual corrects with an empirical expression, as described in Section~\ref{subsec:che3214l}. MIXR-1 closes the loop on a digital measurement, so the setpoint is commanded directly. The CEK-A estimates torque from a spring dynamometer reading and the torque-arm geometry; MIXR-1 measures reaction torque directly, which is the method \citet{ascanio2004} identify as appropriate at this scale. And the CEK-A records all data manually, whereas MIXR-1 logs continuously and exports in machine-readable form.
+
+\subsection{Cost and Software Openness}
+\label{sec:val-cost}
+
+% TODO: Table 7.3 -- cost comparison: CEK-A at its CEPCI-adjusted acquisition cost, the CEK-MKII
+% quotation, and the MIXR-1 per-unit materials cost from Appendix~\ref{app:bom}. Derive the
+% adjustment in Appendix~\ref{app:calculations} and resolve the base-year question flagged in
+% Chapter 1. State how many MIXR-1 units a CEK-MKII budget would fund.
+
+Beyond cost, the two differ in what they expose. The commercial unit's bundled software logs and plots but does not expose raw sensor data or support deployment of a student-authored controller. MIXR-1 streams raw records over a documented interface and accepts deployed Simulink models, which is what makes the single apparatus serve both target courses.
+
+
+%********************************** 7.3 **************************************
+\section{Percentage-Error Analysis}
+\label{sec:val-error}
+
+% TODO: Table 7.4 -- consolidated error summary: measured quantity, reference, mean percent error,
+% maximum percent error, and the range over which it was evaluated. Gather from TC-U1 through
+% TC-U7 rather than recomputing.
+
+% TODO: propagate the speed and torque errors into the uncertainty in P and N_Po, continuing the
+% treatment begun in Section~\ref{subsec:agit-power}, and state which term dominates.
+
+
+%********************************** 7.4 **************************************
+\section{Error Sources and Mitigation}
+\label{sec:val-errorsources}
+
+% TODO: Table 7.5 -- error source, affected quantity, estimated magnitude, mitigation applied, and
+% residual effect. Candidate sources identified during development:
+%   - timestamp quantization and scheduling jitter in the speed estimate (Sections 4.6, 5.2)
+%   - encoder quadrature non-idealities, largely cancelled by slot alignment (Section 5.2)
+%   - torque amplifier zero drift, reduced by automatic tare (Section 5.5)
+%   - uncertainty in the theoretical torque reference itself (Section 5.5)
+%   - ToF return from a disturbed or specular water surface (Section 6.2)
+%   - geometric departure from the standard correlation configuration (Section 5.8)
+%   - fluid property assumptions (temperature-dependent density and viscosity) in N_Re
+
+
+%********************************** 7.5 **************************************
+\section{Discussion}
+\label{sec:val-discussion}
+
+% TODO: answer the objectives of Section~\ref{sec:objectives} one at a time, with the numbers.
+% Then state honestly what the apparatus does not yet do well, and what the limits of this
+% validation are: internal testing only, no classroom deployment, no multi-semester reliability
+% data. Those are already declared as limitations, and acknowledging them here is stronger than
+% leaving the panel to raise them.

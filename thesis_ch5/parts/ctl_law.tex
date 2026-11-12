@@ -1,0 +1,31 @@
+The control law, as implemented at every loop $k$ with the measured time step $\Delta t_k$, is
+\begin{align}
+    \tilde{n}_k &= a\, n_k + (1 - a)\, \tilde{n}_{k-1}, \qquad e_k = r_k - \tilde{n}_k \label{eq:pi-fb}\\[2pt]
+    I_k &= \operatorname{clip}\!\left(I_{k-1} + e_k\, \Delta t_k,\; -\frac{u_{\max}}{K_i},\; \frac{u_{\max}}{K_i}\right) \label{eq:pi-int}\\[2pt]
+    u_k &= \operatorname{clip}\!\left(K_p\, e_k + K_i\, I_k,\; 0,\; u_{\max}\right) \label{eq:pi-law}
+\end{align}
+where $n_k$ is the raw speed estimate of Section~\ref{subsec:agit-cet}, $a$ the feedback filter coefficient, $r_k$ the setpoint, $u_k$ the duty in counts of the 12-bit channel, and $u_{\max}$ the ceiling described above. In the continuous-time form that is used for the design below, $u(s) = C(s)\,e(s)$ with
+\begin{equation}
+    C(s) = K_p + \frac{K_i}{s} = K_p\left(1 + \frac{1}{T_i\, s}\right), \qquad T_i = \frac{K_p}{K_i}
+    \label{eq:pi-tf}
+\end{equation}
+The proportional gain $K_p$ (counts per rpm) is the immediate reaction to the present error: an error of 100~rpm moves the duty by $100\,K_p$ counts at once. The integral gain $K_i$ (counts per rpm per second) accumulates the error, so the duty keeps changing until the error is zero, which is what removes the steady-state error against the drag of the fluid. The ratio $T_i = K_p/K_i$ is the time that the integral action takes to repeat the proportional action, and its inverse is the frequency at which the controller changes from mainly integral to mainly proportional.
+
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}[>=stealth, node distance=14mm, every node/.style={font=\small}, blk/.style={draw, minimum width=17mm, minimum height=9mm, align=center}]
+        \node (r) {$r$};
+        \node[circle, draw, right=10mm of r, inner sep=1pt] (sum) {$+$};
+        \node[blk, right=10mm of sum] (pi) {PI\\$K_p,\,K_i$};
+        \node[blk, right=12mm of pi] (sat) {clip\\$[0,\,u_{\max}]$};
+        \node[blk, right=12mm of sat] (pl) {plant\\$G(s)$};
+        \node[right=10mm of pl] (y) {$n$};
+        \node[blk, below=9mm of pi] (est) {estimator\\+ filter $a$};
+        \node[blk, above=9mm of sat, minimum width=34mm] (lim) {power limiter,\\water-safe duty};
+        \draw[->] (r) -- (sum); \draw[->] (sum) -- node[above]{$e$} (pi); \draw[->] (pi) -- (sat); \draw[->] (sat) -- node[above]{$u$} (pl); \draw[->] (pl) -- (y);
+        \draw[->] (lim) -- (sat); \draw[->] (lim.west) -| node[pos=0.25, above]{$u_{\max}$} (pi.north);
+        \draw[->] ([xshift=5mm]pl.east) |- (est.east); \draw[->] (est.west) -| node[pos=0.25, below]{$\tilde n$} node[pos=0.95, left]{$-$} (sum.south);
+    \end{tikzpicture}
+    \caption[Block diagram of the speed controller]{Block diagram of the speed loop. The ceiling $u_{\max}$ comes from the power limiter and the water-safe duty and acts twice: it clips the output and it bounds the integral state of Equation~\ref{eq:pi-int}, so the integral is pulled down at once when the limiter lowers the ceiling.}
+    \label{fig:pi-block}
+\end{figure}

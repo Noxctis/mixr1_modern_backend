@@ -1,0 +1,161 @@
+%*******************************************************************************
+%****************************** Chapter 3 *************************************
+%*******************************************************************************
+
+\chapter{System Architecture}
+\label{ch:system}
+
+\ifpdf
+    \graphicspath{{Chapter3/Figs/Raster/}{Chapter3/Figs/PDF/}{Chapter3/Figs/}}
+\else
+    \graphicspath{{Chapter3/Figs/Vector/}{Chapter3/Figs/}}
+\fi
+
+This chapter presents MIXR-1 at the system level. It establishes the physical design basis inherited from prior work, the conceptual framework linking the two target laboratory courses to the apparatus, and the top-level architecture of the hardware, electronics, and software. The treatment here is deliberately high level: block diagrams and signal flow define what the subsystems are and how they exchange information, while the implementation of each subsystem is deferred to Chapters~\ref{ch:platform} through~\ref{ch:process}.
+
+
+%********************************** 3.1 **************************************
+\section{Physical Design Basis}
+\label{sec:arch-basis}
+
+The mechanical and chemical engineering design of the apparatus is adopted as a fixed design input from the work of \citet{dumalagan2024}, and is not re-derived here. The relevant inherited parameters are the vessel geometry, the impeller type and diameter, the baffle configuration, the shaft and coupling arrangement, and the countertop scaffold that carries them.
+
+% TODO: Table 3.1 -- inherited mechanical parameters (vessel ID, liquid height, impeller type and
+% diameter D_i, baffle count and width, shaft diameter, clearance C). Pull the values from
+% Dumalagan's proposal and state the geometric ratios, since Chapter 7 compares them against the
+% standard configurations tabulated by Brown et al.
+
+Two consequences of this design basis constrain everything that follows. First, the impeller geometry fixes the expected range of the Power number and therefore the torque the sensing chain must resolve. Second, the vessel dimensions fix the usable standoff for a non-contact level sensor mounted above the maximum fill line, which is the constraint identified in Section~\ref{sec:rrl-tof}.
+
+
+%********************************** 3.2 **************************************
+\section{Conceptual Framework}
+\label{sec:arch-framework}
+
+% TODO: Figure 3.1 -- conceptual framework diagram (inputs -> process -> outputs), carried over
+% from the proposal and updated for the as-built system.
+
+The conceptual framework links the two instructional gaps identified in Section~\ref{sec:problem} to the two operating pathways of the apparatus. The CHE 3214L gap, an agitation experiment conducted on open-loop, manually recorded equipment, is addressed by the agitation pathway: regulated impeller speed, direct torque measurement, and automated acquisition of the data required for the $N_{Re}$--$N_{Po}$ characterization. The CHE 4117L gap, the absence of a physical process plant, is addressed by the process-control pathway: a measured liquid level, two switchable actuators, and a deployment route that allows a student-authored controller to close the loop on real hardware.
+
+
+%********************************** 3.3 **************************************
+\section{Top-Level System Architecture}
+\label{sec:arch-top}
+
+% TODO: Figure 3.2 -- top-level block diagram. Blocks: mains -> 24 V supply -> {motor driver rail,
+% Pi 5 V supply}; Pi 4B at the centre; sensor inputs (encoder A/B/X on GPIO, torque transmitter on
+% RS485/USB, ToF on I2C, wattmeter on I2C); actuator outputs (driver channel 1 PWM/INA/INB/EN,
+% driver channel 2); local HMI (LCD on I2C, EC11 knob, buttons); Ethernet to host PC.
+
+% TODO: Figure 3.3 -- signal-flow graph showing the measurement chain and the two control loops,
+% annotated with where each quantity is produced and consumed.
+
+A single Raspberry Pi 4B is the only computing element. It acquires all sensor signals, executes the embedded control law, drives the local interface, and serves telemetry to a host PC over Ethernet. No microcontroller sits between the sensors and the single-board computer; the implications of that choice for timing are examined in Section~\ref{sec:plat-timing}.
+
+\subsection{Agitation Pathway (Modes 1 and 2)}
+\label{subsec:arch-agitation}
+
+In the agitation pathway the controlled variable is impeller speed. An incremental encoder on the motor shaft supplies quadrature pulses from which speed is estimated; a proportional-integral controller compares that estimate against the setpoint and commands a PWM duty to the motor driver. In parallel, an inline reaction-torque transducer supplies shaft torque, from which the power delivered to the fluid, and hence the Power number, is computed. The pathway is identical in Mode~1 and Mode~2; the two modes differ only in where the setpoint originates and where the data are displayed. Mode~1 takes the setpoint from the local knob and shows results on the LCD; Mode~2 takes it from the host dashboard and streams the full record for visualization and export.
+
+\subsection{Process-Control Pathway (Mode 3)}
+\label{subsec:arch-process}
+
+In the process-control pathway the controlled variable is liquid level. A time-of-flight sensor above the vessel reports the distance to the liquid surface, which is converted to level and streamed to a Simulink model deployed on the same Raspberry Pi. The model's output switches the inlet pump and the drain solenoid valve. The control law in this pathway is authored by the student rather than by the apparatus, which is the pedagogical purpose of the mode.
+
+An important architectural constraint follows from the actuator wiring described in Section~\ref{sec:plat-circuitry}: the mixer motor and the inlet pump share one output channel of the dual motor driver and are exchanged at a connector, so the agitation and process-control pathways cannot be energized simultaneously. The two pathways are therefore alternative configurations of the apparatus rather than concurrent functions, and the mode-selection logic enforces this.
+
+
+%********************************** 3.4 **************************************
+\section{Hardware Overview and Specifications}
+\label{sec:arch-hardware}
+
+% TODO: Table 3.2 -- as-built hardware inventory with key specifications and the section where each
+% is detailed. Rows: Raspberry Pi 4B; DOGA brushed DC gearmotor; Pololu dual VNH5019 motor driver;
+% CUI AMT102-V incremental encoder (set resolution, CPR after x4 decoding); ATO-TQS-S03 reaction
+% torque sensor (2 N*m, flange to square drive, 0-5 V and RS485 via transmitter); VL53L4CD ToF
+% sensor; inlet pump; drain solenoid valve; I2C wattmeter; 20x4 I2C LCD; EC11 rotary encoder;
+% push buttons; e-stop; 24 V supply.
+
+The sensing and actuation hardware is summarized in the as-built inventory table noted above and detailed subsystem by subsystem in the following chapters. Three selections warrant note at this level because they differ from the proposal and shape the architecture.
+
+The torque transducer is a reaction-torque sensor supplied with its own transmitter, which outputs both an analog signal and a digital RS485 Modbus RTU register interface. Because the transmitter performs the conversion, no external analog-to-digital converter appears in the measurement chain, and the torque channel reaches the Raspberry Pi as a serial device rather than as an analog input.
+
+The motor driver is a dual-channel carrier, so one board serves all three actuators. The mixer motor and the inlet pump share the first channel through a connector exchange; the solenoid valve occupies the second. This removes the need for separate discrete switching circuitry for the fluid actuators.
+
+The level sensor is a time-of-flight module selected over the earlier candidate on the basis of its better reported performance when ranging onto a liquid surface, as discussed in Section~\ref{sec:rrl-tof}.
+
+
+%********************************** 3.5 **************************************
+\section{Electronics Overview}
+\label{sec:arch-electronics}
+
+% TODO: Figure 3.4 -- electronics interconnection block diagram, at the level of boards and cables
+% rather than components. Show the 24 V rail, the logic rail, the driver carrier, the transmitter,
+% and which bus each peripheral sits on. Component-level schematics belong in Chapter 4 and
+% Appendix~\ref{app:schematics}.
+
+The electronics occupy a single enclosure mounted to the scaffold. Power distribution and the circuit implementation are presented in Sections~\ref{sec:plat-power} and~\ref{sec:plat-circuitry}; this section states only the division of the electronics into functional groups: the power group, the motor-driver group, the sensor-interface group, and the local-interface group.
+
+
+%********************************** 3.6 **************************************
+\section{Software Architecture Overview and Operating Modes}
+\label{sec:arch-software}
+
+% TODO: Figure 3.5 -- software layer diagram: hardware -> pigpio daemon -> C++ backend
+% (acquisition, kinematics, control, safety, telemetry) -> {LCD/HMI, TCP server} -> {Python
+% dashboard, Simulink model}.
+
+The software is organized in three layers. At the base, a C++ backend daemon runs continuously on the Raspberry Pi and owns every device: it services the encoder callbacks, polls the torque and power interfaces, executes the speed controller, enforces the safety logic, and drives the local display. Above it, a host-side Python dashboard connects over TCP for visualization, logging, and export. Alongside both, a Simulink model deployed to the same board implements the student-authored level controller.
+
+The three operating modes are distinguished by which of these layers is active:
+
+\begin{description}
+    \item[Mode 1, standalone.] The backend runs alone. Setpoint entry and result display occur entirely on the local LCD and controls. No host computer is required.
+    \item[Mode 2, dashboard.] The backend runs with the host dashboard attached. The dashboard supplies setpoints and commands, receives the telemetry stream, and performs visualization, automated speed sweeps, and data export.
+    \item[Mode 3, hardware-in-the-loop.] The deployed Simulink model closes the level loop. The backend releases the fluid actuators to the model and holds the mixer drive in a safe state.
+\end{description}
+
+
+%********************************** 3.7 **************************************
+\section{Communication Protocols}
+\label{sec:arch-protocols}
+
+% TODO: Table 3.3 -- interface summary: signal, protocol, bus/pin, direction, nominal rate.
+
+Five interfaces carry data in the system. Quadrature and index pulses from the encoder arrive as GPIO edge events. The motor and the fluid actuators are commanded through hardware PWM together with direction and enable lines. The level sensor, the wattmeter, and the character display share the I\textsuperscript{2}C bus. The torque transmitter is read as Modbus RTU over a serial link. Telemetry and commands between the Raspberry Pi and the host PC travel over wired TCP/IP on Gigabit Ethernet; wireless operation is outside the scope of this study, as stated in Section~\ref{subsec:limitations}.
+
+
+%********************************** 3.8 **************************************
+\section{Development Approach}
+\label{sec:arch-process-model}
+
+The system was developed iteratively rather than in a single pass. Each subsystem was brought up in isolation against its own unit test before integration, and the hardware selections recorded in Section~\ref{sec:arch-hardware} reflect revisions made during that process rather than the initial proposal. The work breakdown and schedule are given in Appendix~\ref{app:deliverables}.
+
+% TODO: Figure 3.6 -- iterative prototyping SDLC diagram and/or Gantt summary.
+
+
+%********************************** 3.9 **************************************
+\section{Validation Framework}
+\label{sec:arch-validation}
+
+Validation proceeds at three levels. Unit tests (TC-U) verify one sensor or actuator against an independent reference. System tests (TC-S) verify integrated behavior of the agitation pathway. Hardware-in-the-loop tests (TC-H) verify the process-control pathway and its fault handling. Each test is reported in the chapter covering its subsystem; the full descriptions and pass criteria are tabulated in Appendix~\ref{app:testcases}.
+
+% TODO: Table 3.4 -- calibration and validation matrix: measured quantity, reference instrument or
+% method, test case ID, error metric, chapter section reporting the result.
+
+The reference instruments are listed in Appendix~\ref{app:refinstruments}. Speed is referenced to a handheld tachometer, liquid level to direct measurement with a physical ruler, and electrical quantities to a digital multimeter. Torque has no independent gauge available; it is instead validated against a theoretical computation of the applied torque, with the derivation given in Appendix~\ref{app:calculations}.
+
+The error metric used throughout is percentage error relative to the reference value, reported with the mean and the maximum across the tested range.
+
+
+%********************************** 3.10 **************************************
+\section{Bill of Materials and Cost Summary}
+\label{sec:arch-bom}
+
+% TODO: Table 3.5 -- cost summary by functional group (structure, drive, sensing, electronics,
+% interface), with the total per unit. The full itemized BOM is in Appendix~\ref{app:bom}.
+% NOTE: the total changed from the proposal figure of Php 50,151.98 because of the torque sensor,
+% motor driver and ToF sensor substitutions. Update Section~\ref{sec:significance} in Chapter 1
+% once the final figure is settled.
+
+The itemized bill of materials is given in Appendix~\ref{app:bom}, and the cost comparison against the commercial alternative is developed in Section~\ref{sec:val-cost}.

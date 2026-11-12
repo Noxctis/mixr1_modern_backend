@@ -1,0 +1,5 @@
+gains,Kp,Ki,wc,PM,GM_dB
+"Earlier gains, CET estimate",1.56,41.22,29.19,73.7,11.67
+"Earlier gains, DCT estimate (+19 ms)",1.56,41.22,29.19,41.92,4.48
+"Present gains, CET estimate",0.23,7.51,4.81,86.37,27.87
+"Present gains, DCT estimate (+19 ms)",0.23,7.51,4.81,81.14,20.13

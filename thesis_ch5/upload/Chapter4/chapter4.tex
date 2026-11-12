@@ -1,0 +1,171 @@
+%*******************************************************************************
+%****************************** Chapter 4 *************************************
+%*******************************************************************************
+
+\chapter{Electronics and Embedded Software Platform}
+\label{ch:platform}
+
+\ifpdf
+    \graphicspath{{Chapter4/Figs/Raster/}{Chapter4/Figs/PDF/}{Chapter4/Figs/}}
+\else
+    \graphicspath{{Chapter4/Figs/Vector/}{Chapter4/Figs/}}
+\fi
+
+This chapter presents the elements shared by all three operating modes: power distribution, the circuitry and its enclosure, the embedded core and its software architecture, the timing and scheduling strategy that the rest of the system depends on, the host interface, and the safety logic. Subsystem-specific hardware is deferred to Chapters~\ref{ch:agitation} and~\ref{ch:process}.
+
+
+%********************************** 4.1 **************************************
+\section{Power Distribution}
+\label{sec:plat-power}
+
+Power distribution is not a research contribution of this work and is presented only at the level needed to understand the interconnections.
+
+% TODO: Figure 4.1 -- power distribution block diagram. Mains -> 24 V supply -> {motor driver
+% V_in via the wattmeter shunt, step-down to 5 V for the Pi, torque transmitter supply}.
+% Annotate each branch with its nominal voltage and the fuse rating protecting it.
+
+A single 24~V supply feeds the motor driver rail. The Raspberry Pi is supplied separately at 5~V, and the torque transmitter is supplied at its own rated voltage. The wattmeter is placed on the motor rail so that it measures the electrical power drawn by the drive rather than the total system draw, which is the quantity the power limiter of Section~\ref{subsec:plat-powerlimit} acts upon. Grounds are commoned at a single point to avoid a return path through the signal wiring.
+
+
+%********************************** 4.2 **************************************
+\section{Circuitry and Electronics Enclosure}
+\label{sec:plat-circuitry}
+
+\subsection{Circuit Schematics and Fabrication}
+\label{subsec:plat-schematics}
+
+% TODO: Figure 4.2 -- interface board schematic. Full-size schematics and the PCB layout go in
+% Appendix~\ref{app:schematics}.
+
+\subsection{Shared Dual Motor Driver}
+\label{subsec:plat-driver}
+
+A single dual-channel driver carrier serves all three actuators. The first channel drives either the mixer motor or the inlet pump, exchanged at a connector; the second channel drives the solenoid valve. Each channel is commanded by three lines: a PWM input, a direction pair, and an enable.
+
+The consequence noted in Section~\ref{subsec:arch-process} is enforced here rather than left to the operator. Because the mixer and the pump are physically exchanged at the same channel, they cannot be driven in the same session, and the firmware parks the fluid outputs whenever the agitation pathway is active and parks the mixer drive whenever the process-control pathway is active.
+
+% TODO: Table 4.1 -- GPIO assignment for the driver: channel, function (PWM / INA / INB / EN),
+% BCM pin number, and the actuator served. Take the values from config.hpp.
+
+\subsection{Protection Circuitry}
+\label{subsec:plat-protection}
+
+% TODO: describe fusing per rail, the emergency-stop contactor arrangement, grounding, and wiring
+% gauge. Cross-reference the hardware fail-safes in Section~\ref{subsec:plat-failsafe}.
+
+\subsection{Enclosure and Scaffold Integration}
+\label{subsec:plat-enclosure}
+
+% TODO: Figure 4.3 -- enclosure, with callouts for board placement, cable entry and the
+% front-panel controls. Note the print material, infill and mounting to the scaffold.
+
+
+%********************************** 4.3 **************************************
+\section{Embedded Core: Raspberry Pi 4B}
+\label{sec:plat-core}
+
+The Raspberry Pi 4B was selected over a microcontroller for three reasons specific to this application. It is the reference target of the MathWorks Simulink support package~\citep{mathworks2026}, which Mode~3 requires. It provides native Gigabit Ethernet, which Mode~2 requires for telemetry without an intermediate interface board. And it runs a general-purpose operating system, which allows the dashboard protocol, the logging format, and the control law to be revised by later cohorts without a toolchain beyond a text editor and a compiler.
+
+The cost of that choice is the absence of timing determinism, discussed in Section~\ref{sec:rrl-embedded} and addressed in Section~\ref{sec:plat-timing}.
+
+% TODO: Table 4.2 -- OS image and version, kernel version, pigpio daemon version, compiler and
+% standard, and any boot configuration changes (I2C enable, serial console disable, UART release).
+
+
+%********************************** 4.4 **************************************
+\section{Real-Time Backend Daemon}
+\label{sec:plat-backend}
+
+All device ownership resides in a single C++ daemon. Centralizing ownership avoids contention for the GPIO and I\textsuperscript{2}C peripherals, and it guarantees that exactly one component decides what the actuators do at any instant, which is a precondition for the safety logic in Section~\ref{sec:plat-safety}.
+
+% TODO: Figure 4.4 -- module diagram of the backend, matching the source layout: encoder,
+% kinematics, pi_controller, motor, torquesensor, powermeter, power_limiter, torque_autotare,
+% lcd, ec11, network, process_monitor.
+
+The daemon separates acquisition from interpretation. Device classes expose raw, timestamped readings; interpretation classes convert those readings into engineering quantities and control decisions. The encoder class, for example, maintains only the position count and its timestamp, while the conversion from counts to RPM, the filtering of that estimate, and the stopped-shaft determination occur in a separate kinematics stage. This separation is what allows the speed-estimation strategy of Section~\ref{sec:agit-speed} to be changed without touching the interrupt path.
+
+
+%********************************** 4.5 **************************************
+\section{Hardware Abstraction and Pin Assignment}
+\label{sec:plat-hal}
+
+Peripheral access is mediated by the pigpio daemon rather than by direct register access. The daemon provides hardware PWM on the supported channels, edge callbacks delivered from a single dispatch thread, and I\textsuperscript{2}C transactions, and it allows the backend to run without root privileges.
+
+The single-thread guarantee for callbacks matters for correctness and is relied upon in Section~\ref{subsec:agit-index}: because the A, B, and index callbacks are delivered in order from one thread, the position count read inside the index handler is exactly the count at the instant the index edge arrived, with no lock required.
+
+% TODO: Table 4.3 -- complete pin assignment: BCM pin, function, direction, pull configuration,
+% and peripheral served. Generate from config.hpp so the table cannot drift from the source.
+
+
+%********************************** 4.6 **************************************
+\section{Timing, Sampling, and Scheduling}
+\label{sec:plat-timing}
+
+The scheduling-latency measurements reviewed in Section~\ref{sec:rrl-embedded} establish that a userspace task on this class of platform experiences occasional large deviations from its nominal period. The software is therefore written so that correctness does not depend on the period being met.
+
+Three design rules follow. First, every rate computation uses measured elapsed time rather than an assumed interval: the controller integrates error over the actual time step passed to it, so a late iteration changes the responsiveness of the loop but not the value of the integral. Second, every derived quantity is timestamped at the source, in the callback, rather than when the control loop happens to read it. Third, the absence of an expected event is treated as information: a shaft that produces no pulses within a fixed interval is reported as stopped rather than retaining its last value.
+
+% TODO: Table 4.4 -- nominal loop rates: control loop period, torque poll interval, wattmeter poll
+% interval, LCD refresh, telemetry transmit rate. State which are periodic and which are
+% event-driven.
+
+% TODO: report the measured loop-period distribution (mean, standard deviation, worst case) over a
+% representative run. This is the evidence that the three rules above are sufficient, and it is the
+% natural place to reference the latency figures of Adam (2021).
+
+
+%********************************** 4.7 **************************************
+\section{Inter-Process Communication and Host Interface}
+\label{sec:plat-ipc}
+
+The backend exposes a TCP server to which the host dashboard connects. The protocol is line-oriented and text-based: the backend emits one record per update, and the client sends short commands to set the speed target, change gains, request an extended record, or trigger a tare.
+
+Two properties of the link are deliberate. The record is extensible, with optional field groups the client enables at connection time, so that an older dashboard remains compatible with a newer backend. And the server never blocks on a slow or dead client: a send that is not accepted is counted, and a client that stops acknowledging within the heartbeat interval is dropped. The rig continues to run, under local control, with no host attached.
+
+% TODO: Table 4.5 -- telemetry record format: field order, units, and the command that enables each
+% optional group. Table 4.6 -- command set.
+
+
+%********************************** 4.8 **************************************
+\section{Safety Features and Fault Handling}
+\label{sec:plat-safety}
+
+Safety is implemented in depth, with independent hardware and software layers, on the principle that no single failure should leave an actuator energized.
+
+\subsection{Hardware Fail-Safes}
+\label{subsec:plat-failsafe}
+
+% TODO: describe the emergency stop and its placement in the power path, the rail fusing, and the
+% driver's own overcurrent and thermal protection.
+
+\subsection{Safe Start and Output Parking}
+\label{subsec:plat-safestart}
+
+A specific hazard of this platform is that the PWM peripheral retains its configuration when the controlling process exits. A stale duty cycle from a previous run would otherwise be applied the instant the driver is enabled. The initialization sequence therefore disables the driver first, forces the duty to zero both before and after the pin is switched to its PWM function, verifies the result, and only then permits the driver to be enabled. If the hardware PWM cannot be established, the driver is left disabled and the condition is reported rather than being allowed to proceed.
+
+The same reasoning applies on the fluid side. A deployed model that is killed never executes its own shutdown, so the backend parks the pump and valve outputs when it takes ownership of the rig.
+
+\subsection{Power Limiting and Stall Detection}
+\label{subsec:plat-powerlimit}
+
+A continuous limit is imposed on motor power. The limiter regulates toward a target below the hard ceiling, so that a transient excursion during start-up or a load change remains below the limit despite the latency of the power measurement. When the measured power exceeds that target, the permissible PWM ceiling is reduced in proportion; when it falls below, the ceiling is released gradually rather than restored at once. Sustained operation above a higher trip threshold latches a fault that requires operator intervention.
+
+A separate detector covers the case the power limiter cannot: a jammed impeller draws bounded power at a high duty while the shaft does not turn. A commanded duty above a threshold combined with a near-zero measured speed, persisting beyond a time limit, also latches the fault.
+
+The permissible ceiling produced by the limiter is passed into the speed controller, so that the anti-windup clamp described in Section~\ref{sec:agit-pi} tracks the limit in effect rather than the nominal full-scale output.
+
+\subsection{Software Interlocks and Communication Timeouts}
+\label{subsec:plat-interlocks}
+
+% TODO: describe mode interlocks (mixer and fluid pathways mutually exclusive), the heartbeat
+% timeout on the dashboard link, and the behaviour on loss of the Simulink model. State the safe
+% state each fault routes to.
+
+
+%********************************** 4.9 **************************************
+\section{Common Digital I/O Verification}
+\label{sec:plat-io-test}
+
+% TODO: TC-U7. Verify each assigned GPIO: direction, pull configuration, and commanded state
+% measured at the connector with a multimeter. Report as a pass/fail table. Confirm that the safe
+% start sequence leaves 0 \% duty at the driver input before enable, measured on an oscilloscope.

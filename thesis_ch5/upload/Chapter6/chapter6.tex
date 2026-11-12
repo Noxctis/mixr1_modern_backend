@@ -1,0 +1,135 @@
+%*******************************************************************************
+%****************************** Chapter 6 *************************************
+%*******************************************************************************
+
+\chapter{Process Control}
+\label{ch:process}
+
+\ifpdf
+    \graphicspath{{Chapter6/Figs/Raster/}{Chapter6/Figs/PDF/}{Chapter6/Figs/}}
+\else
+    \graphicspath{{Chapter6/Figs/Vector/}{Chapter6/Figs/}}
+\fi
+
+This chapter covers the process-control application of MIXR-1, which serves the CHE 4117L activity. It presents the level-measurement chain, the two fluid actuators and their drive arrangement, the Simulink deployment route that allows a student-authored controller to run on the apparatus, the on-off control law itself, and the validation of each.
+
+%********************************** 6.1 **************************************
+\section{Process-Control Subsystem Overview}
+\label{sec:proc-overview}
+
+% TODO: Figure 6.1 -- process-control pathway block diagram: ToF sensor -> level estimate ->
+% Simulink model -> {pump, solenoid valve} -> vessel -> level, with the protection bounds shown
+% as an independent path that can override the model's output.
+
+The distinguishing feature of this pathway is that the control law is not supplied by the apparatus. The backend provides a measured level and two switchable actuators; the student supplies the logic between them. The apparatus retains only the protection bounds described in Section~\ref{subsec:proc-bounds}, which can override the model but cannot substitute for it.
+
+%********************************** 6.2 **************************************
+\section{Time-of-Flight Liquid Level Sensor}
+\label{sec:proc-tof}
+
+\subsection{Sensor Selection and Mounting}
+\label{subsec:proc-tof-sel}
+
+The sensor is a direct time-of-flight ranging module, specifically the VL53L4CD, selected over the earlier candidate on the grounds set out in Section~\ref{subsec:rrl-tof}: ranging onto water is a difficult case, and \citet{st2022tn1450} identify this device as the better-performing option for liquid-level monitoring.
+
+Mounting follows the same guidance. The module is fixed above the maximum fill line at a standoff exceeding the stated minimum, and oriented so that the beam strikes the liquid surface close to perpendicular, since a specular surface returns little signal to an off-axis receiver. The sensor communicates over I\textsuperscript{2}C at address \texttt{0x29} and is configured with a 200~ms timing budget to balance ranging accuracy against the required update rate.
+
+% TODO: Figure 6.2 -- sensor mounting, showing the standoff from the maximum fill line and the
+% beam axis relative to the surface. State the actual standoff.
+
+\subsection{Distance-to-Level Conversion and Filtering}
+\label{subsec:proc-tof-conv}
+
+The module reports the raw distance from itself to the first valid return. To derive the fluid level, the backend subtracts both the measured distance and the calibrated thickness of the surface floater from a fixed reference height, as defined in Equation~\ref{eq:level_conv}:
+
+\begin{equation}
+    h = (H_{ref} - d_{raw} - t_{floater}) \times K
+    \label{eq:level_conv}
+\end{equation}
+
+where $h$ is the calculated fluid level, $H_{ref}$ is the container's zero-level distance established during an empty-tank calibration routine, $d_{raw}$ is the instantaneous raw distance returned by the sensor, $t_{floater}$ is the physical thickness of the floating target, and $K$ is an optional linear gain correction (nominally 1.0). 
+
+Because specular reflections off a liquid surface can introduce measurement noise, the backend applies a filtering strategy before the level is passed to the host controller. The driver collects a configurable batch of frames, discards invalid returns (such as out-of-range limits exceeding 2000~mm or non-zero hardware error statuses), and computes the median of the valid set. This median filter effectively suppresses transient outliers, such as surface ripples caused by the pump inflow or condensation on the sensor glass, without introducing the severe phase lag associated with heavy low-pass filtering. 
+
+\subsection{Validation Against Direct Measurement}
+\label{subsec:proc-tof-test}
+
+To validate the sensor conversion logic (TC-U5), the vessel was incrementally filled to target levels between 50~mm and 250~mm. At each increment, the fluid level calculated by the ToF sensor was recorded alongside direct measurements taken from a physical ruler fixed to the vessel wall. 
+
+The results, drawn from calibration session \texttt{20261001\_204821}, are summarized in Table~\ref{tab:tof_validation}. The sensor consistently tracked the physical ruler with an absolute overestimation ranging from 2.70~mm to 5.20~mm. This systemic positive offset is expected when tracking a resting floater, as slight buoyancy variations and capillary action against the ruler alter the visual meniscus compared to the physical target. The overall error remains bounded to roughly 2\% to 5\%, well within the required tolerances for a limit-cycle demonstration.
+
+\begin{table}[ht]
+    \centering
+    \caption{Time-of-Flight Level Sensor Validation Against Direct Ruler Measurement (TC-U5)}
+    \label{tab:tof_validation}
+    \begin{tabular}{cccc}
+        \toprule
+        \textbf{Target Level (mm)} & \textbf{Ruler Reading (mm)} & \textbf{Sensor Reading (mm)} & \textbf{Error (\%)} \\
+        \midrule
+        50  & 52.40  & 55.10  & 5.15\% \\
+        100 & 102.60 & 105.70 & 3.02\% \\
+        150 & 151.44 & 154.20 & 1.82\% \\
+        200 & 201.40 & 204.30 & 1.44\% \\
+        250 & 248.40 & 253.60 & 2.09\% \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+% TODO: Figure 6.3 (sensor vs ruler with the 1:1 line, and residuals vs level).
+% State the resolution of the ruler itself (e.g., 1 mm).
+
+
+%********************************** 6.3 **************************************
+\section{Level-Control Actuation}
+\label{sec:proc-actuation}
+
+\subsection{Actuator Selection}
+\label{subsec:proc-actuator-sel}
+
+Fluid actuation is handled by a matched pair of low-voltage DC elements designed for 1/2-inch piping: a water pump for inflow and a solenoid valve for drainage. The pump is rated for a nominal 12V supply and delivers a maximum flow rate of 1300~L/hr, providing sufficient head to rapidly overcome the hysteresis band during fill cycles. 
+
+The drain is controlled by a 6--12V DC solenoid valve in a Normally Closed (NC) configuration. Selecting a normally closed valve provides a critical hardware fail-safe: if the apparatus loses power, the control program crashes, or the emergency stop is engaged, the valve mechanically drops to its de-energized closed state, preventing the unintentional draining of the vessel.
+
+\subsection{Driver Channel Allocation and Switching}
+\label{subsec:proc-channels}
+
+Both fluid actuators are driven from the same Pololu dual VNH5019 motor driver carrier used for the primary agitator, as described in Section~\ref{subsec:plat-driver}. The pump occupies the first channel, which is physically exchanged at the connector with the mixer motor depending on the active laboratory mode, while the solenoid valve permanently occupies the second channel. Neither is operated proportionally; both are switched fully ON or fully OFF, as the on-off control law requires.
+
+The actuator pin assignments mapped from the Raspberry Pi GPIO headers are detailed in Table~\ref{tab:fluid_gpio}.
+
+\begin{table}[ht]
+    \centering
+    \caption{GPIO Pin Assignments for Fluid Actuators}
+    \label{tab:fluid_gpio}
+    \begin{tabular}{lcc}
+        \toprule
+        \textbf{Function} & \textbf{Pump (VNH5019 \#1)} & \textbf{Solenoid (VNH5019 \#2)} \\
+        \midrule
+        Direction A (INA) & BCM 17 & BCM 5 \\
+        Direction B (INB) & BCM 27 & BCM 6 \\
+        PWM Control       & BCM 13 (Hardware PWM1) & BCM 12 (Hardware PWM0) \\
+        Enable (EN)       & BCM 15 & N/A \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+
+%********************************** 6.4 **************************************
+\section{Mode 3: MATLAB/Simulink Hardware-in-the-Loop}
+\label{sec:proc-mode3}
+
+\subsection{Support Package Configuration and Deployment}
+\label{subsec:proc-deploy}
+
+% TODO: state the exact MATLAB and Simulink versions used, the board configuration 
+% (hostname, credentials, Ethernet addressing), and the solver/step size.
+% Figure 6.4 -- the deployment workflow, from model to running executable.
+
+The deployment route relies on the official Simulink Support Package for Raspberry Pi Hardware \citep{mathworks2026}. Under this architecture, the student builds the level-control logic graphically within the Simulink environment on the host PC. Upon deployment, MATLAB invokes a cross-compiler to generate a standalone C executable from the block diagram, transfers the binary to the Raspberry Pi over TCP/IP, and initiates execution on the embedded Linux backend.
+
+This hardware-in-the-loop workflow abstracts the low-level I/O configuration entirely. No embedded C/C++ coding is required of the student, fulfilling the pedagogical requirement established in Section~\ref{sec:rrl-trainers} by allowing the laboratory activity to focus strictly on control logic rather than hardware integration.
+
+\subsection{Sensor Streaming and Actuator Command Interface}
+\label{subsec:proc-interface}
+
+% TODO: describe how the deployed model obtains the level reading and commands the actuators...

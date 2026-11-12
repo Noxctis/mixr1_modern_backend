@@ -1,0 +1,168 @@
+diff --git a/mixr_dashboard.py b/mixr_dashboard.py
+index c0b0df5..0896c76 100644
+--- a/mixr_dashboard.py
++++ b/mixr_dashboard.py
+@@ -213,6 +213,8 @@ class Sample(NamedTuple):
+     bus_v: float
+     current_ma: float
+     elec_power_w: float
++    daemon_t_s: float = float("nan")     # the daemon's clock for this row (not the packet count)
++    lost_periods: float = 0.0            # 10 ms periods missing between the previous row and this one, by the daemon clock
+ 
+ 
+ IDX: Dict[str, int] = {name: i for i, name in enumerate(Sample._fields)}      # column index by field name
+@@ -238,6 +240,8 @@ COLUMNS: Tuple[ColumnSpec, ...] = (
+     ColumnSpec("Bus (V)", "Bus_V", ".2f"),
+     ColumnSpec("Current (mA)", "Current_mA", ".0f"),
+     ColumnSpec("Elec. Power (W)", "Elec_Power_W", ".2f"),
++    ColumnSpec("Daemon t (s)", "Daemon_t_s", ".3f"),
++    ColumnSpec("Lost periods", "Lost_periods", ".0f"),
+ )
+ assert len(COLUMNS) == len(Sample._fields)
+ 
+@@ -355,7 +359,48 @@ class NpoStore:
+         return np.asarray(self._re, dtype=float), np.asarray(self._po, dtype=float)
+ 
+ 
+-def write_log_files(model: TelemetryTableModel, base: str, extra: Dict[str, str]) -> str:
++
++def integrity_report(data: np.ndarray, malformed: int = 0) -> Tuple[List[str], bool]:
++    """Integrity of a log from its own columns. Returns (text lines, ok).
++    Uses the daemon clock (Daemon t), the lost periods counted while receiving, the lines that could not be read, and the revolution count
++    against the integral of the filtered speed (a check that does not depend on the transport)."""
++    n = len(data)
++    lines: List[str] = [f"rows: {n}"]
++    ok = True
++    if n < 2:
++        return lines + ["too few rows to check"], False
++    t_d = data[:, IDX["daemon_t_s"]]
++    have_clock = bool(np.isfinite(t_d).any())
++    if have_clock:
++        dt = np.diff(t_d[np.isfinite(t_d)])
++        span = float(np.nansum(dt[dt > 0]))
++        expected = span / SAMPLE_PERIOD_S + 1
++        lost = np.nan_to_num(data[:, IDX["lost_periods"]], nan=0.0)
++        n_gaps = int((lost > 0).sum())
++        lines.append(f"daemon clock span: {span:.2f} s, expected rows {expected:.0f}, received {n} ({100.0 * (n / expected - 1):+.2f} %)")
++        lines.append(f"lost 10 ms periods: {int(lost.sum())} in {n_gaps} gaps, longest gap {int(lost.max())} periods")
++        lines.append(f"clock restarts (daemon time went backwards): {int((dt < 0).sum())}")
++        if lost.sum() > 0 or (dt < 0).any():
++            ok = False
++    else:
++        lines.append("no daemon clock in this log (basic telemetry): lost rows cannot be detected")
++    lines.append(f"lines that could not be read during the connection: {malformed}")
++    if malformed > 0:
++        ok = False
++    rev = data[:, IDX["revolutions"]]; filt = data[:, IDX["filt_rpm"]]
++    good = np.isfinite(rev) & np.isfinite(filt)
++    if good.sum() > 100:
++        counted = float(rev[good][-1] - rev[good][0]); integral = float(np.sum(filt[good]) * SAMPLE_PERIOD_S / 60.0)
++        if integral > 1.0:
++            diff = 100.0 * (integral / max(counted, 1e-9) - 1.0) if counted > 0 else float("inf")
++            lines.append(f"revolutions: counted {counted:.0f}, integral of the speed {integral:.0f} ({diff:+.2f} %)")
++            if abs(diff) > 2.0:
++                ok = False
++                lines.append("WARNING: the revolution count does not agree with the speed (index pulses rejected or missed?)")
++    lines.append("INTEGRITY: OK" if ok else "INTEGRITY: CHECK THE ITEMS ABOVE")
++    return lines, ok
++
++def write_log_files(model: TelemetryTableModel, base: str, extra: Dict[str, str], malformed: int = 0) -> str:
+     """Write <base>.csv and <base>.mat into OUTPUT_DIR. The `extra` columns (impeller, matching file) are appended to every CSV row.
+     Returns the CSV file name. Raises on any problem (the caller reports it)."""
+     if not model.dataset:
+@@ -371,6 +416,10 @@ def write_log_files(model: TelemetryTableModel, base: str, extra: Dict[str, str]
+     mat: Dict[str, Any] = {spec.mat_name: data[:, i] for i, spec in enumerate(COLUMNS)}
+     mat["Impeller"] = extra.get("impeller", "")
+     sio.savemat(os.path.join(OUTPUT_DIR, base + ".mat"), mat)
++    report, ok = integrity_report(data, malformed)
++    with open(os.path.join(OUTPUT_DIR, base + "_integrity.txt"), "w", encoding="utf-8") as f:
++        f.write("\n".join(report) + "\n")
++    (logger.info if ok else logger.warning)("integrity of %s: %s", base, report[-1])
+     return csv_name
+ 
+ 
+@@ -398,6 +447,7 @@ class Packet(NamedTuple):
+     current_ma: float
+     elec_w: float
+     torque_nm: float
++    daemon_t: float = float("nan")      # the daemon's own clock (seconds since it started), field 6 of the extended line
+ 
+     @property
+     def is_lock_marker(self) -> bool:
+@@ -415,9 +465,10 @@ def parse_packet(line: str) -> Optional[Packet]:
+         pwm, target = (float(fields[3]), float(fields[4])) if len(fields) >= 6 else (NAN, NAN)
+         volts, milliamps, watts = (float(v) for v in fields[6:9]) if len(fields) in (9, 10) else (NAN, NAN, NAN)
+         torque = float(fields[-1]) if len(fields) in (7, 10) else NAN
++        daemon_t = float(fields[5]) if len(fields) >= 6 else NAN
+     except ValueError:
+         return None
+-    return Packet(raw, filt, revs, pwm, target, volts, milliamps, watts, torque)
++    return Packet(raw, filt, revs, pwm, target, volts, milliamps, watts, torque, daemon_t)
+ 
+ 
+ class LinkLost(Exception):
+@@ -463,6 +514,7 @@ class TelemetryReceiver(QThread):
+         self._running = True
+         self._sock: Optional[socket.socket] = None
+         self._reset_flag = False
++        self.malformed_lines = 0            # telemetry lines that could not be parsed (since the last connection)
+         # Pending outbound commands. Only the newest TARGET (RPM) is kept; config commands (CPR/WIN) are never replaced by a later target.
+         self._cmd_lock = threading.Lock()
+         self._cmd_pending: Dict[str, str] = {}
+@@ -528,6 +580,7 @@ class TelemetryReceiver(QThread):
+         """One connection from connect() to disconnect."""
+         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+             self._sock = sock
++            self.malformed_lines = 0
+             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+             sock.settimeout(3.0)
+             sock.connect((self.config.host, self.config.port))
+@@ -595,6 +648,7 @@ class TelemetryReceiver(QThread):
+             return
+         packet = parse_packet(line)
+         if packet is None:
++            self.malformed_lines += 1                           # counted, and reported with every export (it used to vanish silently)
+             return
+         if packet.is_lock_marker:
+             if st.link is not LinkState.MODE3:
+@@ -1777,6 +1831,7 @@ class ThesisDashboard(QMainWindow):
+         if self.network_thread.isRunning():
+             self.network_thread.reset_time()
+         self.table_model.clear_data()
++        self._prev_daemon_t = NAN
+         self.npo_store.clear()
+         self.npo_valid = 0
+         self.npo_skipped_torque = 0
+@@ -1795,8 +1850,13 @@ class ThesisDashboard(QMainWindow):
+     def _make_sample(self, t: float, p: Packet, diameter_m: float) -> Sample:
+         torque = p.torque_nm                                     # NaN without a torque sensor: power and N_Po then stay 0, the torque column shows "-"
+         power_w, n_re, n_po = calculate_metrics(p.filt_rpm, torque if torque == torque else 0.0, FLUID_DENSITY, FLUID_VISCOSITY, diameter_m)
++        prev = getattr(self, "_prev_daemon_t", NAN)
++        lost = 0.0
++        if p.daemon_t == p.daemon_t and prev == prev and p.daemon_t > prev:
++            lost = float(max(0, round((p.daemon_t - prev) / SAMPLE_PERIOD_S) - 1))     # periods without a row between this one and the last
++        self._prev_daemon_t = p.daemon_t
+         return Sample(t, p.raw_rpm, p.filt_rpm, p.revolutions, torque, power_w, n_re, n_po,
+-                      p.pwm_pct, p.target_rpm, p.bus_v, p.current_ma, p.elec_w)
++                      p.pwm_pct, p.target_rpm, p.bus_v, p.current_ma, p.elec_w, p.daemon_t, lost)
+ 
+     def _drain_and_update_ui(self) -> None:
+         items = []
+@@ -1948,7 +2008,7 @@ class ThesisDashboard(QMainWindow):
+         label = self.current_impeller().label
+         base = run_basename(label, stamp or timestamp_now(), kind)
+         try:
+-            return write_log_files(self.table_model, base, extra if extra is not None else {"impeller": label})
++            return write_log_files(self.table_model, base, extra if extra is not None else {"impeller": label}, self.network_thread.malformed_lines)
+         except Exception as exc:                                 # noqa: BLE001
+             logger.error("silent export failed: %s", exc)
+             return None
+@@ -1964,7 +2024,7 @@ class ThesisDashboard(QMainWindow):
+         kind = f"log_{tag}" if tag.strip() else "log"
+         base = run_basename(label, timestamp_now(), kind)
+         try:
+-            csv_name = write_log_files(self.table_model, base, {"impeller": label})
++            csv_name = write_log_files(self.table_model, base, {"impeller": label}, self.network_thread.malformed_lines)
+             QMessageBox.information(self, "Export Complete", f"Data successfully saved to:\n• {csv_name}\n• {base}.mat\n(in {OUTPUT_DIR})")
+         except Exception as exc:                                 # noqa: BLE001
+             QMessageBox.critical(self, "Export Error", f"Failed to save files.\n{exc}")
