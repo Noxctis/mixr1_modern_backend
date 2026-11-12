@@ -17,7 +17,12 @@
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
+#ifdef __linux__
+#include <pthread.h>
+#include <sched.h>
+#endif
 #include <pigpiod_if2.h>
 #include "io_trace.hpp"
 
@@ -32,42 +37,40 @@ public:
 
     bool active() const { return active_; }
 
-    void start(int pi, const std::vector<unsigned>& pins, size_t max_events) {
+    // Streams every edge to <path> while the run goes on (a background thread drains a ring buffer of max_events every 100 ms), so the trace can last
+    // as long as the run: nothing waits in memory until the end. Events are lost only if the disk stalls for longer than the ring holds.
+    void start(int pi, const std::vector<unsigned>& pins, size_t max_events, const std::string& path) {
         if (active_) return;
+        file_ = std::fopen(path.c_str(), "w");
+        if (!file_) return;
+        path_ = path;
+        std::fprintf(file_, "seq,host_s,tick_us,gpio,level\n");
         pi_ = pi; cap_ = max_events; events_.assign(cap_, Event{});
-        count_.store(0); overflow_.store(0);
+        count_.store(0); read_.store(0); overflow_.store(0);
         t0_ = TRACE_T0;                                         // same zero as io_trace.hpp
         for (unsigned p : pins) {
             const int id = callback_ex(pi_, p, EITHER_EDGE, &GpioTrace::isr, this);
             if (id >= 0) { cb_.push_back(id); pins_.push_back(p); }
         }
         active_ = !cb_.empty();
+        if (!active_) { std::fclose(file_); file_ = nullptr; return; }
+        done_.store(false);
+        writer_ = std::thread([this]() { drain_loop(); });
     }
 
     void stop() {
         if (!active_) return;
         for (int id : cb_) callback_cancel(static_cast<unsigned>(id));
         cb_.clear(); active_ = false;
+        done_.store(true);
+        if (writer_.joinable()) writer_.join();                  // the writer drains what is left before it returns
+        if (file_) { std::fclose(file_); file_ = nullptr; }
+        std::printf("[GPIO] trace: %zu events saved to %s (%llu lost: ring buffer overrun)\n", count_.load(), path_.c_str(), static_cast<unsigned long long>(overflow_.load()));
     }
 
-    // Writes <dir>/gpio_trace_<stamp>.csv (seq, host_s, tick_us, gpio, level) and a one-line-per-pin summary. Returns the CSV path ("" on failure).
-    std::string save(const std::string& dir, const std::string& stamp) {
-        stop();
-        const size_t n = count_.load(std::memory_order_acquire);
-        if (n == 0) return "";
-        std::error_code ec; std::filesystem::create_directories(dir, ec);
-        const std::string path = dir + "/gpio_trace_" + stamp + ".csv";
-        FILE* f = std::fopen(path.c_str(), "w");
-        if (!f) return "";
-        std::fprintf(f, "seq,host_s,tick_us,gpio,level\n");
-        for (size_t i = 0; i < n; ++i) {
-            const Event& e = events_[i];
-            std::fprintf(f, "%zu,%.6f,%u,%u,%u\n", i, static_cast<double>(e.host_ns) * 1e-9, e.tick, e.gpio, e.level);
-        }
-        const bool ok = std::fclose(f) == 0;
-        std::printf("[GPIO] trace: %zu events saved to %s (%llu lost: buffer full)\n", n, path.c_str(), static_cast<unsigned long long>(overflow_.load()));
-        return ok ? path : "";
-    }
+    // Ends the trace (the file is already on disk). Arguments kept for the old call; returns the CSV path.
+    std::string save(const std::string&, const std::string&) { stop(); return path_; }
+    const std::string& path() const { return path_; }
 
     size_t events() const { return count_.load(std::memory_order_relaxed); }
     unsigned long long overflow() const { return overflow_.load(std::memory_order_relaxed); }
@@ -79,14 +82,45 @@ private:
     }
     void push(unsigned gpio, unsigned level, uint32_t tick) {
         const size_t n = count_.load(std::memory_order_relaxed);       // single writer: the pigpio callback thread
-        if (n >= cap_) { overflow_.fetch_add(1, std::memory_order_relaxed); return; }
+        if (n - read_.load(std::memory_order_acquire) >= cap_) { overflow_.fetch_add(1, std::memory_order_relaxed); return; }   // the file writer is behind
         const auto dt = std::chrono::steady_clock::now() - t0_;
-        events_[n] = Event{static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(dt).count()), tick,
+        events_[n % cap_] = Event{static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(dt).count()), tick,
                            static_cast<uint8_t>(gpio), static_cast<uint8_t>(level)};
         count_.store(n + 1, std::memory_order_release);
     }
 
+    void drain_loop() {
+#ifdef __linux__
+        cpu_set_t others; CPU_ZERO(&others);                       // off the control core, normal scheduling
+        for (int c = 0; c < 3; ++c) CPU_SET(c, &others);
+        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &others);
+        sched_param normal{}; normal.sched_priority = 0;
+        pthread_setschedparam(pthread_self(), SCHED_OTHER, &normal);
+#endif
+        std::string buf;
+        while (true) {
+            const bool last = done_.load();                         // read the flag BEFORE the count: everything pushed before stop() is then drained
+            const size_t c = count_.load(std::memory_order_acquire);
+            size_t r = read_.load(std::memory_order_relaxed);
+            buf.clear(); char line[80];
+            for (size_t i = r; i < c; ++i) {
+                const Event& e = events_[i % cap_];
+                const int len = std::snprintf(line, sizeof line, "%zu,%.6f,%u,%u,%u\n", i, static_cast<double>(e.host_ns) * 1e-9, e.tick, e.gpio, e.level);
+                if (len > 0) buf.append(line, static_cast<size_t>(len));
+            }
+            if (!buf.empty() && file_) { std::fwrite(buf.data(), 1, buf.size(), file_); std::fflush(file_); }
+            read_.store(c, std::memory_order_release);
+            if (last) return;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+
     int pi_ = -1;
+    std::FILE* file_ = nullptr;
+    std::string path_;
+    std::thread writer_;
+    std::atomic<bool> done_{false};
+    std::atomic<size_t> read_{0};
     bool active_ = false;
     size_t cap_ = 0;
     std::vector<Event> events_;
