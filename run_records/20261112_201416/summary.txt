@@ -1,0 +1,15 @@
+=== LATENCY AND INTEGRITY SUMMARY (measured by the daemon during this run) ===
+duration 382.1 s, control loops 38052, nominal period 10.0 ms
+control loop period : median 10.00 ms, p99 10.05 ms, max 37.58 ms, mean 10.000 ms
+wake-up lateness    : median 20 us, p99 40 us, max 27598 us (OS scheduling latency of the control thread)
+processing per loop : median 20 us, p99 1430 us, max 6822 us (wake-up until the loop's PI / PWM step is done)
+loops late          : 4 longer than 1.5x the period, 3 longer than 2x, estimated lost loops 8 (0.021 %)
+torque amplifier (RS485 Modbus): 7462 requests, 4 failed (0.05 %), 19.5 good readings/s against 20.0 expected
+    age of the value used by the loop: median 23.0 ms, p99 826.0 ms, max 1584.2 ms; longest time between good readings 1591.8 ms
+    loops with no torque value (NaN: no sensor or dropout): 0 of 38052
+power meter (I2C): 7610 requests, 0 failed (0.00 %)
+    age of the value used by the loop: median 19.0 ms, p99 39.0 ms, max 56.3 ms; longest time between good readings 60.0 ms
+dashboard socket: 32376 packets sent, 0 not sent (client absent, slow or disconnected)
+recorder cost to the control thread (one row): median 31 us, p99 53 us, max 92 us
+recorder: 38052 rows made, 38052 queued for the file, none lost
+Hardware level (encoder edges, driver writes, torque request latency) is measured by --trace-gpio and --trace-io, not here.

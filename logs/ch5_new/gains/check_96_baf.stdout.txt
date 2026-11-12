@@ -1,0 +1,21 @@
+[RECORD] Saving this run to run_records/20261112_210347/
+[CONFIG] Set ENCODER_CPR to 1024
+[CONFIG] 2nd step: -> 300 RPM at t=30 s
+[TEST] Wattmeter (INA219) found at 0x45 on /dev/i2c-1: logging bus_v, current_ma, power_w
+[TEST] shaft at rest (waited 1.00046 s)
+[TEST] t0_unix=1794488628.807931 cpr=1024 loop_us=10000 duration_s=45 mode=PI estimator=aligned
+[TEST] index log: 275 pulses -> logs/ch5_new/gains/check_96_baf_index.csv
+[TEST] edge_total=281535 quad_errors=0 index_rejected=0 index_missed=0 revs=275
+[TEST] fifo=active pi=on samples=4499 period_mean_us=10000 period_std_us=20.2744 max_late_us=333.092 late_cycles=4499 mean_rpm=366.57 mean_abs_error_rpm=4.201
+[TEST] CSV saved to logs/ch5_new/gains/check_96_baf.csv
+[RESULT] kp=0.985 ki=25.920 alpha=0.150 target=300.000 rpm_mean=300.046 rpm_std=3.704 sse=-0.046 pwm_mean_pct=13.964 pwm_std_pct=0.101 pwm_jitter_pct=0.020 overshoot_pct=76.316 settle5_s=0.290 rise10_90_s=0.050 settle2_s=14.960 power_status=ok power_reads_ok=900 power_reads_fail=0 v_mean_V=24.1136 i_mean_mA=66.1933 i_std_mA=1.6601 p_mean_W=1.5962 p_idle_W=0.3877 torque_status=disabled aborted=0
+=== LATENCY AND INTEGRITY SUMMARY (measured by the daemon during this run) ===
+duration 46.4 s, control loops 0, nominal period 10.0 ms
+torque amplifier (RS485 Modbus): no request made in this run
+    loops with no torque value (NaN: no sensor or dropout): 0 of 0
+power meter (I2C): no request made in this run
+dashboard socket: 0 packets sent, 0 not sent (client absent, slow or disconnected)
+recorder cost to the control thread (one row): median nan us, p99 nan us, max 0 us
+recorder: 0 rows made, 0 queued for the file, none lost
+Hardware level (encoder edges, driver writes, torque request latency) is measured by --trace-gpio and --trace-io, not here.
+[RECORD] Run saved to run_records/20261112_210347/ (manifest.txt, daemon.log, telemetry.csv, summary.txt)
