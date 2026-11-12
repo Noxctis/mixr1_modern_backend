@@ -1,0 +1,15 @@
+\begin{table}[htbp]
+    \centering
+    \caption{Closed-loop step response: rise time, overshoot, settling time and steady-state error (filtered speed; final value from the last 30 % of each segment).}
+    \label{tab:step-response}
+    \small
+    \begin{tabular}{@{}rrrrrrr@{}}
+        \toprule
+        Run & From (rpm) & Setpoint (rpm) & Rise 10--90 (s) & Overshoot (\%) & Settling 5\% (s) & Steady-state error (\%) \\
+        \midrule
+        check_96_baf.csv & 0 & 300 & 0.42 & 1.5 & 0.72 & 0.01 \\
+        check_96_baf.csv & 300 & 500 & 0.52 & 2.9 & 0.73 & 0.02 \\
+        check_96_baf.csv & 500 & 300 & 0.49 & 1.4 & 0.82 & 0.02 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
