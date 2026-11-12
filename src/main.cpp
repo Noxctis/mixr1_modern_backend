@@ -25,6 +25,7 @@
 
 #include "config.hpp"
 #include "gpio_trace.hpp"
+#include "run_recorder.hpp"
 #include "process_monitor.hpp"
 #include "kinematics.hpp"
 #include "pi_controller.hpp"
@@ -1302,10 +1303,13 @@ int main(int argc, char** argv) {
     bool debug_motor = false;                       // --debug-motor: print the PWM the daemon commands (about once per second)
     double dbg_loop_max_ms = 0.0, dbg_lcd_max_ms = 0.0;   // --debug-motor timing probes (loop period, OLED redraw time)
     bool no_lcd = false;                            // --no-lcd: do not touch the I2C display at all (isolates a hung I2C bus / display)
-    bool trace_gpio = false, trace_all = false;     // --trace-gpio[=all]: log every edge of the rig's GPIO pins (include/gpio_trace.hpp) for integrity and latency
+    bool trace_gpio = true, trace_all = false;      // ON by default: every edge of the rig's GPIO pins is streamed to the run record (include/gpio_trace.hpp). --no-trace-gpio turns it off, --trace-gpio=all adds the PWM pins
     double trace_seconds = 0.0;                     // --trace-seconds=S: stop tracing after S seconds (0 = until the daemon ends)
-    bool trace_io = false;                          // --trace-io: log every motor-driver write and torque-amplifier read (include/io_trace.hpp)
-    size_t trace_max = 4000000;                     // --trace-max=N: events kept (16 bytes each); A and B give about 17000 per second at 500 rpm
+    bool trace_io = true;                           // ON by default: every motor-driver write and torque-amplifier read (include/io_trace.hpp). --no-trace-io turns it off; --no-trace turns both off
+    size_t trace_max = 1048576;                     // --trace-max=N: size of the ring buffer between the pigpio callbacks and the file writer (16 bytes each, drained every 100 ms)
+    bool no_record = false;                         // --no-record: do not save the run record (run_records/<date>_<time>/, include/run_recorder.hpp)
+    std::string run_label, run_note;                // --run-label=TEXT (folder name), --note=TEXT (manifest)
+    double water_temp_c = std::numeric_limits<double>::quiet_NaN();   // --water-temp=C (manifest)
     int lcd_bus_forced = -1;                        // --lcd-bus=N: use /dev/i2c-N for the display (default: auto-detect)
     bool use_power = true;                          // --no-power: do not touch the wattmeter in normal mode
     int power_addr = Config::I2C_POWER_ADDR;        // --power-addr=0x45
@@ -1354,11 +1358,20 @@ int main(int argc, char** argv) {
         if (a.rfind("--trace-max=", 0) == 0) trace_max = std::stoul(a.substr(12));
         if (a.rfind("--trace-seconds=", 0) == 0) trace_seconds = std::stod(a.substr(16));
         if (a == "--trace-io") trace_io = true;
+        if (a == "--no-trace-gpio") trace_gpio = false;
+        if (a == "--no-trace-io") trace_io = false;
+        if (a == "--no-trace") trace_gpio = trace_io = false;
+        if (a == "--no-record") no_record = true;
+        if (a.rfind("--run-label=", 0) == 0) run_label = a.substr(12);
+        if (a.rfind("--note=", 0) == 0) run_note = a.substr(7);
+        if (a.rfind("--water-temp=", 0) == 0) water_temp_c = std::stod(a.substr(13));
     }
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--test-wattmeter") return run_wattmeter_test(argc, argv);
         if (std::string(argv[i]) == "--test-torque") return run_torque_test(argc, argv);
     }
+    RunRecorder recorder;                                           // complete record of this run: manifest, daemon.log, telemetry.csv (include/run_recorder.hpp)
+    if (!no_record && recorder.start("run_records", run_label, argc, argv)) std::cout << "[RECORD] Saving this run to " << recorder.dir() << "/\n";
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg.rfind("--cpr=", 0) == 0) {
@@ -1469,17 +1482,38 @@ int main(int argc, char** argv) {
     PushButton start_key(pi, Config::PIN_START_KEY);               // module KO key: toggles RUN / STOP in standalone mode
     // ---- GPIO trace (--trace-gpio): every edge of the encoder, knob, start key and driver enable / direction pins, for integrity and latency ----
     GpioTrace gpio_trace;
+    const std::string trace_dir = recorder.active() ? recorder.dir() : std::string("gpio_traces");   // the traces go into the run record folder
+    { std::error_code trace_ec; std::filesystem::create_directories(trace_dir, trace_ec); }
     const auto trace_start = std::chrono::steady_clock::now();
     if (trace_gpio) {
         std::vector<unsigned> trace_pins = {Config::PIN_ENC_A, Config::PIN_ENC_B, Config::PIN_ENC_X, Config::PIN_EC11_A, Config::PIN_EC11_B,
                                             Config::PIN_EC11_SW, Config::PIN_START_KEY, Config::PIN_M1_EN, Config::PIN_M1_INA, Config::PIN_M1_INB};
         if (trace_all) for (unsigned pin : {Config::PIN_M1_PWM, Config::PIN_FLUID_PUMP_EN, Config::PIN_FLUID_SOL_INA, Config::PIN_FLUID_SOL_INB, Config::PIN_FLUID_SOL_PWM})
             trace_pins.push_back(pin);       // the 20 kHz PWM pin gives 40000 events per second: use for short traces only
-        gpio_trace.start(pi, trace_pins, trace_max);
+        gpio_trace.start(pi, trace_pins, trace_max, trace_dir + "/gpio_trace_" + gpio_trace_stamp() + ".csv");   // streamed to disk while the run goes on
         std::cout << "[GPIO] Tracing " << trace_pins.size() << " pins (up to " << trace_max << " events"
                   << (trace_seconds > 0.0 ? ", " + std::to_string(static_cast<int>(trace_seconds)) + " s" : std::string(", until the daemon ends")) << ").\n";
     }
-    if (trace_io) { io_trace.enable(500000); std::cout << "[IO] Tracing the motor-driver writes and the torque reads.\n"; }
+    if (trace_io) { io_trace.enable(3000000); std::cout << "[IO] Tracing the motor-driver writes and the torque reads.\n"; }
+    if (recorder.active()) {                                        // the configuration in force at the start (Kp, Ki and alpha also travel with every row)
+        recorder.kv("kp", Config::GLOBAL_KP); recorder.kv("ki", Config::GLOBAL_KI); recorder.kv("feedback_alpha", Config::FEEDBACK_ALPHA);
+        recorder.kv("estimator", Config::ESTIMATOR_DCT ? "dct" : (Config::ESTIMATOR_NEWEST ? "cet_newest" : "cet_aligned"));
+        recorder.kv("encoder_cpr", Config::ENCODER_CPR); recorder.kv("encoder_direction", Config::ENCODER_DIRECTION);
+        recorder.kv("rpm_sample_window_us", Config::RPM_SAMPLE_WINDOW_US); recorder.kv("rpm_alpha_display", Config::RPM_ALPHA);
+        recorder.kv("loop_delay_us", Config::LOOP_DELAY_US); recorder.kv("pwm_frequency_hz", Config::PWM_FREQUENCY);
+        recorder.kv("power_limit_w", Config::POWER_LIMIT_W); recorder.kv("power_limit_aim", Config::POWER_LIMIT_AIM);
+        recorder.kv("power_trip_readings", Config::POWER_TRIP_READINGS); recorder.kv("pwm_slew_pct_s", Config::PWM_SLEW_PCT_S);
+        recorder.kv("stall_pwm_pct", Config::STALL_PWM_PCT); recorder.kv("stall_rpm", Config::STALL_RPM); recorder.kv("stall_time_s", Config::STALL_TIME_S);
+        recorder.kv("heartbeat_timeout_ms", Config::HEARTBEAT_TIMEOUT_MS); recorder.kv("tcp_port", Config::TCP_PORT);
+        for (size_t i = 0; i < Config::IMPELLERS.size(); ++i)
+            recorder.kv("impeller_" + std::to_string(i), std::string(Config::IMPELLERS[i].label) + ", knob limit " + std::to_string(static_cast<int>(Config::IMPELLERS[i].max_rpm)) + " rpm");
+        recorder.kv("torque_port", torque_cfg.port); recorder.kv("torque_baud", torque_cfg.baud); recorder.kv("torque_slave", torque_cfg.slave_id);
+        recorder.kv("torque_reg", torque_cfg.reg_addr); recorder.kv("torque_regcount", torque_cfg.reg_count); recorder.kv("torque_format", torque_cfg.value_format);
+        recorder.kv("torque_word_order", torque_cfg.word_order); recorder.kv("torque_scale", torque_cfg.scale); recorder.kv("torque_stop_bits", torque_cfg.stop_bits);
+        recorder.kv("trace_gpio", trace_gpio ? "on" : "off"); recorder.kv("trace_io", trace_io ? "on" : "off"); recorder.kv("debug_motor", debug_motor ? "on" : "off");
+        if (!run_note.empty()) recorder.kv("note", run_note);
+        if (std::isfinite(water_temp_c)) recorder.kv("water_temp_c", water_temp_c); else recorder.kv("water_temp_c", "not given (use --water-temp=C)");
+    }
     PIController pi_control;
 
     // Wattmeter (INA219 on its own I2C bus): read at 20 Hz and forwarded to the dashboard. A missing meter is not an error: the dashboard just gets NaN.
@@ -1540,7 +1574,8 @@ int main(int argc, char** argv) {
                     int got = 0;
                     for (int i = 0; i < n && !cancelled(); ++i) {
                         double v = 0.0;
-                        if (tsensor->read(v)) { sum += v; ++got; last_raw = v; torque_value.store(v - offset); }
+                        const bool v_ok = tsensor->read(v); recorder.note_torque(v_ok);
+                        if (v_ok) { sum += v; ++got; last_raw = v; torque_value.store(v - offset); }
                         std::this_thread::sleep_for(std::chrono::milliseconds(torque_period_ms));
                     }
                     if (got == 0) return false;
@@ -1619,7 +1654,9 @@ int main(int argc, char** argv) {
                     next += std::chrono::milliseconds(torque_period_ms);
                     std::this_thread::sleep_until(next);
                     double tq = 0.0;
-                    if (tsensor->read(tq)) {
+                    const bool tq_ok = tsensor->read(tq);           // latency / integrity counters of the run record
+                    recorder.note_torque(tq_ok);
+                    if (tq_ok) {
                         fails = 0;
                         last_raw = tq;
                         torque_value.store(tq - offset);
@@ -1634,6 +1671,7 @@ int main(int argc, char** argv) {
             tsensor.reset();
         }
     }
+    recorder.set_nominal(Config::LOOP_DELAY_US / 1000.0, torque_period_ms);
     PowerSample power_sample;                       // NaN until the first good reading
     int power_loop_counter = 0;
     int power_fail_streak = 0;
@@ -1946,7 +1984,7 @@ int main(int argc, char** argv) {
         }
 
         if (gpio_trace.active() && trace_seconds > 0.0 && std::chrono::duration<double>(std::chrono::steady_clock::now() - trace_start).count() >= trace_seconds)
-            gpio_trace.save("gpio_traces", gpio_trace_stamp());      // time is up: write the trace and stop tracing
+            gpio_trace.save(trace_dir, gpio_trace_stamp());      // time is up: write the trace and stop tracing
         const bool update_lcd = (++lcd_prescaler >= Config::LCD_PRESCALER);
         if (update_lcd) lcd_prescaler = 0;
 
@@ -2177,7 +2215,9 @@ int main(int argc, char** argv) {
         if (meter && ++power_loop_counter >= Config::POWER_READ_DIV) {
             power_loop_counter = 0;
             double v = 0.0, ma = 0.0;
-            if (meter->read(v, ma)) {
+            const bool pw_ok = meter->read(v, ma);
+            recorder.note_power(pw_ok);
+            if (pw_ok) {
                 power_sample.bus_v = v; power_sample.current_ma = ma; power_sample.power_w = v * ma / 1000.0;
                 power_fail_streak = 0;
                 limiter.update(power_sample.power_w, current_pwm);
@@ -2223,6 +2263,13 @@ int main(int argc, char** argv) {
             }
         }
 
+        if (recorder.active())                                      // one row per loop in every mode, written by a background thread
+            recorder.row(dt.count() * 1000.0, std::chrono::duration<double, std::micro>(current_time - next_wake).count(),
+                         std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - current_time).count(), dashboard_active ? (open_loop ? 3 : 2) : (standalone_running ? 1 : 0), impeller_selected ? impeller_idx : -1,
+                         active_target, state.exact_rpm, state.ema_filtered_rpm, pi_control.feedback_rpm(state.exact_rpm),
+                         revs_since(encoder, rev_origin), current_pwm, torque_value.load(), power_sample.bus_v, power_sample.current_ma, power_sample.power_w,
+                         Config::GLOBAL_KP, Config::GLOBAL_KI, Config::FEEDBACK_ALPHA, limiter.limiting(), tare_phase, dashboard_active);
+
         if (dashboard_active) {
             bool sent;
             if (network->wants_ext()) {
@@ -2234,6 +2281,7 @@ int main(int argc, char** argv) {
             } else {
                 sent = network->send_packet(state.exact_rpm, state.ema_filtered_rpm, revs_since(encoder, rev_origin));
             }
+            recorder.note_dash(sent);
             (void)sent;      // a dead / stalled dashboard is dropped (and reported once) inside TelemetryServer; no per-loop message
         }
 
@@ -2311,9 +2359,10 @@ int main(int argc, char** argv) {
     if (torque_thread.joinable()) torque_thread.join();
     network->stop_server();
 
-    if (gpio_trace.active()) gpio_trace.save("gpio_traces", gpio_trace_stamp());
-    if (io_trace.on()) io_trace.save("gpio_traces", gpio_trace_stamp());
+    if (gpio_trace.active()) gpio_trace.save(trace_dir, gpio_trace_stamp());
+    if (io_trace.on()) io_trace.save(trace_dir, gpio_trace_stamp());
     pigpio_stop(pi);
     std::cout << "\n[MIXR-1] Daemon safely offline.\n";
+    recorder.stop();
     return 0;
 }
