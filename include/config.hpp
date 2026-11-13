@@ -13,12 +13,12 @@ namespace Config {
     };
 
     // --- Kinematics & DSP ---
-    inline double ENCODER_CPR = 1024.0;               
+    inline double ENCODER_CPR = 1024.0;
     constexpr double RPM_ALPHA = 0.15;
-    constexpr size_t SMA_WINDOW_SIZE = 8;                
+    constexpr size_t SMA_WINDOW_SIZE = 8;
     constexpr int DEADBAND_TICK_THRESHOLD = 2;
     inline bool ESTIMATOR_DCT = false;                // --estimator=dct : the earlier discrete-time method (window = RPM_SAMPLE_WINDOW_US, set with --window=)
-    inline bool ESTIMATOR_NEWEST = false;             // --estimator=newest : synchronous CET of the paper (newest edge, same-type start); default: aligned snapshots           
+    inline bool ESTIMATOR_NEWEST = false;             // --estimator=newest : synchronous CET of the paper (newest edge, same-type start); default: aligned snapshots
 
 // --- GLOBAL PI GAINS (1.0 rad/s Bandwidth) ---
     // inline (not constexpr) so they can be changed live (CMD:KP / CMD:KI) or via --kp= / --ki=.
@@ -33,24 +33,25 @@ namespace Config {
 
     // --- Execution Pacing Matrix ---
     inline int RPM_SAMPLE_WINDOW_US = 20000;
-    
-    constexpr int LOOP_DELAY_US = 10000; 
+
+    constexpr int LOOP_DELAY_US = 10000;
     constexpr int NETWORK_PRESCALER = 1;
     constexpr int LCD_PRESCALER = 10;   // 25 x 10ms = 250ms refresh
     // MATLAB / Simulink detection (process_monitor.hpp): any <model>.elf the Simulink Pi package runs. Take-over within one scan,
     // hand-back only after the model has been gone this long (a Monitor & Tune restart does not bounce control back and forth).
     constexpr int MATLAB_SCAN_PERIOD_MS = 200;
     constexpr int MATLAB_RELEASE_DEBOUNCE_MS = 1000;
-    constexpr int TCP_PORT = 5000;                       
+    constexpr int TCP_PORT = 5000;
 
     // --- Hardware Pinout (BCM GPIO) ---
-    constexpr unsigned int PIN_ENC_A = 24;               
-    constexpr unsigned int PIN_ENC_B = 23;               
-    constexpr unsigned int PIN_ENC_X = 22;               
-    constexpr int ENCODER_DIRECTION = 1;                
-    constexpr unsigned int PIN_M1_EN = 18;               
-    constexpr unsigned int PIN_M1_INA = 17;              
-    constexpr unsigned int PIN_M1_INB = 27;              
+    constexpr unsigned int PIN_ENC_A = 24;
+    constexpr unsigned int PIN_ENC_B = 23;
+    constexpr unsigned int PIN_ENC_X = 22;
+    constexpr int ENCODER_DIRECTION = 1;
+    constexpr double TORQUE_SCALE = -0.001;              // N.m per count of the torque amplifier; negative because the impeller turns counter-clockwise (the reaction torque reverses)
+    constexpr unsigned int PIN_M1_EN = 18;
+    constexpr unsigned int PIN_M1_INA = 17;
+    constexpr unsigned int PIN_M1_INB = 27;
     constexpr unsigned int PIN_M1_PWM = 13;
     // --- Fluid controller outputs (Simulink act_wrapper.c). The pump SHARES GPIO 13 / 17 / 27 with the mixer above. ---
     // The daemon never drives these; it only parks them OFF whenever it owns the rig (start-up and every hand-back from MATLAB),
@@ -68,9 +69,9 @@ namespace Config {
     constexpr int I2C_POWER_ADDR   = 0x45;               // wattmeter (DFRobot SEN0291 / INA219) address
     constexpr int POWER_READ_DIV   = 5;                  // daemon reads the wattmeter every N-th loop (5 -> 20 Hz): keeps the 100 Hz loop undisturbed
     constexpr int I2C_LCD_ADDR = 0x27;
-    constexpr int I2C_OLED_ADDR = 0x3C;                  
+    constexpr int I2C_OLED_ADDR = 0x3C;
     constexpr DisplayType DISPLAY_TYPE = DisplayType::ST7789_320x240;
-    constexpr int PWM_FREQUENCY = 20000;                 
+    constexpr int PWM_FREQUENCY = 20000;
 
     // --- EC11 (DFRobot Breakout) ---
     // Avoided: 5, 6, 13, 22, 23, 24 (already reserved)
@@ -90,18 +91,18 @@ namespace Config {
     constexpr bool STANDALONE_RUN_AT_BOOT = false;        // false = Mode 1 starts STOPPED: turning the knob only sets the target, the KO key starts / stops the motor
 
     // --- Power safety cap (power_limiter.hpp) ---
-    // The motor runs at most at POWER_LIMIT_W x POWER_LIMIT_AIM (72 W) and never goes above POWER_LIMIT_W (80 W): above the aim the PWM
+    // The motor is regulated at POWER_LIMIT_W x POWER_LIMIT_AIM (81 W) and never goes above POWER_LIMIT_W (90 W): above the aim the PWM
     // ceiling is cut back automatically (Mode 1, Mode 2 and --test). Measured with the wattmeter (electrical input power); without a
     // wattmeter, torque x speed is used instead.
     constexpr double POWER_LIMIT_W = 90.0;               // hard ceiling: the power must never go above this
-    constexpr double POWER_LIMIT_AIM = 0.90;             // the limiter regulates at 90 % of it = 80 W. The 10 W gap is room for the ~30 ms
-                                                         // the wattmeter needs per reading, so short peaks (start-up, load changes) stay under 80 W
+    constexpr double POWER_LIMIT_AIM = 0.90;             // the limiter regulates at 90 % of it = 81 W. The 9 W gap is room for the ~30 ms
+                                                         // the wattmeter needs per reading, so short peaks (start-up, load changes) stay under 90 W
     constexpr double POWER_LIMIT_RECOVER_PCT_S = 10.0;   // ceiling released again by 10 % of full PWM per second once 5 % below the aim
     constexpr double POWER_TRIP_FACTOR = 1.0;            // above 100 % of the limit (90 W) ...
     constexpr int    POWER_TRIP_READINGS = 3;            // ... for 3 readings in a row (~0.1 s) -> motor OFF until the operator stops it
     constexpr double PWM_SLEW_PCT_S = 200.0;             // Mode 1 / 2: PWM may rise at most 200 % per second (0 -> 100 % in 0.5 s), so the
                                                          // power can never jump faster than the wattmeter (~30 readings/s) can see it
-    // Stall trip: with the power capped, a jammed impeller would sit at the cap (72 W) forever. PWM above STALL_PWM_PCT while the shaft
+    // Stall trip: with the power capped, a jammed impeller would sit at the cap forever. PWM above STALL_PWM_PCT while the shaft
     // turns slower than STALL_RPM for STALL_TIME_S -> motor OFF until the operator stops it (Mode 1, Mode 2 and --test).
     constexpr double STALL_PWM_PCT = 25.0;
     constexpr double STALL_RPM = 20.0;
@@ -173,6 +174,6 @@ namespace Config {
     // (relative to the folder the daemon is started from). Same 13 columns and variable names as the dashboard's export.
     constexpr bool MODE1_LOG_ENABLED = true;
     constexpr const char* MODE1_LOG_DIR = "mode1_logs";
-    constexpr double FLUID_DENSITY = 996.3;              // kg/m3, test water (same as the dashboard)
-    constexpr double FLUID_VISCOSITY = 8.54e-4;          // Pa.s
+    constexpr double FLUID_DENSITY = 997.3;              // kg/m3, test water at 24 C (same as the dashboard)
+    constexpr double FLUID_VISCOSITY = 9.11e-4;          // Pa.s, water at 24 C
 }

@@ -63,6 +63,7 @@ static long long revs_since(const AMT102Encoder& enc, long long origin) { return
 // thread polls the same port. It never aborts the run: on a failure it prints a loud warning and carries on (the offset stays in the data).
 template <class Sensor>
 static bool zero_torque_at_rest(Sensor& sensor, AMT102Encoder& encoder, int settle_ms, double scale, const char* tag) {
+    scale = std::fabs(scale);                     // the scale may be negative (sign of the torque); the bands below need its size
     const auto t0 = std::chrono::steady_clock::now();
     long long last_count = encoder.get_sync_snapshot().count;
     auto still_since = t0;
@@ -203,7 +204,7 @@ struct TestOptions {
     unsigned torque_reg_count = 2;         // 1 for int16/uint16, 2 for int32/uint32/float32
     std::string torque_format = "int32";   // int16 | uint16 | int32 | uint32 | float32
     std::string torque_word_order = "big";
-    double torque_scale = 0.001;
+    double torque_scale = Config::TORQUE_SCALE;      // sign and size: see config.hpp
     double torque_offset = 0.0;
     int torque_div = 5;                    // read the sensor every N-th loop (same idea as --power-div)
     bool tare = true;                      // zero the torque amplifier at no load before the run (--no-tare to skip)
@@ -1328,7 +1329,7 @@ int main(int argc, char** argv) {
     bool use_torque = true;
     TorqueSensor::Settings torque_cfg;
     torque_cfg.port = "/dev/ttyUSB0"; torque_cfg.baud = 9600; torque_cfg.slave_id = 1; torque_cfg.reg_addr = 0; torque_cfg.reg_count = 2;
-    torque_cfg.value_format = "int32"; torque_cfg.word_order = "big"; torque_cfg.scale = 0.001; torque_cfg.offset = 0.0; torque_cfg.stop_bits = 1;
+    torque_cfg.value_format = "int32"; torque_cfg.word_order = "big"; torque_cfg.scale = Config::TORQUE_SCALE; torque_cfg.offset = 0.0; torque_cfg.stop_bits = 1;
     bool do_tare = true;                            // --no-tare: do not zero the torque amplifier at start-up
     int tare_settle_ms = 1500;                      // --tare-settle-ms=N: wait after the zero command (amplifier digital filter)
     int torque_period_ms = 50;                      // --torque-period-ms=N: background poll period (50 -> 20 Hz)
@@ -1605,7 +1606,7 @@ int main(int argc, char** argv) {
                         const auto t_cmd = std::chrono::steady_clock::now();
                         const auto t_min = t_cmd + std::chrono::milliseconds(Config::TORQUE_TARE_MIN_SETTLE_MS);
                         const auto t_end = t_cmd + std::chrono::milliseconds(std::max(tare_settle_ms, Config::TORQUE_TARE_MAX_SETTLE_MS));
-                        const double band = Config::TORQUE_TARE_STABLE_COUNTS * torque_cfg.scale;
+                        const double band = Config::TORQUE_TARE_STABLE_COUNTS * std::fabs(torque_cfg.scale);
                         std::deque<double> win;
                         bool settled = false;
                         while (!cancelled() && std::chrono::steady_clock::now() < t_end) {
@@ -1620,14 +1621,14 @@ int main(int argc, char** argv) {
                                     const auto half = win.begin() + static_cast<long>(win.size() / 2);
                                     const double m1 = std::accumulate(win.begin(), half, 0.0) / static_cast<double>(win.size() / 2);
                                     const double m2 = std::accumulate(half, win.end(), 0.0) / static_cast<double>(win.size() - win.size() / 2);
-                                    const bool no_creep = std::fabs(m2 - m1) < Config::TORQUE_TARE_CREEP_COUNTS * torque_cfg.scale;
+                                    const bool no_creep = std::fabs(m2 - m1) < Config::TORQUE_TARE_CREEP_COUNTS * std::fabs(torque_cfg.scale);
                                     if (*mx - *mn <= band && no_creep) { settled = true; break; }
                                 }
                             }
                             std::this_thread::sleep_for(std::chrono::milliseconds(torque_period_ms));
                         }
                         if (!win.empty()) after = std::accumulate(win.begin(), win.end(), 0.0) / static_cast<double>(win.size());
-                        if (settled && std::isfinite(after) && std::fabs(after) < Config::TORQUE_ZERO_EXACT_COUNTS * torque_cfg.scale) {
+                        if (settled && std::isfinite(after) && std::fabs(after) < Config::TORQUE_ZERO_EXACT_COUNTS * std::fabs(torque_cfg.scale)) {
                             zeroed = true;                                  // the amplifier ITSELF settled at 0.000
                             break;
                         }
@@ -2105,7 +2106,7 @@ int main(int argc, char** argv) {
         if (kAutoTare && tsensor && zero_valid && tare_phase == 0 && !wants_motor && shaft_at_rest && rest_torque.size() >= 50
             && idle_rezeros < Config::TORQUE_IDLE_REZERO_MAX && current_time - last_zero_time > std::chrono::seconds(2)) {
             const double mean = std::accumulate(rest_torque.begin(), rest_torque.end(), 0.0) / static_cast<double>(rest_torque.size());
-            if (std::fabs(mean) > Config::TORQUE_ZERO_CHECK_COUNTS * torque_cfg.scale) {
+            if (std::fabs(mean) > Config::TORQUE_ZERO_CHECK_COUNTS * std::fabs(torque_cfg.scale)) {
                 ++idle_rezeros;
                 std::cout << std::fixed << std::setprecision(4) << "[TORQUE] Idle check: amplifier reads " << mean
                           << " N.m, not 0.000: sending the zero command again (" << idle_rezeros << "/" << Config::TORQUE_IDLE_REZERO_MAX << ").\n";
@@ -2116,7 +2117,7 @@ int main(int argc, char** argv) {
             }
         }
         if (kAutoTare && wants_motor && !prev_wants_motor && current_pwm == 0 && zero_valid && tsensor) {
-            const double tol = Config::TORQUE_ZERO_CHECK_COUNTS * torque_cfg.scale;
+            const double tol = Config::TORQUE_ZERO_CHECK_COUNTS * std::fabs(torque_cfg.scale);
             if (rest_torque.size() >= 30) {      // (uses the same 0.5 s at-rest average as the idle check)
                 const double mean = std::accumulate(rest_torque.begin(), rest_torque.end(), 0.0) / static_cast<double>(rest_torque.size());
                 std::cout << std::fixed << std::setprecision(4);
