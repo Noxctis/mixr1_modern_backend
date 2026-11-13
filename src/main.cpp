@@ -154,9 +154,9 @@ struct TestOptions {
     bool sine_mode = false;
     double sine_amplitude = 100.0;
     double sine_freq_hz = 0.1;
-    double target_rpm = 460.0; 
+    double target_rpm = 460.0;
     int fixed_pwm = 1000;
-    double duration_sec = 30.0; 
+    double duration_sec = 30.0;
     std::string csv_path = "timing_test.csv";
     bool stream = true;          // stream live to the dashboard / live_plot.py while the test runs
     bool wait_client = false;    // block at start until a dashboard connects (so the plot starts at t=0)
@@ -214,7 +214,7 @@ struct TestOptions {
 bool set_fifo_priority() {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    CPU_SET(3, &cpuset); 
+    CPU_SET(3, &cpuset);
     pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 
     sched_param sch{};
@@ -228,8 +228,8 @@ bool parse_test_options(int argc, char** argv, TestOptions& options) {
         if (argument == "--test") continue;
         if (argument.rfind("--cpr=", 0) == 0) continue;
         if (argument.rfind("--estimator=", 0) == 0) continue;
-        if (argument.rfind("--window=", 0) == 0) continue; 
-        
+        if (argument.rfind("--window=", 0) == 0) continue;
+
         if (argument == "--sweep") {
             options.sweep = true;
             options.sine_mode = false;
@@ -471,6 +471,7 @@ int run_test(const TestOptions& options) {
     // Normal (dashboard) mode already avoids this by polling the sensor on its own thread; --test mode now does the same.
     std::atomic<double> torque_value{std::numeric_limits<double>::quiet_NaN()};
     std::atomic<bool> torque_stop{false};
+    std::atomic<bool> torque_pause{false};          // set while the zero command owns the RS485 port (only one talker at a time)
     std::thread torque_thread;
     const int torque_period_ms = std::max(1, static_cast<int>(Config::LOOP_DELAY_US / 1000) * options.torque_div);
     if (tsensor) {
@@ -486,6 +487,7 @@ int run_test(const TestOptions& options) {
             while (!torque_stop.load()) {
                 next += std::chrono::milliseconds(torque_period_ms);
                 std::this_thread::sleep_until(next);
+                if (torque_pause.load()) continue;               // the zero command is using the port
                 double tq = 0.0;
                 if (tsensor->read(tq)) torque_value.store(tq);   // a failed read just leaves the previous value in place for this loop
             }
@@ -522,7 +524,7 @@ int run_test(const TestOptions& options) {
     //   tick_now_us / age_us / tick_rtt_us   with --log-age: daemon clock, age of the snapshot (includes about half of tick_rtt_us), round trip of the clock request
     log << ",revs,edge_total,quad_err,idx_rej,idx_miss,new_snap,delta_count,delta_tick_us,snap_tick,tick_now_us,age_us,tick_rtt_us";
     log << '\n';
-    
+
     // ---- Live streaming (same TCP port/protocol as normal mode) ----
     TelemetryServer net;
     bool streaming = false;
@@ -567,7 +569,13 @@ int run_test(const TestOptions& options) {
     }
 
     // Zero the torque amplifier now: the motor is still off here (the shaft is at rest; the helper checks the encoder itself).
-    if (tsensor && options.tare) zero_torque_at_rest(*tsensor, encoder, options.tare_settle_ms, options.torque_scale, "[TEST]");
+    // The polling thread is paused for the zero: two talkers on the one RS485 port made the zero command go unacknowledged.
+    if (tsensor && options.tare) {
+        torque_pause.store(true);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));   // let a read that is in flight finish (about 20 ms)
+        zero_torque_at_rest(*tsensor, encoder, options.tare_settle_ms, options.torque_scale, "[TEST]");
+        torque_pause.store(false);
+    }
 
     const int step_from_counts = static_cast<int>(std::lround(options.step_from_pct / 100.0 * 4095.0));
     const int step_to_counts = static_cast<int>(std::lround(options.step_to_pct / 100.0 * 4095.0));
@@ -631,9 +639,9 @@ int run_test(const TestOptions& options) {
               << " mode=" << (options.use_pi ? "PI" : "OpenLoop") << " estimator=" << (Config::ESTIMATOR_NEWEST ? "newest" : "aligned") << '\n';
     long long idx_rej_origin = encoder.get_index_rejected(), idx_miss_origin = encoder.get_index_missed();
     const long long edge_origin = encoder.get_edge_total(), quad_err_origin = encoder.get_quad_errors();
-    
+
     if (options.sine_mode) {
-        std::cout << "[TEST] Sine Wave Mode | Target: " << options.target_rpm << " RPM +/- " 
+        std::cout << "[TEST] Sine Wave Mode | Target: " << options.target_rpm << " RPM +/- "
                   << options.sine_amplitude << " | Freq: " << options.sine_freq_hz << " Hz\n";
     }
 
@@ -703,7 +711,7 @@ int run_test(const TestOptions& options) {
         const double period = std::chrono::duration<double, std::micro>(now - previous_tick).count();
         const double lateness = std::max(0.0, std::chrono::duration<double, std::micro>(now - next_wake).count());
         previous_tick = now;
-        
+
         // Accept live KP/KI/ALPHA (and CPR/WIN) from the dashboard; RPM/PWM commands are dummies here.
         if (streaming) {
             net.poll_for_client();
@@ -850,7 +858,7 @@ int run_test(const TestOptions& options) {
                   << " alpha=" << Config::FEEDBACK_ALPHA << " target=" << options.target_rpm << " peak_rpm=" << abort_peak_rpm
                   << " at_s=" << abort_time_s << '\n';
     }
-    
+
     if (periods_us.empty()) return 1;
 
     const auto mean = [](const std::vector<double>& values) {
@@ -1436,7 +1444,7 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGHUP, signal_handler);   // SSH disconnect: stop the motor cleanly
-    std::signal(SIGPIPE, SIG_IGN); 
+    std::signal(SIGPIPE, SIG_IGN);
 
     auto network = std::make_unique<TelemetryServer>();
     if (!network->start_server(Config::TCP_PORT)) {
