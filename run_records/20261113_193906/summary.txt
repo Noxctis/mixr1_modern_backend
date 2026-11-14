@@ -1,0 +1,9 @@
+=== LATENCY AND INTEGRITY SUMMARY (measured by the daemon during this run) ===
+duration 20.3 s, control loops 0, nominal period 10.0 ms
+torque amplifier (RS485 Modbus): no request made in this run
+    loops with no torque value (NaN: no sensor or dropout): 0 of 0
+power meter (I2C): no request made in this run
+dashboard socket: 0 packets sent, 0 not sent (client absent, slow or disconnected)
+recorder cost to the control thread (one row): median nan us, p99 nan us, max 0 us
+recorder: 0 rows made, 0 queued for the file, none lost
+Hardware level (encoder edges, driver writes, torque request latency) is measured by --trace-gpio and --trace-io, not here.
