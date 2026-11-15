@@ -2374,7 +2374,8 @@ int main(int argc, char** argv) {
                    << (dashboard_active ? dashboard_target_rpm : standalone_target_rpm) << " RPM";
             }
             const double disp_rpm = disp_rpm_n == 0 ? state.ema_filtered_rpm : disp_rpm_sum / static_cast<double>(disp_rpm_n);
-            l3 << "READ: " << std::lround(disp_rpm) << " RPM";                 // mean of the last 0.8 s of the filtered speed (as on the dashboard): steady digits; lround avoids "-0"
+            const double shown_rpm = std::fabs(disp_rpm) < 0.05 ? 0.0 : disp_rpm;   // no "-0.0"
+            l3 << "READ: " << std::fixed << std::setprecision(1) << shown_rpm << " RPM";      // mean of the last 0.8 s of the filtered speed with one decimal, as the dashboard legend
             if (std::isfinite(torque_now)) {
                 std::ostringstream tq;
                 tq << std::fixed << std::setprecision(3) << torque_now;                      // 3 decimal places
