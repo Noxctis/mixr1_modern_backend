@@ -5,6 +5,7 @@
 #include <memory>
 #include <thread>
 #include <chrono>
+#include <array>
 #include <deque>
 #include <numeric>
 #include <cmath>
@@ -1710,9 +1711,10 @@ int main(int argc, char** argv) {
     bool ec11_fast = false;
     auto ec11_last_click = std::chrono::steady_clock::now() - std::chrono::seconds(10);
     double last_rpm = 0.0;                                         // filtered (EMA) speed, used for the terminal log
-    std::deque<double> disp_rpm_win;                               // last 0.8 s of the filtered speed: the display shows its mean, like the dashboard (legend 'Filtered')
-    double disp_rpm_sum = 0.0;
     constexpr size_t kDispRpmWindow = 80;                          // 0.8 s at 100 Hz (the dashboard averages the same window)
+    std::array<double, kDispRpmWindow> disp_rpm_win{};             // ring buffer (no allocation in the loop): last 0.8 s of the filtered speed, the display shows its mean
+    size_t disp_rpm_pos = 0, disp_rpm_n = 0;
+    double disp_rpm_sum = 0.0;
     std::string last_lines[5];
     // Torque zero before every run from standstill
     long long rest_anchor = encoder.get_sync_snapshot().count;
@@ -2031,8 +2033,9 @@ int main(int argc, char** argv) {
                                               : kinematics.process(snap, current_pwm, update_lcd);
         last_rpm = state.ema_filtered_rpm;
         if (std::isfinite(state.ema_filtered_rpm)) {
-            disp_rpm_win.push_back(state.ema_filtered_rpm); disp_rpm_sum += state.ema_filtered_rpm;
-            if (disp_rpm_win.size() > kDispRpmWindow) { disp_rpm_sum -= disp_rpm_win.front(); disp_rpm_win.pop_front(); }
+            if (disp_rpm_n == kDispRpmWindow) disp_rpm_sum -= disp_rpm_win[disp_rpm_pos]; else ++disp_rpm_n;
+            disp_rpm_win[disp_rpm_pos] = state.ema_filtered_rpm; disp_rpm_sum += state.ema_filtered_rpm;
+            disp_rpm_pos = (disp_rpm_pos + 1) % kDispRpmWindow;
         }
 
         // Shaft at rest = motor off and the encoder has not moved (beyond jitter) for TORQUE_TARE_REST_S.
@@ -2370,7 +2373,7 @@ int main(int argc, char** argv) {
                 l2 << std::fixed << std::setprecision(0) << "SET: "
                    << (dashboard_active ? dashboard_target_rpm : standalone_target_rpm) << " RPM";
             }
-            const double disp_rpm = disp_rpm_win.empty() ? state.ema_filtered_rpm : disp_rpm_sum / static_cast<double>(disp_rpm_win.size());
+            const double disp_rpm = disp_rpm_n == 0 ? state.ema_filtered_rpm : disp_rpm_sum / static_cast<double>(disp_rpm_n);
             l3 << "READ: " << std::lround(disp_rpm) << " RPM";                 // mean of the last 0.8 s of the filtered speed (as on the dashboard): steady digits; lround avoids "-0"
             if (std::isfinite(torque_now)) {
                 std::ostringstream tq;
