@@ -2405,6 +2405,10 @@ int main(int argc, char** argv) {
                 lines[2] = menu_entry(1);
                 lines[3] = "TURN KNOB: CHOOSE";
                 lines[4] = "PUSH: CONFIRM";
+                if (!sensors_ok) {                              // a required sensor did not answer at start-up: say so on the title line, the hints stay
+                    const bool no_w = use_power && !meter, no_t = use_torque && !tsensor;
+                    lines[0] = (no_w && no_t) ? "NO WATT/TORQUE SENS" : no_w ? "NO WATTMETER" : no_t ? "NO TORQUE SENSOR" : "NO POWER CAP";
+                }
             } else if (!dashboard_active && start_confirm_pending) {
                 // safety question before the motor starts
                 lines[0] = std::string("IMPELLER ") + Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label + "?";
