@@ -1547,6 +1547,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<ModbusTorque> tsensor;
     std::atomic<double> torque_value{std::numeric_limits<double>::quiet_NaN()};   // already zeroed (software tare subtracted)
     std::atomic<bool> torque_stop{false};
+    std::atomic<bool> torque_dropout{false};        // true while the RS485 reads keep failing (more than 10 in a row): the run is stopped by a SENSOR trip
     std::atomic<int> tare_cmd{0};                   // 0 idle | 1 main loop asks for a zero | 2 done: amplifier zeroed | 3 done: amplifier refused, software zero used
                                                     // | 4 failed: no reading at all (main loop sets it back to 0)
     std::atomic<double> tare_offset{0.0};           // software zero currently subtracted (0 after a good amplifier zero)
@@ -1667,9 +1668,11 @@ int main(int argc, char** argv) {
                     recorder.note_torque(tq_ok);
                     if (tq_ok) {
                         fails = 0;
+                        torque_dropout.store(false);
                         last_raw = tq;
                         torque_value.store(tq - offset);
                     } else if (++fails > 10) {
+                        torque_dropout.store(true);
                         torque_value.store(std::numeric_limits<double>::quiet_NaN());   // no stale value after an RS485 dropout
                     }
                 }
@@ -2187,10 +2190,18 @@ int main(int argc, char** argv) {
             limiter.reset();                                       // the operator stopped the motor: cap (and a trip) released
         }
         if (wants_motor && !prev_wants_motor) trip_msg.clear();
+        // A sensor that was checked at start-up and then stops answering (more than 10 failed reads in a row, about 0.5 s) stops the run: without the wattmeter
+        // the power cap is blind, without the torque sensor the run has no torque. A sensor switched off on purpose (--no-power / --no-torque) is not watched.
+        if (wants_motor && current_pwm > 0) {
+            if (meter && power_fail_streak > 10) limiter.trip("WATTMETER");
+            else if (tsensor && torque_dropout.load()) limiter.trip("TORQUE");
+        }
         limiter.check_stall(current_pwm, state.ema_filtered_rpm);  // jammed impeller: PWM on, shaft not turning
         if (limiter.tripped() && wants_motor) {                    // overload or stall: switch OFF, operator must restart
             const std::string reason = limiter.trip_reason();
-            if (reason == "STALL")
+            if (reason == "WATTMETER" || reason == "TORQUE")
+                std::cout << "[SAFETY] SENSOR TRIP: the " << (reason == "WATTMETER" ? "wattmeter" : "torque sensor") << " stopped answering during the run. Motor switched OFF. Check the cable and the bus, then restart.\n";
+            else if (reason == "STALL")
                 std::cout << "[SAFETY] STALL TRIP: PWM " << std::lround(current_pwm * 100.0 / 4095.0) << " % but the shaft is not turning ("
                           << std::fixed << std::setprecision(0) << state.ema_filtered_rpm << " RPM) for " << Config::STALL_TIME_S
                           << " s. Motor switched OFF. Check the impeller / shaft before restarting.\n";
