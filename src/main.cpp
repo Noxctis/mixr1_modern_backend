@@ -1312,9 +1312,9 @@ int main(int argc, char** argv) {
     bool debug_motor = false;                       // --debug-motor: print the PWM the daemon commands (about once per second)
     double dbg_loop_max_ms = 0.0, dbg_lcd_max_ms = 0.0;   // --debug-motor timing probes (loop period, OLED redraw time)
     bool no_lcd = false;                            // --no-lcd: do not touch the I2C display at all (isolates a hung I2C bus / display)
-    bool trace_gpio = true, trace_all = false;      // ON by default: every edge of the rig's GPIO pins is streamed to the run record (include/gpio_trace.hpp). --no-trace-gpio turns it off, --trace-gpio=all adds the PWM pins
+    bool trace_gpio = false, trace_all = false;     // OFF by default: --trace-gpio streams every edge of the rig's GPIO pins to the run record (include/gpio_trace.hpp), --trace-gpio=all adds the PWM pins
     double trace_seconds = 0.0;                     // --trace-seconds=S: stop tracing after S seconds (0 = until the daemon ends)
-    bool trace_io = true;                           // ON by default: every motor-driver write and torque-amplifier read (include/io_trace.hpp). --no-trace-io turns it off; --no-trace turns both off
+    bool trace_io = false;                          // OFF by default: --trace-io records every motor-driver write and torque-amplifier read (include/io_trace.hpp); --trace turns both traces on
     size_t trace_max = 1048576;                     // --trace-max=N: size of the ring buffer between the pigpio callbacks and the file writer (16 bytes each, drained every 100 ms)
     bool no_record = false;                         // --no-record: do not save the run record (run_records/<date>_<time>/, include/run_recorder.hpp)
     std::string run_label, run_note;                // --run-label=TEXT (folder name), --note=TEXT (manifest)
@@ -1370,6 +1370,7 @@ int main(int argc, char** argv) {
         if (a == "--no-trace-gpio") trace_gpio = false;
         if (a == "--no-trace-io") trace_io = false;
         if (a == "--no-trace") trace_gpio = trace_io = false;
+        if (a == "--trace") trace_gpio = trace_io = true;
         if (a == "--no-record") no_record = true;
         if (a.rfind("--run-label=", 0) == 0) run_label = a.substr(12);
         if (a.rfind("--note=", 0) == 0) run_note = a.substr(7);
