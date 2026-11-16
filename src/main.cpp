@@ -1693,6 +1693,7 @@ int main(int argc, char** argv) {
     bool dashboard_connected = false;
     bool mode3_notified = false;
     auto last_lock_draw = std::chrono::steady_clock::now();            // Mode 3: the lock screen is redrawn every second, not only once
+    auto last_lock_full = std::chrono::steady_clock::now();            // ... and fully repainted (screen cleared first) every 5 s
     bool prev_open_loop = false;
     double standalone_target_rpm = 0.0;
     bool standalone_running = Config::STANDALONE_RUN_AT_BOOT;      // KO key toggles this; the knob target only drives the motor while true
@@ -1831,9 +1832,15 @@ int main(int argc, char** argv) {
                 ec11_accum = 0;
                 std::cout << "[MIXR-1] MODE3: MATLAB model detected (" << matlab_monitor.program() << "). Mixer motor switched OFF"
                           << (was_running ? " (it was running)" : "") << ", all motor targets cleared, GPIO 13/17/27 handed to the model.\n";
+                lcd.clear();                                   // repaint the whole screen: the changed-characters shortcut must not skip anything
                 draw_lock();
+                last_lock_full = std::chrono::steady_clock::now();
+            } else if (std::chrono::steady_clock::now() - last_lock_full >= std::chrono::seconds(5)) {
+                lcd.clear();                                   // keep the lock screen on while the model runs, even if the screen was disturbed
+                draw_lock();
+                last_lock_full = std::chrono::steady_clock::now();
             } else if (std::chrono::steady_clock::now() - last_lock_draw >= std::chrono::seconds(1)) {
-                draw_lock();                                   // keep the lock screen on while the model runs
+                draw_lock();
             }
             if (network->has_client()) network->send_packet(-2.0, -2.0, -2);   // dashboard: locked page
             continue;
