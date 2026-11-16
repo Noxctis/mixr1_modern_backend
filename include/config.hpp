@@ -48,7 +48,7 @@ namespace Config {
     constexpr unsigned int PIN_ENC_B = 23;
     constexpr unsigned int PIN_ENC_X = 22;
     constexpr int ENCODER_DIRECTION = -1;
-    constexpr double TORQUE_SCALE = -0.001;              // N.m per count of the torque amplifier; negative because the impeller turns counter-clockwise (the reaction torque reverses)
+    constexpr double TORQUE_SCALE = 0.001;              // N.m per count of the torque amplifier; negative because the impeller turns counter-clockwise (the reaction torque reverses)
     constexpr unsigned int PIN_M1_EN = 18;
     constexpr unsigned int PIN_M1_INA = 27;
     constexpr unsigned int PIN_M1_INB = 17;

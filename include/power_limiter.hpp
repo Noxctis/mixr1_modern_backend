@@ -34,7 +34,10 @@ public:
     // Call every control loop with the applied PWM and the measured speed.
     void check_stall(int pwm_now, double rpm) {
         const auto now = std::chrono::steady_clock::now();
-        const bool stalled = pwm_now > Config::STALL_PWM_PCT / 100.0 * 4095.0 && std::fabs(rpm) < Config::STALL_RPM;
+        // The power cap lowers the applied PWM when a jammed shaft draws a large current, so the applied PWM can fall below STALL_PWM_PCT and the
+        // stall would never be seen. While the cap is limiting, the motor is being asked for more than the power allows, so that counts as demand too.
+        const bool demand = pwm_now > Config::STALL_PWM_PCT / 100.0 * 4095.0 || limiting_;
+        const bool stalled = demand && std::fabs(rpm) < Config::STALL_RPM;
         if (!stalled) { stall_timing_ = false; return; }
         if (!stall_timing_) { stall_timing_ = true; stall_since_ = now; return; }
         if (std::chrono::duration<double>(now - stall_since_).count() >= Config::STALL_TIME_S && !tripped_) {
