@@ -1,0 +1,5 @@
+channel,start_s,dur_us,ok,value,err
+torque_read,1.286164,200161,0,0,1
+torque_read,1.636354,200187,0,0,1
+torque_read,1.986580,200177,0,0,1
+torque_read,2.336875,200211,0,0,1

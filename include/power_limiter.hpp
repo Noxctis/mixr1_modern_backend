@@ -70,6 +70,9 @@ public:
         }
     }
 
+    // A required sensor stopped answering during a run: trip like an overload (motor OFF until the operator restarts). reason must be a string literal.
+    void trip(const char* reason) { if (!tripped_) { tripped_ = true; reason_ = reason; } }
+
     int max_pwm() const { return static_cast<int>(cap_); }
     bool limiting() const { return limiting_; }      // the ceiling is below full scale because of the power limit
     bool tripped() const { return tripped_; }
