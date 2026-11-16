@@ -41,6 +41,13 @@ namespace Config {
     // hand-back only after the model has been gone this long (a Monitor & Tune restart does not bounce control back and forth).
     constexpr int MATLAB_SCAN_PERIOD_MS = 200;
     constexpr int MATLAB_RELEASE_DEBOUNCE_MS = 1000;
+    // A model that keeps running after the Ethernet cable is pulled (Monitor & Tune) is stopped: the link must be down this long, then the model gets
+    // SIGTERM, and SIGKILL if it is still there MATLAB_KILL_GRACE_MS later. The link is read from /sys/class/net/<NET_IFACE>/carrier; if that cannot
+    // be read, the link is treated as up and nothing is killed.
+    constexpr bool MATLAB_KILL_ON_NO_LINK = true;
+    constexpr int MATLAB_NO_LINK_KILL_MS = 5000;
+    constexpr int MATLAB_KILL_GRACE_MS = 3000;
+    inline const char* NET_IFACE = "eth0";
     constexpr int TCP_PORT = 5000;
 
     // --- Hardware Pinout (BCM GPIO) ---

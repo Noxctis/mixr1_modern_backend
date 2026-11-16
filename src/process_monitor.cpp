@@ -3,6 +3,10 @@
 #include "config.hpp"
 #include <cctype>
 #include <chrono>
+#include <csignal>
+#include <signal.h>
+#include <sys/types.h>
+#include <iostream>
 #include <cstdio>
 #include <dirent.h>
 #include <fstream>
@@ -30,6 +34,14 @@ std::string read_comm(const std::string& pid) {
     std::string comm;
     if (f) std::getline(f, comm);
     return comm;
+}
+
+// 1 = cable plugged (carrier up), 0 = no link, -1 = cannot tell (interface down or missing)
+int ethernet_link() {
+    std::ifstream f(std::string("/sys/class/net/") + Config::NET_IFACE + "/carrier");
+    std::string s;
+    if (!f || !std::getline(f, s) || s.empty()) return -1;
+    return s[0] == '1' ? 1 : (s[0] == '0' ? 0 : -1);
 }
 
 bool is_matlab_program(const std::string& argv0) {
@@ -85,9 +97,30 @@ void ProcessMonitor::start() {
         pthread_setschedparam(pthread_self(), SCHED_OTHER, &normal);
 
         auto last_seen = std::chrono::steady_clock::now();
+        auto link_down_since = std::chrono::steady_clock::time_point{};
+        bool link_was_down = false, term_sent = false;
+        auto term_time = std::chrono::steady_clock::now();
         while (!stop_.load()) {
             const Match m = scan();
             const auto now = std::chrono::steady_clock::now();
+            // No Ethernet while a model runs: after MATLAB_NO_LINK_KILL_MS stop it (SIGTERM, then SIGKILL after the grace time).
+            if (Config::MATLAB_KILL_ON_NO_LINK && m.found && m.pid > 0) {
+                if (ethernet_link() == 0) {
+                    if (!link_was_down) { link_was_down = true; link_down_since = now; term_sent = false; }
+                    if (!term_sent && now - link_down_since >= std::chrono::milliseconds(Config::MATLAB_NO_LINK_KILL_MS)) {
+                        std::cout << "[MIXR-1] Ethernet down for " << Config::MATLAB_NO_LINK_KILL_MS / 1000 << " s while the model " << m.program
+                                  << " runs: stopping it (SIGTERM).\n";
+                        kill(m.pid, SIGTERM); term_sent = true; term_time = now;
+                    } else if (term_sent && now - term_time >= std::chrono::milliseconds(Config::MATLAB_KILL_GRACE_MS)) {
+                        std::cout << "[MIXR-1] The model did not stop: SIGKILL.\n";
+                        kill(m.pid, SIGKILL); term_time = now;
+                    }
+                } else {
+                    link_was_down = false; term_sent = false;      // link up (or unknown): nothing is killed
+                }
+            } else {
+                link_was_down = false; term_sent = false;
+            }
             if (m.found) {
                 last_seen = now;
                 if (!active_.load()) {
