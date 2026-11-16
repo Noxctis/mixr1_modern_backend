@@ -2203,7 +2203,6 @@ int main(int argc, char** argv) {
             if (limit_reported) { limit_reported = false; network->send_event("POWER_LIMIT,0"); }
             limiter.reset();                                       // the operator stopped the motor: cap (and a trip) released
         }
-        if (wants_motor && !prev_wants_motor) trip_msg.clear();
         // A sensor that was checked at start-up and then stops answering (more than 10 failed reads in a row, about 0.5 s) stops the run: without the wattmeter
         // the power cap is blind, without the torque sensor the run has no torque. A sensor switched off on purpose (--no-power / --no-torque) is not watched.
         if (wants_motor && current_pwm > 0) {
