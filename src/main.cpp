@@ -1692,6 +1692,7 @@ int main(int argc, char** argv) {
 
     bool dashboard_connected = false;
     bool mode3_notified = false;
+    auto last_lock_draw = std::chrono::steady_clock::now();            // Mode 3: the lock screen is redrawn every second, not only once
     bool prev_open_loop = false;
     double standalone_target_rpm = 0.0;
     bool standalone_running = Config::STANDALONE_RUN_AT_BOOT;      // KO key toggles this; the knob target only drives the motor while true
@@ -1800,6 +1801,13 @@ int main(int argc, char** argv) {
         // GPIO 13 / 17 / 27 are shared with the pump. While the model runs the daemon switches the mixer driver OFF (EN low) and
         // does not write those pins at all; every motor command is forgotten, so nothing restarts by itself when control comes back.
         if (matlab_monitor.active()) {
+            auto draw_lock = [&]() {                           // forces every line: the screen must show Mode 3 even if the first write was lost
+                const char* lock[5] = {"MODE3 MATLAB", "MIXER LOCKED", "MOTOR OFF", "SIMULINK RUNNING", "STOP MODEL: EXIT"};   // <= 17 chars (TFT width)
+                const int step = (lcd.row_count() >= 8) ? 2 : 1;
+                const int n = (lcd.row_count() >= 10) ? 5 : ((lcd.row_count() >= 4) ? 4 : 2);
+                for (int i = 0; i < n; ++i) { lcd.print_line(i * step, lock[i]); last_lines[i] = lock[i]; }
+                last_lock_draw = std::chrono::steady_clock::now();
+            };
             if (!mode3_notified) {
                 mode3_notified = true;
                 rec_finish("MATLAB Mode 3 took over");
@@ -1823,10 +1831,9 @@ int main(int argc, char** argv) {
                 ec11_accum = 0;
                 std::cout << "[MIXR-1] MODE3: MATLAB model detected (" << matlab_monitor.program() << "). Mixer motor switched OFF"
                           << (was_running ? " (it was running)" : "") << ", all motor targets cleared, GPIO 13/17/27 handed to the model.\n";
-                const char* lock[5] = {"MODE3 MATLAB", "MIXER LOCKED", "MOTOR OFF", "SIMULINK RUNNING", "STOP MODEL: EXIT"};   // <= 17 chars (TFT width)
-                const int step = (lcd.row_count() >= 8) ? 2 : 1;
-                const int n = (lcd.row_count() >= 10) ? 5 : ((lcd.row_count() >= 4) ? 4 : 2);
-                for (int i = 0; i < n; ++i) { lcd.print_line(i * step, lock[i]); last_lines[i] = lock[i]; }
+                draw_lock();
+            } else if (std::chrono::steady_clock::now() - last_lock_draw >= std::chrono::seconds(1)) {
+                draw_lock();                                   // keep the lock screen on while the model runs
             }
             if (network->has_client()) network->send_packet(-2.0, -2.0, -2);   // dashboard: locked page
             continue;
