@@ -47,11 +47,11 @@ namespace Config {
     constexpr unsigned int PIN_ENC_A = 24;
     constexpr unsigned int PIN_ENC_B = 23;
     constexpr unsigned int PIN_ENC_X = 22;
-    constexpr int ENCODER_DIRECTION = 1;
+    constexpr int ENCODER_DIRECTION = -1;
     constexpr double TORQUE_SCALE = -0.001;              // N.m per count of the torque amplifier; negative because the impeller turns counter-clockwise (the reaction torque reverses)
     constexpr unsigned int PIN_M1_EN = 18;
-    constexpr unsigned int PIN_M1_INA = 17;
-    constexpr unsigned int PIN_M1_INB = 27;
+    constexpr unsigned int PIN_M1_INA = 27;
+    constexpr unsigned int PIN_M1_INB = 17;
     constexpr unsigned int PIN_M1_PWM = 13;
     // --- Fluid controller outputs (Simulink act_wrapper.c). The pump SHARES GPIO 13 / 17 / 27 with the mixer above. ---
     // The daemon never drives these; it only parks them OFF whenever it owns the rig (start-up and every hand-back from MATLAB),
