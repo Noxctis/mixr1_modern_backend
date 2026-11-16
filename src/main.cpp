@@ -5,6 +5,7 @@
 #include <memory>
 #include <thread>
 #include <chrono>
+#include <array>
 #include <deque>
 #include <numeric>
 #include <cmath>
@@ -1312,9 +1313,9 @@ int main(int argc, char** argv) {
     bool debug_motor = false;                       // --debug-motor: print the PWM the daemon commands (about once per second)
     double dbg_loop_max_ms = 0.0, dbg_lcd_max_ms = 0.0;   // --debug-motor timing probes (loop period, OLED redraw time)
     bool no_lcd = false;                            // --no-lcd: do not touch the I2C display at all (isolates a hung I2C bus / display)
-    bool trace_gpio = true, trace_all = false;      // ON by default: every edge of the rig's GPIO pins is streamed to the run record (include/gpio_trace.hpp). --no-trace-gpio turns it off, --trace-gpio=all adds the PWM pins
+    bool trace_gpio = false, trace_all = false;     // OFF by default: --trace-gpio streams every edge of the rig's GPIO pins to the run record (include/gpio_trace.hpp), --trace-gpio=all adds the PWM pins
     double trace_seconds = 0.0;                     // --trace-seconds=S: stop tracing after S seconds (0 = until the daemon ends)
-    bool trace_io = true;                           // ON by default: every motor-driver write and torque-amplifier read (include/io_trace.hpp). --no-trace-io turns it off; --no-trace turns both off
+    bool trace_io = false;                          // OFF by default: --trace-io records every motor-driver write and torque-amplifier read (include/io_trace.hpp); --trace turns both traces on
     size_t trace_max = 1048576;                     // --trace-max=N: size of the ring buffer between the pigpio callbacks and the file writer (16 bytes each, drained every 100 ms)
     bool no_record = false;                         // --no-record: do not save the run record (run_records/<date>_<time>/, include/run_recorder.hpp)
     std::string run_label, run_note;                // --run-label=TEXT (folder name), --note=TEXT (manifest)
@@ -1370,6 +1371,7 @@ int main(int argc, char** argv) {
         if (a == "--no-trace-gpio") trace_gpio = false;
         if (a == "--no-trace-io") trace_io = false;
         if (a == "--no-trace") trace_gpio = trace_io = false;
+        if (a == "--trace") trace_gpio = trace_io = true;
         if (a == "--no-record") no_record = true;
         if (a.rfind("--run-label=", 0) == 0) run_label = a.substr(12);
         if (a.rfind("--note=", 0) == 0) run_note = a.substr(7);
@@ -1547,6 +1549,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<ModbusTorque> tsensor;
     std::atomic<double> torque_value{std::numeric_limits<double>::quiet_NaN()};   // already zeroed (software tare subtracted)
     std::atomic<bool> torque_stop{false};
+    std::atomic<bool> torque_dropout{false};        // true while the RS485 reads keep failing (more than 10 in a row): the run is stopped by a SENSOR trip
     std::atomic<int> tare_cmd{0};                   // 0 idle | 1 main loop asks for a zero | 2 done: amplifier zeroed | 3 done: amplifier refused, software zero used
                                                     // | 4 failed: no reading at all (main loop sets it back to 0)
     std::atomic<double> tare_offset{0.0};           // software zero currently subtracted (0 after a good amplifier zero)
@@ -1667,9 +1670,11 @@ int main(int argc, char** argv) {
                     recorder.note_torque(tq_ok);
                     if (tq_ok) {
                         fails = 0;
+                        torque_dropout.store(false);
                         last_raw = tq;
                         torque_value.store(tq - offset);
                     } else if (++fails > 10) {
+                        torque_dropout.store(true);
                         torque_value.store(std::numeric_limits<double>::quiet_NaN());   // no stale value after an RS485 dropout
                     }
                 }
@@ -1705,7 +1710,11 @@ int main(int argc, char** argv) {
     double ec11_last_step = 0.0;
     bool ec11_fast = false;
     auto ec11_last_click = std::chrono::steady_clock::now() - std::chrono::seconds(10);
-    double last_rpm = 0.0;                                         // filtered (EMA) speed, used for the display and the terminal log
+    double last_rpm = 0.0;                                         // filtered (EMA) speed, used for the terminal log
+    constexpr size_t kDispRpmWindow = 80;                          // 0.8 s at 100 Hz (the dashboard averages the same window)
+    std::array<double, kDispRpmWindow> disp_rpm_win{};             // ring buffer (no allocation in the loop): last 0.8 s of the filtered speed, the display shows its mean
+    size_t disp_rpm_pos = 0, disp_rpm_n = 0;
+    double disp_rpm_sum = 0.0;
     std::string last_lines[5];
     // Torque zero before every run from standstill
     long long rest_anchor = encoder.get_sync_snapshot().count;
@@ -1721,6 +1730,7 @@ int main(int argc, char** argv) {
     auto last_zero_time = std::chrono::steady_clock::now() - std::chrono::hours(1);
     int idle_rezeros = 0;                                          // automatic re-zeros during this stop (limit TORQUE_IDLE_REZERO_MAX)
     std::string trip_msg;                                          // shown on the screen after a safety trip, until the next start
+    std::chrono::steady_clock::time_point trip_msg_time{};          // when trip_msg was set: the message is shown for a few seconds, then the top line returns to the mode
     int shaft_power_counter = 0;
     if (meter)        std::cout << "[SAFETY] Power cap " << Config::POWER_LIMIT_W << " W active, measured with the wattmeter (electrical power).\n";
     else if (tsensor) std::cout << "[SAFETY] Power cap " << Config::POWER_LIMIT_W << " W active, measured as torque x speed (no wattmeter: "
@@ -2023,6 +2033,11 @@ int main(int argc, char** argv) {
         auto state = Config::ESTIMATOR_NEWEST ? kinematics.process_newest(encoder.get_edge_snapshot(), update_lcd)
                                               : kinematics.process(snap, current_pwm, update_lcd);
         last_rpm = state.ema_filtered_rpm;
+        if (std::isfinite(state.ema_filtered_rpm)) {
+            if (disp_rpm_n == kDispRpmWindow) disp_rpm_sum -= disp_rpm_win[disp_rpm_pos]; else ++disp_rpm_n;
+            disp_rpm_win[disp_rpm_pos] = state.ema_filtered_rpm; disp_rpm_sum += state.ema_filtered_rpm;
+            disp_rpm_pos = (disp_rpm_pos + 1) % kDispRpmWindow;
+        }
 
         // Shaft at rest = motor off and the encoder has not moved (beyond jitter) for TORQUE_TARE_REST_S.
         if (std::llabs(snap.count - rest_anchor) > Config::DEADBAND_TICK_THRESHOLD) { rest_anchor = snap.count; rest_since = current_time; }
@@ -2050,6 +2065,7 @@ int main(int argc, char** argv) {
                 dashboard_target_pwm_pct = 0;
                 pi_control.reset();
                 trip_msg = "NO SENSOR: BLOCKED";
+                trip_msg_time = std::chrono::steady_clock::now();
             } else {
                 block_reported = false;
             }
@@ -2142,6 +2158,7 @@ int main(int argc, char** argv) {
             else if (tsensor) std::cout << "[TORQUE] Start WITHOUT tare (operator chose NO): zero from before is kept.\n";
             tare_on_this_start = false;                            // the answer is valid for this start only
         }
+        if (wants_motor && !prev_wants_motor) trip_msg.clear();   // a new start (KO key or dashboard) clears the message of the last trip; must run BEFORE prev_wants_motor is updated
         prev_wants_motor = wants_motor;
         if (network->take_tare_request()) {
             if (wants_motor) std::cout << "[TORQUE] Dashboard CMD:TARE ignored: the motor is commanded to run (set it to 0 first).\n";
@@ -2186,11 +2203,18 @@ int main(int argc, char** argv) {
             if (limit_reported) { limit_reported = false; network->send_event("POWER_LIMIT,0"); }
             limiter.reset();                                       // the operator stopped the motor: cap (and a trip) released
         }
-        if (wants_motor && !prev_wants_motor) trip_msg.clear();
+        // A sensor that was checked at start-up and then stops answering (more than 10 failed reads in a row, about 0.5 s) stops the run: without the wattmeter
+        // the power cap is blind, without the torque sensor the run has no torque. A sensor switched off on purpose (--no-power / --no-torque) is not watched.
+        if (wants_motor && current_pwm > 0) {
+            if (meter && power_fail_streak > 10) limiter.trip("WATTMETER");
+            else if (tsensor && torque_dropout.load()) limiter.trip("TORQUE");
+        }
         limiter.check_stall(current_pwm, state.ema_filtered_rpm);  // jammed impeller: PWM on, shaft not turning
         if (limiter.tripped() && wants_motor) {                    // overload or stall: switch OFF, operator must restart
             const std::string reason = limiter.trip_reason();
-            if (reason == "STALL")
+            if (reason == "WATTMETER" || reason == "TORQUE")
+                std::cout << "[SAFETY] SENSOR TRIP: the " << (reason == "WATTMETER" ? "wattmeter" : "torque sensor") << " stopped answering during the run. Motor switched OFF. Check the cable and the bus, then restart.\n";
+            else if (reason == "STALL")
                 std::cout << "[SAFETY] STALL TRIP: PWM " << std::lround(current_pwm * 100.0 / 4095.0) << " % but the shaft is not turning ("
                           << std::fixed << std::setprecision(0) << state.ema_filtered_rpm << " RPM) for " << Config::STALL_TIME_S
                           << " s. Motor switched OFF. Check the impeller / shaft before restarting.\n";
@@ -2198,6 +2222,7 @@ int main(int argc, char** argv) {
                 std::cout << "[SAFETY] POWER TRIP: " << std::fixed << std::setprecision(1) << limiter.last_power() << " W (> "
                           << Config::POWER_LIMIT_W * Config::POWER_TRIP_FACTOR << " W). Motor switched OFF. Check the impeller / shaft before restarting.\n";
             trip_msg = "TRIP: " + reason;
+            trip_msg_time = std::chrono::steady_clock::now();
             standalone_running = false;
             dashboard_target_rpm = 0.0;
             dashboard_target_pwm_pct = 0;
@@ -2339,7 +2364,11 @@ int main(int argc, char** argv) {
             const auto lcd_t0 = std::chrono::steady_clock::now();
             const double torque_now = torque_value.load();      // real reading from the RS485 sensor (NaN = no sensor / dropout)
             std::ostringstream l1, l2, l3, l4, l5;
+            if (!trip_msg.empty() && std::chrono::steady_clock::now() - trip_msg_time > std::chrono::seconds(5)) trip_msg.clear();   // the motor is already off: back to the mode
+            const bool no_w_now = use_power && !meter, no_t_now = use_torque && !tsensor;
+            const bool show_sensor_warning = (no_w_now || no_t_now) && (std::chrono::duration_cast<std::chrono::seconds>(current_time.time_since_epoch()).count() / 2) % 2 == 1;   // alternates with the mode every 2 s
             if (!trip_msg.empty())     l1 << trip_msg;
+            else if (show_sensor_warning) l1 << ((no_w_now && no_t_now) ? "NO WATT+TORQUE" : no_w_now ? "NO WATTMETER" : "NO TORQUE SENSOR");
             else if (limit_reported)   l1 << "POWER LIMIT " << std::lround(Config::POWER_LIMIT_W) << "W";
             else if (tare_hold)        l1 << "ZEROING TORQUE";
             else if (dashboard_active) l1 << "MODE2 DASHBOARD";
@@ -2351,7 +2380,9 @@ int main(int argc, char** argv) {
                 l2 << std::fixed << std::setprecision(0) << "SET: "
                    << (dashboard_active ? dashboard_target_rpm : standalone_target_rpm) << " RPM";
             }
-            l3 << "READ: " << std::lround(state.ema_filtered_rpm) << " RPM";      // filtered (EMA) speed: steady digits; lround avoids "-0"
+            const double disp_rpm = disp_rpm_n == 0 ? state.ema_filtered_rpm : disp_rpm_sum / static_cast<double>(disp_rpm_n);
+            const double shown_rpm = std::fabs(disp_rpm) < 0.05 ? 0.0 : disp_rpm;   // no "-0.0"
+            l3 << "READ: " << std::fixed << std::setprecision(1) << shown_rpm << " RPM";      // mean of the last 0.8 s of the filtered speed with one decimal, as the dashboard legend
             if (std::isfinite(torque_now)) {
                 std::ostringstream tq;
                 tq << std::fixed << std::setprecision(3) << torque_now;                      // 3 decimal places
@@ -2382,6 +2413,10 @@ int main(int argc, char** argv) {
                 lines[2] = menu_entry(1);
                 lines[3] = "TURN KNOB: CHOOSE";
                 lines[4] = "PUSH: CONFIRM";
+                if (!sensors_ok) {                              // a required sensor did not answer at start-up: say so on the title line, the hints stay
+                    const bool no_w = use_power && !meter, no_t = use_torque && !tsensor;
+                    lines[0] = (no_w && no_t) ? "NO WATT/TORQUE SENS" : no_w ? "NO WATTMETER" : no_t ? "NO TORQUE SENSOR" : "NO POWER CAP";
+                }
             } else if (!dashboard_active && start_confirm_pending) {
                 // safety question before the motor starts
                 lines[0] = std::string("IMPELLER ") + Config::IMPELLERS[static_cast<size_t>(impeller_idx)].label + "?";
